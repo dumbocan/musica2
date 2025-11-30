@@ -29,12 +29,12 @@ Current Focus: Basic FastAPI setup, PostgreSQL connection, health endpoint.
 ### Current Implementation (Step-by-Step)
 
 - [x] Git setup: Init repo, .gitignore, remote (musica2 on GitHub).
-- [ ] Create comprehensive README with instructions.
-- [ ] Set up virtual environment and install dependencies.
-- [ ] Create project structure (app/, api/, core/, models/).
-- [ ] Implement FastAPI app with health endpoint.
-- [ ] Configure PostgreSQL connection (prepared, not connected yet).
-- [ ] Test server startup and health endpoint.
+- [x] Create comprehensive README with instructions.
+- [x] Set up virtual environment and install dependencies.
+- [x] Create project structure (app/, api/, core/, models/).
+- [x] Implement FastAPI app with health endpoint.
+- [x] Configure PostgreSQL connection (prepared, not connected yet).
+- [x] Test server startup and health endpoint (200 OK, returns {"status":"ok"}).
 - [ ] Review and document setup.
 
 ### Future Tasks (to be implemented incrementally)
