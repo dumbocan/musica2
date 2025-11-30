@@ -35,7 +35,7 @@ Current Focus: Basic FastAPI setup, PostgreSQL connection, health endpoint.
 - [x] Implement FastAPI app with health endpoint.
 - [x] Configure PostgreSQL connection (prepared, not connected yet).
 - [x] Test server startup and health endpoint (200 OK, returns {"status":"ok"}).
-- [ ] Review and document setup.
+- [x] Review and document setup.
 
 ### Future Tasks (to be implemented incrementally)
 
