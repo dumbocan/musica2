@@ -47,6 +47,7 @@ Current Focus: Basic FastAPI setup, PostgreSQL connection, health endpoint.
 - [x] Set up PostgreSQL tables for all models.
 - [x] Implement Spotify API client (auth, search artists) + httpx async.
 - [x] Add first endpoint: GET /artists/search?q=artist for searching via Spotify API.
+- [x] Add endpoint: GET /artists/{spotify_id}/albums for discography.
 - [ ] Implement discography endpoints.
 - [ ] Add playlist CRUD.
 - [ ] Integrate ratings/favorites.
