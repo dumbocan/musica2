@@ -32,6 +32,10 @@ This document outlines key endpoints from Spotify, Last.fm, and other APIs for b
   - Returns: items[] (id, name, artists[], disc_number, duration_ms, preview_url, track_number)
   - Use: Get tracks in album (pagination).
 
+- **GET /v1/audio-features/{id}** or **GET /v1/audio-features?ids={ids}**:
+  - Returns: audio features (danceability, energy, key, loudness, mode, speechiness, acousticness, instrumentalness, liveness, valence, tempo, time_signature)
+  - Use: Characteristics de cada track para análisis/correlación/scoring avanzado/música parecida.
+
 #### Tracks
 - **GET /v1/tracks/{track_id}**:
   - Returns: id, name, artists[], album (summary), duration_ms, popularity, preview_url, external_urls (Spotify link)
