@@ -19,9 +19,9 @@ Current Focus: Basic FastAPI setup, PostgreSQL connection, health endpoint.
 - **Language**: Python 3.x
 - **API Framework**: FastAPI
 - **Server**: Uvicorn
-- **Database**: PostgreSQL with SQLModel
+- **Database**: PostgreSQL with SQLModel (connection tested and working)
 - **ORM**: SQLModel for async operations
-- **Env Management**: python-dotenv
+- **Env Management**: pydantic-settings with python-dotenv
 - **Other**: psycopg2-binary for connection
 
 ## Project Plan
@@ -35,7 +35,10 @@ Current Focus: Basic FastAPI setup, PostgreSQL connection, health endpoint.
 - [x] Implement FastAPI app with health endpoint.
 - [x] Configure PostgreSQL connection (prepared, not connected yet).
 - [x] Test server startup and health endpoint (200 OK, returns {"status":"ok"}).
-- [x] Review and document setup.
+- [x] Set up and test PostgreSQL DB connection in code.
+- [x] Add session manager and prepare for models.
+- [x] Verify server works with DB integration.
+- [ ] Review and document setup.
 
 ### Future Tasks (to be implemented incrementally)
 
