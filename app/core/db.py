@@ -1,8 +1,13 @@
-from sqlmodel import create_engine
+from sqlmodel import create_engine, Session
 
 from .config import settings
 
-# PostgreSQL engine (connection prepared, not active yet)
+# PostgreSQL engine (connection tested and working)
 engine = create_engine(settings.DATABASE_URL, echo=False)
 
-# Future: def get_session(), def create_db(), etc.
+# Session manager for dependency injection
+def get_session():
+    with Session(engine) as session:
+        yield session
+
+# Future: def init_db(models)
