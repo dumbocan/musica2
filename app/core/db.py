@@ -1,6 +1,7 @@
 from sqlmodel import create_engine, Session
 
 from .config import settings
+from ..models.base import SQLModel  # Import to access all models
 
 # PostgreSQL engine (connection tested and working)
 engine = create_engine(settings.DATABASE_URL, echo=False)
@@ -10,4 +11,6 @@ def get_session():
     with Session(engine) as session:
         yield session
 
-# Future: def init_db(models)
+# Create all tables (call once after models defined)
+def create_db_and_tables():
+    SQLModel.metadata.create_all(engine, checkfirst=True)

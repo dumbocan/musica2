@@ -1,7 +1,9 @@
 from fastapi import FastAPI
 
-from .api.routes_health import router
+from .api.routes_health import router as health_router
+from .api.artists import router as artists_router
 
 app = FastAPI(title="Audio2 API", description="Personal Music API Backend")
 
-app.include_router(router)
+app.include_router(health_router)
+app.include_router(artists_router)

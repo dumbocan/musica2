@@ -42,7 +42,7 @@ Current Focus: Basic FastAPI setup, PostgreSQL connection, health endpoint.
 
 ### Future Tasks (to be implemented incrementally)
 
-- [ ] Research external APIs (Spotify, Last.fm) for data endpoints.
+- [x] Research external APIs (Spotify, Last.fm, Musixmatch) for data endpoints.
 - [ ] Define models: User, Artist, Album, Track, Playlist.
 - [ ] Implement discography endpoints.
 - [ ] Add playlist CRUD.
