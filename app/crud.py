@@ -176,3 +176,17 @@ def update_track_lastfm(track_id: int, listeners: int, playcount: int):
         return track
     finally:
         session.close()
+
+
+def delete_artist(artist_id: int) -> bool:
+    """Delete artist and cascade to albums/tracks."""
+    session = get_session()
+    try:
+        artist = session.exec(select(Artist).where(Artist.id == artist_id)).first()
+        if artist:
+            session.delete(artist)  # CASCADE handles albums/tracks
+            session.commit()
+            return True
+        return False
+    finally:
+        session.close()

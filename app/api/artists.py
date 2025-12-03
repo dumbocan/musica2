@@ -7,7 +7,7 @@ from typing import List
 from fastapi import APIRouter, Query, Path, HTTPException
 
 from ..core.spotify import spotify_client
-from ..crud import save_artist
+from ..crud import save_artist, delete_artist
 from ..core.db import get_session
 from ..models.base import Artist
 from sqlmodel import select
@@ -79,3 +79,12 @@ def get_artist(artist_id: int = Path(..., description="Local artist ID")) -> Art
         if not artist:
             raise HTTPException(status_code=404, detail="Artist not found")
     return artist
+
+
+@router.delete("/id/{artist_id}")
+def delete_artist_end(artist_id: int = Path(..., description="Local artist ID")):
+    """Delete artist and cascade to albums/tracks."""
+    ok = delete_artist(artist_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Artist not found")
+    return {"message": "Artist and related data deleted"}

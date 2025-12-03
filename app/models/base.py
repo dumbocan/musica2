@@ -46,7 +46,7 @@ class Album(SQLModel, table=True):
     id: int = Field(primary_key=True)
     spotify_id: Optional[str] = Field(unique=True, default=None)
     name: str = Field(max_length=200, index=True)
-    artist_id: int = Field(foreign_key="artist.id")
+    artist_id: int = Field(foreign_key="artist.id", ondelete="CASCADE")
     release_date: str  # YYYY-MM-DD
     total_tracks: int = Field(default=0)
     images: Optional[str] = None  # JSON
@@ -63,8 +63,8 @@ class Track(SQLModel, table=True):
     id: int = Field(primary_key=True)
     spotify_id: Optional[str] = Field(unique=True, default=None)
     name: str = Field(max_length=200, index=True)
-    artist_id: int = Field(foreign_key="artist.id")
-    album_id: Optional[int] = Field(foreign_key="album.id", default=None)
+    artist_id: int = Field(foreign_key="artist.id", ondelete="CASCADE")
+    album_id: Optional[int] = Field(foreign_key="album.id", ondelete="CASCADE")
     duration_ms: int = Field(default=0)
     preview_url: Optional[str] = None  # 30s preview
     external_url: Optional[str] = None  # Spotify full
