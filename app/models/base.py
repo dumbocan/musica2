@@ -29,6 +29,7 @@ class Artist(SQLModel, table=True):
     id: int = Field(primary_key=True)
     spotify_id: Optional[str] = Field(unique=True, default=None)  # Optional if from other source
     name: str = Field(max_length=200, index=True)
+    normalized_name: str = Field(default="", index=True)  # For deduplication
     genres: Optional[str] = None  # JSON list as string
     images: Optional[str] = None  # JSON list of image URLs
     popularity: int = Field(default=0)  # Spotify 0-100
@@ -68,6 +69,7 @@ class Track(SQLModel, table=True):
     preview_url: Optional[str] = None  # 30s preview
     external_url: Optional[str] = None  # Spotify full
     popularity: int = Field(default=0)  # Spotify 0-100
+    lastfm_listeners: int = Field(default=0)  # Last.fm
     lastfm_playcount: int = Field(default=0)  # Scoring
     lyrics: Optional[str] = None  # From Musixmatch
     magnet_link: Optional[str] = None  # Torrent for local file

@@ -2,11 +2,21 @@
 CRUD operations using SQLModel.
 """
 
+import unicodedata
+
 from typing import Optional
 from sqlmodel import Session, select
 
 from .models.base import Artist, Album, Track, User, Playlist
 from .core.db import get_session
+
+
+def normalize_name(name: str) -> str:
+    """Normalize artist/album name: lowercase, remove accents, strip."""
+    name = name.lower().strip()
+    name = unicodedata.normalize('NFD', name)
+    name = ''.join(c for c in name if unicodedata.category(c) != 'Mn')  # Remove accents
+    return name
 
 
 # Artists
@@ -26,21 +36,38 @@ def save_artist(artist_data: dict) -> Artist:
     try:
         if artist:
             artist.name = artist_data['name']
+            artist.normalized_name = normalize_name(artist_data['name'])
             artist.genres = str(artist_data.get('genres', []))
             artist.images = str(artist_data.get('images', []))
             artist.popularity = artist_data.get('popularity', 0)
             artist.followers = artist_data.get('followers', {}).get('total', 0)
             session.add(artist)
         else:
-            artist = Artist(
-                spotify_id=spotify_id,
-                name=artist_data['name'],
-                genres=str(artist_data.get('genres', [])),
-                images=str(artist_data.get('images', [])),
-                popularity=artist_data.get('popularity', 0),
-                followers=artist_data.get('followers', {}).get('total', 0)
-            )
-            session.add(artist)
+            normalized = normalize_name(artist_data['name'])
+            # Check for existing by normalized name
+            statement = select(Artist).where(Artist.normalized_name == normalized)
+            existing_artist = session.exec(statement).first()
+            if existing_artist:
+                # Merge into existing
+                existing_artist.spotify_id = existing_artist.spotify_id or spotify_id
+                existing_artist.name = artist_data['name']
+                existing_artist.normalized_name = normalized
+                existing_artist.genres = str(artist_data.get('genres', []))
+                existing_artist.images = str(artist_data.get('images', []))
+                existing_artist.popularity = artist_data.get('popularity', 0)
+                existing_artist.followers = artist_data.get('followers', {}).get('total', 0)
+                artist = existing_artist
+            else:
+                artist = Artist(
+                    spotify_id=spotify_id,
+                    name=artist_data['name'],
+                    normalized_name=normalized,
+                    genres=str(artist_data.get('genres', [])),
+                    images=str(artist_data.get('images', [])),
+                    popularity=artist_data.get('popularity', 0),
+                    followers=artist_data.get('followers', {}).get('total', 0)
+                )
+                session.add(artist)
         session.commit()
         session.refresh(artist)
         return artist
@@ -113,8 +140,8 @@ def save_track(track_data: dict, album_id: Optional[int] = None, artist_id: Opti
         if track:
             track.name = track_data['name']
             track.duration_ms = track_data['duration_ms']
-            track.popularity = track_data['popularity']
-            track.preview_url = track_data['preview_url']
+            track.popularity = track_data.get('popularity', 0)
+            track.preview_url = track_data.get('preview_url')
             track.external_url = track_data['external_urls']['spotify']
             track.album_id = album_id
             session.add(track)
@@ -125,8 +152,8 @@ def save_track(track_data: dict, album_id: Optional[int] = None, artist_id: Opti
                 artist_id=artist_id,
                 album_id=album_id,
                 duration_ms=track_data['duration_ms'],
-                popularity=track_data['popularity'],
-                preview_url=track_data['preview_url'],
+                popularity=track_data.get('popularity', 0),
+                preview_url=track_data.get('preview_url'),
                 external_url=track_data['external_urls']['spotify']
             )
             session.add(track)
