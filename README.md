@@ -185,6 +185,8 @@ PGPASSWORD='monleon' psql -h localhost -U usuario -d music_db -c "\dt"
 - [x] Add saving data to DB: POST /artists/save/{spotify_id} saves artist from Spotify to DB.
 - [x] Add saving data to DB: POST /albums/save/{spotify_id} saves album and all its tracks from Spotify to DB.
 - [x] Add query endpoints for local DB: GET /artists, GET /artists/id/{artist_id}, GET /albums, GET /albums/id/{album_id}, GET /tracks, GET /tracks/id/{track_id}.
+- [x] Add sync-discography endpoint for updating artist new albums.
+- [x] Add deduplication by normalized name for artists.
 - [x] Integrate Last.fm for playcount/listeners scoring.
 - [ ] Implement discography endpoints.
 - [ ] Add playlist CRUD.
