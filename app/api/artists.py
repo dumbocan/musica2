@@ -8,6 +8,9 @@ from fastapi import APIRouter, Query, Path, HTTPException
 
 from ..core.spotify import spotify_client
 from ..crud import save_artist
+from ..core.db import get_session
+from ..models.base import Artist
+from sqlmodel import select
 
 router = APIRouter(prefix="/artists", tags=["artists"])
 
@@ -34,3 +37,21 @@ async def save_artist_to_db(spotify_id: str = Path(..., description="Spotify art
         raise HTTPException(status_code=404, detail="Artist not found on Spotify")
     artist = save_artist(artist_data)
     return {"message": "Artist saved to DB", "artist": artist.dict()}
+
+
+@router.get("/")
+def get_artists() -> List[Artist]:
+    """Get all saved artists from DB."""
+    with get_session() as session:
+        artists = session.exec(select(Artist)).all()
+    return artists
+
+
+@router.get("/id/{artist_id}")
+def get_artist(artist_id: int = Path(..., description="Local artist ID")) -> Artist:
+    """Get single artist by local ID."""
+    with get_session() as session:
+        artist = session.exec(select(Artist).where(Artist.id == artist_id)).first()
+        if not artist:
+            raise HTTPException(status_code=404, detail="Artist not found")
+    return artist
