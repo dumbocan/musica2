@@ -110,3 +110,14 @@ def save_track(track_data: dict, album_id: Optional[int] = None, artist_id: Opti
         session.commit()
         session.refresh(track)
     return track
+
+
+def update_track_lastfm(track_id: int, listeners: int, playcount: int):
+    """Update track with Last.fm data."""
+    with get_session() as session:
+        track = session.exec(select(Track).where(Track.id == track_id)).first()
+        if track:
+            track.lastfm_listeners = listeners
+            track.lastfm_playcount = playcount
+            session.commit()
+    return track

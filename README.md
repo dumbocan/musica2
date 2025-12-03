@@ -166,6 +166,14 @@ PGPASSWORD='monleon' psql -h localhost -U usuario -d music_db -c "\dt"
 - [x] Verify server works with DB integration.
 - [ ] Review and document setup.
 
+### Current Status
+
+- ✅ Basic FastAPI + PostgreSQL DB.
+- ✅ Spotify integration: Search artists, get albums/tracks, save to DB.
+- ✅ Local query endpoints: GET all/id for artists, albums, tracks.
+- ✅ Last.fm client added for scoring (playcount/listeners).
+- ✅ Endpoint POST /tracks/enrich/{track_id} to update track with Last.fm data.
+
 ### Future Tasks (to be implemented incrementally)
 
 - [x] Research external APIs (Spotify, Last.fm, Musixmatch) for data endpoints.
@@ -177,6 +185,7 @@ PGPASSWORD='monleon' psql -h localhost -U usuario -d music_db -c "\dt"
 - [x] Add saving data to DB: POST /artists/save/{spotify_id} saves artist from Spotify to DB.
 - [x] Add saving data to DB: POST /albums/save/{spotify_id} saves album and all its tracks from Spotify to DB.
 - [x] Add query endpoints for local DB: GET /artists, GET /artists/id/{artist_id}, GET /albums, GET /albums/id/{album_id}, GET /tracks, GET /tracks/id/{track_id}.
+- [x] Integrate Last.fm for playcount/listeners scoring.
 - [ ] Implement discography endpoints.
 - [ ] Add playlist CRUD.
 - [ ] Integrate ratings/favorites.
