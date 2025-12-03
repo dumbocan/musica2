@@ -39,6 +39,30 @@ async def save_artist_to_db(spotify_id: str = Path(..., description="Spotify art
     return {"message": "Artist saved to DB", "artist": artist.dict()}
 
 
+@router.post("/{spotify_id}/sync-discography")
+async def sync_artist_discography(spotify_id: str = Path(..., description="Spotify artist ID")):
+    """Sync artist's discography: fetch and save new albums/tracks from Spotify."""
+    with get_session() as session:
+        artist = session.exec(select(Artist).where(Artist.spotify_id == spotify_id)).first()
+        if not artist:
+            raise HTTPException(status_code=404, detail="Artist not saved locally")
+    
+    # Fetch all albums
+    albums_data = await spotify_client.get_artist_albums(spotify_id)
+    
+    from ..crud import save_album
+    synced_albums = 0
+    synced_tracks = 0
+    
+    for album_data in albums_data:
+        album = save_album(album_data)
+        # Since save_album saves tracks if album new, count
+        if not album.spotify_id:  # If it was new, but since update, difficult to count
+            synced_albums += 1
+    
+    return {"message": "Discography synced", "albums_processed": len(albums_data), "synced_albums": synced_albums}
+
+
 @router.get("/")
 def get_artists() -> List[Artist]:
     """Get all saved artists from DB."""
