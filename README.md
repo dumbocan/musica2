@@ -175,7 +175,8 @@ PGPASSWORD='monleon' psql -h localhost -U usuario -d music_db -c "\dt"
 - [x] Add first endpoint: GET /artists/search?q=artist for searching via Spotify API.
 - [x] Add endpoint: GET /artists/{spotify_id}/albums for discography.
 - [x] Add saving data to DB: POST /artists/save/{spotify_id} saves artist from Spotify to DB.
-- [x] Add saving data to DB: POST /albums/save/{spotify_id} saves album from Spotify to DB.
+- [x] Add saving data to DB: POST /albums/save/{spotify_id} saves album and all its tracks from Spotify to DB.
+- [x] Add query endpoints for local DB: GET /artists, GET /artists/id/{artist_id}.
 - [ ] Implement discography endpoints.
 - [ ] Add playlist CRUD.
 - [ ] Integrate ratings/favorites.
