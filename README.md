@@ -187,6 +187,7 @@ PGPASSWORD='monleon' psql -h localhost -U usuario -d music_db -c "\dt"
 - [x] Add query endpoints for local DB: GET /artists, GET /artists/id/{artist_id}, GET /albums, GET /albums/id/{album_id}, GET /tracks, GET /tracks/id/{track_id}.
 - [x] Add sync-discography endpoint for updating artist new albums.
 - [x] Add deduplication by normalized name for artists.
+- [x] Add CASCADE delete for artists (DELETE /artists/id/{id} deletes artist + all albums/tracks).
 - [x] Integrate Last.fm for playcount/listeners scoring.
 - [ ] Implement discography endpoints.
 - [ ] Add playlist CRUD.
