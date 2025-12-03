@@ -8,8 +8,8 @@ engine = create_engine(settings.DATABASE_URL, echo=False)
 
 # Session manager for dependency injection
 def get_session():
-    with Session(engine) as session:
-        yield session
+    # Return a session (close manually)
+    return Session(engine)
 
 # Create all tables (call once after models defined)
 def create_db_and_tables():
