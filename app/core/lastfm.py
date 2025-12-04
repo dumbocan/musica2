@@ -32,6 +32,27 @@ class LastFmClient:
                 "tags": track_info.get("toptags", {}).get("tag", [])
             }
 
+    async def get_artist_info(self, artist: str) -> dict:
+        """Get artist info including biography/summary."""
+        params = {
+            "method": "artist.getInfo",
+            "artist": artist,
+            "api_key": self.api_key,
+            "format": "json"
+        }
+        async with httpx.AsyncClient() as client:
+            response = await client.get(self.base_url, params=params)
+            response.raise_for_status()
+            data = response.json()
+            artist_info = data.get("artist", {})
+            bio_data = artist_info.get("bio", {})
+            return {
+                "summary": bio_data.get("summary", ""),
+                "content": bio_data.get("content", ""),
+                "stats": artist_info.get("stats", {}),  # playcount, listeners
+                "tags": artist_info.get("tags", {}).get("tag", [])  # genres/tags
+            }
+
 
 # Global client
 lastfm_client = LastFmClient()

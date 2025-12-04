@@ -34,6 +34,8 @@ class Artist(SQLModel, table=True):
     images: Optional[str] = None  # JSON list of image URLs
     popularity: int = Field(default=0)  # Spotify 0-100
     followers: int = Field(default=0)
+    bio_summary: Optional[str] = None  # Last.fm bio summary
+    bio_content: Optional[str] = None  # Last.fm full bio
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     # Relationships

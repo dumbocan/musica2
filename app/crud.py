@@ -178,6 +178,21 @@ def update_track_lastfm(track_id: int, listeners: int, playcount: int):
         session.close()
 
 
+def update_artist_bio(artist_id: int, bio_summary: str, bio_content: str, lastfm_listeners: int = 0, lastfm_playcount: int = 0):
+    """Update artist with Last.fm bio data."""
+    session = get_session()
+    try:
+        artist = session.exec(select(Artist).where(Artist.id == artist_id)).first()
+        if artist:
+            artist.bio_summary = bio_summary
+            artist.bio_content = bio_content
+            # Optionally add lastfm counts if added to model
+            session.commit()
+        return artist
+    finally:
+        session.close()
+
+
 def delete_artist(artist_id: int) -> bool:
     """Delete artist and cascade to albums/tracks."""
     session = get_session()

@@ -7,9 +7,10 @@ from typing import List
 from fastapi import APIRouter, Query, Path, HTTPException
 
 from ..core.spotify import spotify_client
-from ..crud import save_artist, delete_artist
+from ..crud import save_artist, delete_artist, update_artist_bio
 from ..core.db import get_session
-from ..models.base import Artist, Album, Track
+from ..models.base import Artist
+from ..core.lastfm import lastfm_client
 from sqlmodel import select
 from sqlalchemy.orm import selectinload
 
@@ -120,3 +121,21 @@ def delete_artist_end(artist_id: int = Path(..., description="Local artist ID"))
     if not ok:
         raise HTTPException(status_code=404, detail="Artist not found")
     return {"message": "Artist and related data deleted"}
+
+
+@router.post("/enrich_bio/{artist_id}")
+async def enrich_artist_bio(artist_id: int = Path(..., description="Local artist ID")):
+    """Fetch and enrich artist bio from Last.fm."""
+    with get_session() as session:
+        artist = session.exec(select(Artist).where(Artist.id == artist_id)).first()
+        if not artist:
+            raise HTTPException(status_code=404, detail="Artist not found")
+
+    # Fetch Last.fm bio using artist name
+    bio_data = await lastfm_client.get_artist_info(artist.name)
+    bio_summary = bio_data['summary']
+    bio_content = bio_data['content']
+
+    # Update DB
+    updated_artist = update_artist_bio(artist_id, bio_summary, bio_content)
+    return {"message": "Artist bio enriched", "artist": updated_artist.dict() if updated_artist else {}}
