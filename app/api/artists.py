@@ -9,8 +9,9 @@ from fastapi import APIRouter, Query, Path, HTTPException
 from ..core.spotify import spotify_client
 from ..crud import save_artist, delete_artist
 from ..core.db import get_session
-from ..models.base import Artist
+from ..models.base import Artist, Album, Track
 from sqlmodel import select
+from sqlalchemy.orm import selectinload
 
 router = APIRouter(prefix="/artists", tags=["artists"])
 
@@ -46,21 +47,52 @@ async def sync_artist_discography(spotify_id: str = Path(..., description="Spoti
         artist = session.exec(select(Artist).where(Artist.spotify_id == spotify_id)).first()
         if not artist:
             raise HTTPException(status_code=404, detail="Artist not saved locally")
-    
+
     # Fetch all albums
     albums_data = await spotify_client.get_artist_albums(spotify_id)
-    
+
     from ..crud import save_album
     synced_albums = 0
     synced_tracks = 0
-    
+
     for album_data in albums_data:
         album = save_album(album_data)
         # Since save_album saves tracks if album new, count
         if not album.spotify_id:  # If it was new, but since update, difficult to count
             synced_albums += 1
-    
+
     return {"message": "Discography synced", "albums_processed": len(albums_data), "synced_albums": synced_albums}
+
+
+@router.get("/id/{artist_id}/discography")
+def get_artist_discography(artist_id: int = Path(..., description="Local artist ID")):
+    """Get artist with full discography: albums + tracks from DB."""
+    from ..models.base import Album, Track
+    from ..core.db import get_session
+    from sqlmodel import select
+
+    with get_session() as session:
+        # Get artist with albums
+        artist = session.exec(
+            select(Artist)
+            .where(Artist.id == artist_id)
+            .options(selectinload(Artist.albums))
+        ).first()
+        if not artist:
+            raise HTTPException(status_code=404, detail="Artist not found")
+
+        # For each album, load tracks
+        discography = {
+            "artist": artist.dict(),
+            "albums": []
+        }
+        for album in artist.albums:
+            album_data = album.dict()
+            tracks = session.exec(select(Track).where(Track.album_id == album.id)).all()
+            album_data["tracks"] = [track.dict() for track in tracks]
+            discography["albums"].append(album_data)
+
+        return discography
 
 
 @router.get("/")
