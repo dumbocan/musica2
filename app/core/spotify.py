@@ -51,6 +51,31 @@ class SpotifyClient:
             response.raise_for_status()
             return response.json()
 
+    async def get_recommendations(self, seed_artists: List[str] = None, seed_tracks: List[str] = None, seed_genres: List[str] = None, limit: int = 20) -> List[dict]:
+        """Get music recommendations based on seeds."""
+        endpoint = "/recommendations"
+        params = {"limit": limit}
+        if seed_artists:
+            params["seed_artists"] = ",".join(seed_artists)
+        if seed_tracks:
+            params["seed_tracks"] = ",".join(seed_tracks)
+        if seed_genres:
+            params["seed_genres"] = ",".join(seed_genres)
+
+        response = await self._make_request(endpoint, params)
+        tracks = response.get("tracks", [])
+
+        # Extract unique artists from tracks
+        artists = []
+        seen_artists = set()
+        for track in tracks:
+            for artist in track["artists"]:
+                if artist["id"] not in seen_artists:
+                    artists.append(artist)
+                    seen_artists.add(artist["id"])
+
+        return {"tracks": tracks, "artists": artists}
+
     async def search_artists(self, query: str, limit: int = 10) -> List[dict]:
         """Search for artists by name."""
         endpoint = "/search"

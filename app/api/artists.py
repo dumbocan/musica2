@@ -65,6 +65,13 @@ async def sync_artist_discography(spotify_id: str = Path(..., description="Spoti
     return {"message": "Discography synced", "albums_processed": len(albums_data), "synced_albums": synced_albums}
 
 
+@router.get("/{spotify_id}/recommendations")
+async def get_artist_recommendations(spotify_id: str = Path(..., description="Spotify artist ID")):
+    """Get music recommendations based on artist (tracks and artists)."""
+    recommendations = await spotify_client.get_recommendations(seed_artists=[spotify_id], limit=20)
+    return recommendations
+
+
 @router.get("/id/{artist_id}/discography")
 def get_artist_discography(artist_id: int = Path(..., description="Local artist ID")):
     """Get artist with full discography: albums + tracks from DB."""
