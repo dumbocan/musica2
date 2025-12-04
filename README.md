@@ -189,6 +189,7 @@ PGPASSWORD='monleon' psql -h localhost -U usuario -d music_db -c "\dt"
 - [x] Add deduplication by normalized name for artists.
 - [x] Add CASCADE delete for artists (DELETE /artists/id/{id} deletes artist + all albums/tracks).
 - [x] Add discography endpoint: GET /artists/id/{artist_id}/discography (artist + all albums + tracks from DB).
+- [x] Add bio enrich from Last.fm: artist bio_summary/content and POST /artists/enrich_bio/{artist_id}.
 - [x] Integrate Last.fm for playcount/listeners scoring.
 - [ ] Implement discography endpoints.
 - [ ] Add playlist CRUD.
