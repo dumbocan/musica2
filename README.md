@@ -193,7 +193,7 @@ PGPASSWORD='monleon' psql -h localhost -U usuario -d music_db -c "\dt"
 - [x] Add music recommendations: GET /artists/{spotify_id}/recommendations (tracks/artists similar via Spotify).
 - [x] Integrate Last.fm for playcount/listeners scoring.
 - [ ] Implement discography endpoints.
-- [ ] Add playlist CRUD.
+- [x] Add playlist CRUD.
 - [ ] Integrate ratings/favorites.
 - [ ] Add tags, play history.
 - [ ] Enable smart playlists.
