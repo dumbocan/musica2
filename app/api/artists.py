@@ -65,6 +65,80 @@ async def sync_artist_discography(spotify_id: str = Path(..., description="Spoti
     return {"message": "Discography synced", "albums_processed": len(albums_data), "synced_albums": synced_albums}
 
 
+@router.get("/{spotify_id}/full-discography")
+async def get_full_discography(spotify_id: str = Path(..., description="Spotify artist ID")):
+    """Get complete discography from Spotify: artist + albums + tracks."""
+    # Get artist info
+    artist_data = await spotify_client.get_artist(spotify_id)
+    if not artist_data:
+        raise HTTPException(status_code=404, detail="Artist not found on Spotify")
+
+    # Get albums
+    albums_data = await spotify_client.get_artist_albums(spotify_id)
+
+    # For each album, get tracks
+    discography = {
+        "artist": artist_data,
+        "albums": []
+    }
+
+    for album_data in albums_data:
+        album_id = album_data['id']
+        tracks_data = await spotify_client.get_album_tracks(album_id)
+        album_data['tracks'] = tracks_data
+        discography["albums"].append(album_data)
+
+    return discography
+
+@router.get("/{spotify_id}/discography-with-save")
+async def get_discography_with_save(spotify_id: str = Path(..., description="Spotify artist ID"), save: bool = Query(False, description="Save to database")):
+    """Get complete discography from Spotify with option to save to DB."""
+    # Get artist info
+    artist_data = await spotify_client.get_artist(spotify_id)
+    if not artist_data:
+        raise HTTPException(status_code=404, detail="Artist not found on Spotify")
+
+    # Get albums
+    albums_data = await spotify_client.get_artist_albums(spotify_id)
+
+    # For each album, get tracks
+    discography = {
+        "artist": artist_data,
+        "albums": []
+    }
+
+    saved_albums = 0
+    saved_tracks = 0
+
+    for album_data in albums_data:
+        album_id = album_data['id']
+        tracks_data = await spotify_client.get_album_tracks(album_id)
+        album_data['tracks'] = tracks_data
+        discography["albums"].append(album_data)
+
+        if save:
+            # Save album and tracks to DB
+            from ..crud import save_album, save_track, get_artist_by_spotify_id
+            album = save_album(album_data)
+            if album.spotify_id:  # Album was saved (not duplicate)
+                saved_albums += 1
+                artist_id = album.artist_id
+                for track_data in tracks_data:
+                    save_track(track_data, album.id, artist_id)
+                    saved_tracks += 1
+
+    if save:
+        # Save artist if not already saved
+        from ..crud import save_artist
+        artist = save_artist(artist_data)
+
+    return {
+        "discography": discography,
+        "saved": save,
+        "saved_albums": saved_albums,
+        "saved_tracks": saved_tracks
+    }
+
 @router.get("/{spotify_id}/recommendations")
 async def get_artist_recommendations(spotify_id: str = Path(..., description="Spotify artist ID")):
     """Get music recommendations based on artist (tracks and artists)."""
@@ -129,6 +203,45 @@ def delete_artist_end(artist_id: int = Path(..., description="Local artist ID"))
         raise HTTPException(status_code=404, detail="Artist not found")
     return {"message": "Artist and related data deleted"}
 
+
+@router.post("/{spotify_id}/save-full-discography")
+async def save_full_discography(spotify_id: str = Path(..., description="Spotify artist ID")):
+    """Save complete discography to DB: artist + albums + tracks."""
+    # Get artist info
+    artist_data = await spotify_client.get_artist(spotify_id)
+    if not artist_data:
+        raise HTTPException(status_code=404, detail="Artist not found on Spotify")
+
+    # Save artist
+    from ..crud import save_artist
+    artist = save_artist(artist_data)
+
+    # Get albums
+    albums_data = await spotify_client.get_artist_albums(spotify_id)
+
+    saved_albums = 0
+    saved_tracks = 0
+
+    for album_data in albums_data:
+        album_id = album_data['id']
+        tracks_data = await spotify_client.get_album_tracks(album_id)
+
+        # Save album and tracks
+        from ..crud import save_album, save_track
+        album = save_album(album_data)
+        if album.spotify_id:  # Album was saved (not duplicate)
+            saved_albums += 1
+            artist_id = album.artist_id
+            for track_data in tracks_data:
+                save_track(track_data, album.id, artist_id)
+                saved_tracks += 1
+
+    return {
+        "message": "Full discography saved to DB",
+        "artist": artist.dict(),
+        "saved_albums": saved_albums,
+        "saved_tracks": saved_tracks
+    }
 
 @router.post("/enrich_bio/{artist_id}")
 async def enrich_artist_bio(artist_id: int = Path(..., description="Local artist ID")):
