@@ -77,6 +77,7 @@ class Track(SQLModel, table=True):
     magnet_link: Optional[str] = None  # Torrent for local file
     user_score: int = Field(default=0)  # User rating 1-5
     played_at: Optional[datetime] = None  # Last played
+    is_favorite: bool = Field(default=False)  # Favorite flag
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     # Relationships

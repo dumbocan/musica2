@@ -194,7 +194,7 @@ PGPASSWORD='monleon' psql -h localhost -U usuario -d music_db -c "\dt"
 - [x] Integrate Last.fm for playcount/listeners scoring.
 - [x] Implement discography endpoints.
 - [x] Add playlist CRUD.
-- [ ] Integrate ratings/favorites.
+- [x] Integrate ratings/favorites.
 - [ ] Add tags, play history.
 - [ ] Enable smart playlists.
 - [ ] Implement offline detection.

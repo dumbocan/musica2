@@ -177,6 +177,32 @@ def update_track_lastfm(track_id: int, listeners: int, playcount: int):
     finally:
         session.close()
 
+def toggle_track_favorite(track_id: int) -> Track:
+    """Toggle favorite status for a track."""
+    session = get_session()
+    try:
+        track = session.exec(select(Track).where(Track.id == track_id)).first()
+        if track:
+            track.is_favorite = not track.is_favorite
+            session.commit()
+        return track
+    finally:
+        session.close()
+
+def set_track_rating(track_id: int, rating: int) -> Track:
+    """Set user rating for a track (1-5)."""
+    session = get_session()
+    try:
+        track = session.exec(select(Track).where(Track.id == track_id)).first()
+        if track:
+            if rating < 0 or rating > 5:
+                raise ValueError("Rating must be between 0 and 5")
+            track.user_score = rating
+            session.commit()
+        return track
+    finally:
+        session.close()
+
 
 def update_artist_bio(artist_id: int, bio_summary: str, bio_content: str, lastfm_listeners: int = 0, lastfm_playcount: int = 0):
     """Update artist with Last.fm bio data."""
