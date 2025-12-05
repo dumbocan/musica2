@@ -7,7 +7,7 @@ import unicodedata
 from typing import Optional
 from sqlmodel import Session, select
 
-from .models.base import Artist, Album, Track, User, Playlist
+from .models.base import Artist, Album, Track, User, Playlist, PlaylistTrack
 from .core.db import get_session
 
 
@@ -200,6 +200,141 @@ def delete_artist(artist_id: int) -> bool:
         artist = session.exec(select(Artist).where(Artist.id == artist_id)).first()
         if artist:
             session.delete(artist)  # CASCADE handles albums/tracks
+            session.commit()
+            return True
+        return False
+    finally:
+        session.close()
+
+
+def rate_track(track_id: int, rating: int) -> Optional["Track"]:
+    """Rate a track (1-5)."""
+    session = get_session()
+    try:
+        track = session.exec(select(Track).where(Track.id == track_id)).first()
+        if track:
+            track.user_score = rating
+            session.commit()
+        return track
+    finally:
+        session.close()
+
+# Playlists
+def get_playlist_by_id(playlist_id: int) -> Optional[Playlist]:
+    session = get_session()
+    try:
+        statement = select(Playlist).where(Playlist.id == playlist_id)
+        playlist = session.exec(statement).first()
+        return playlist
+    finally:
+        session.close()
+
+def create_playlist(name: str, description: str = "", user_id: int = 1) -> Playlist:
+    """Create a new playlist."""
+    session = get_session()
+    try:
+        # Check if user exists, create if not
+        user = session.exec(select(User).where(User.id == user_id)).first()
+        if not user:
+            user = User(
+                name="Default User",
+                email=f"user{user_id}@example.com",
+                password_hash="default_password_hash"
+            )
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+            user_id = user.id
+
+        playlist = Playlist(
+            name=name,
+            description=description,
+            user_id=user_id
+        )
+        session.add(playlist)
+        session.commit()
+        session.refresh(playlist)
+        return playlist
+    finally:
+        session.close()
+
+def update_playlist(playlist_id: int, name: str = None, description: str = None) -> Optional[Playlist]:
+    """Update playlist name and/or description."""
+    session = get_session()
+    try:
+        playlist = session.exec(select(Playlist).where(Playlist.id == playlist_id)).first()
+        if playlist:
+            if name:
+                playlist.name = name
+            if description:
+                playlist.description = description
+            session.commit()
+        return playlist
+    finally:
+        session.close()
+
+def delete_playlist(playlist_id: int) -> bool:
+    """Delete playlist and its tracks."""
+    session = get_session()
+    try:
+        playlist = session.exec(select(Playlist).where(Playlist.id == playlist_id)).first()
+        if playlist:
+            session.delete(playlist)  # CASCADE handles playlist tracks
+            session.commit()
+            return True
+        return False
+    finally:
+        session.close()
+
+def add_track_to_playlist(playlist_id: int, track_id: int) -> Optional["PlaylistTrack"]:
+    """Add track to playlist."""
+    from .models.base import PlaylistTrack  # Import here to avoid circular imports
+    session = get_session()
+    try:
+        playlist = session.exec(select(Playlist).where(Playlist.id == playlist_id)).first()
+        track = session.exec(select(Track).where(Track.id == track_id)).first()
+        if playlist and track:
+            # Check if track already in playlist
+            existing = session.exec(
+                select(PlaylistTrack).where(
+                    PlaylistTrack.playlist_id == playlist_id,
+                    PlaylistTrack.track_id == track_id
+                )
+            ).first()
+            if not existing:
+                # Get max order for this playlist
+                max_order = session.exec(
+                    select(PlaylistTrack.order)
+                    .where(PlaylistTrack.playlist_id == playlist_id)
+                    .order_by(PlaylistTrack.order.desc())
+                    .limit(1)
+                ).first()
+                new_order = (max_order or 0) + 1
+
+                playlist_track = PlaylistTrack(
+                    playlist_id=playlist_id,
+                    track_id=track_id,
+                    order=new_order
+                )
+                session.add(playlist_track)
+                session.commit()
+                return playlist_track
+        return None
+    finally:
+        session.close()
+
+def remove_track_from_playlist(playlist_id: int, track_id: int) -> bool:
+    """Remove track from playlist."""
+    session = get_session()
+    try:
+        playlist_track = session.exec(
+            select(PlaylistTrack).where(
+                PlaylistTrack.playlist_id == playlist_id,
+                PlaylistTrack.track_id == track_id
+            )
+        ).first()
+        if playlist_track:
+            session.delete(playlist_track)
             session.commit()
             return True
         return False

@@ -75,7 +75,7 @@ class Track(SQLModel, table=True):
     lastfm_playcount: int = Field(default=0)  # Scoring
     lyrics: Optional[str] = None  # From Musixmatch
     magnet_link: Optional[str] = None  # Torrent for local file
-    user_score: int = Field(default=0)  # Rating 0-5 *10 or something
+    user_score: int = Field(default=0)  # User rating 1-5
     played_at: Optional[datetime] = None  # Last played
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -100,7 +100,7 @@ class Playlist(SQLModel, table=True):
 class PlaylistTrack(SQLModel, table=True):
     """Many-to-many for playlists and tracks."""
     id: int = Field(primary_key=True)
-    playlist_id: int = Field(foreign_key="playlist.id")
+    playlist_id: int = Field(foreign_key="playlist.id", ondelete="CASCADE")
     track_id: int = Field(foreign_key="track.id")
     added_at: datetime = Field(default_factory=datetime.utcnow)
     order: int = Field(default=0)  # Position in playlist

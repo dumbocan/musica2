@@ -13,4 +13,7 @@ def get_session():
 
 # Create all tables (call once after models defined)
 def create_db_and_tables():
-    SQLModel.metadata.create_all(engine, checkfirst=True)
+    # Drop all tables first to ensure schema matches models
+    SQLModel.metadata.drop_all(engine)
+    # Create all tables with current schema
+    SQLModel.metadata.create_all(engine)
