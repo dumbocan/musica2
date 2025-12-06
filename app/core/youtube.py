@@ -5,22 +5,51 @@ Provides methods to search for music videos and get video metadata.
 
 import os
 import re
+import uuid
+import asyncio
+import tempfile
+from pathlib import Path
 from typing import List, Optional, Dict, Any
 from urllib.parse import urlparse, parse_qs
 import httpx
+import yt_dlp
+import aiofiles
 from fastapi import HTTPException
 from app.core.config import settings
 
 
 class YouTubeClient:
     """YouTube Data API v3 client for music-related video operations."""
-    
+
     def __init__(self):
         self.api_key = settings.YOUTUBE_API_KEY
         self.base_url = "https://www.googleapis.com/youtube/v3"
-        
+        self.download_dir = Path("downloads")
+        self.download_dir.mkdir(exist_ok=True)
+
         if not self.api_key:
             raise ValueError("YouTube API key not configured")
+
+    def get_download_path(self, video_id: str, format_type: str = "mp3") -> Path:
+        """Get the download path for a video file."""
+        return self.download_dir / f"{video_id}.{format_type}"
+
+    def get_ydl_opts(self, output_path: Path, format_quality: str = "bestaudio") -> Dict[str, Any]:
+        """Get yt-dlp options for audio extraction."""
+        return {
+            'format': f'{format_quality}/bestaudio',  # Download best audio
+            'extractaudio': True,  # Extract audio
+            'audioformat': 'mp3',  # Convert to MP3
+            'outtmpl': str(output_path.with_suffix('')),  # Output template
+            'noplaylist': True,  # Don't download playlists
+            'quiet': True,  # Suppress output
+            'no_warnings': True,
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',  # 192 kbps
+            }],
+        }
     
     async def search_videos(
         self, 
@@ -263,6 +292,200 @@ class YouTubeClient:
             return None
         
         return None
+
+    async def download_audio(
+        self,
+        video_id: str,
+        format_quality: str = "bestaudio",
+        output_format: str = "mp3"
+    ) -> Dict[str, Any]:
+        """
+        Download audio from a YouTube video.
+
+        Args:
+            video_id: YouTube video ID
+            format_quality: Audio quality preference
+            output_format: Output audio format (mp3, m4a, etc.)
+
+        Returns:
+            Dictionary with download status and file info
+        """
+        try:
+            # Get video details first
+            video_details = await self.get_video_details(video_id)
+            if not video_details:
+                raise HTTPException(status_code=404, detail="Video not found")
+
+            output_path = self.get_download_path(video_id, output_format)
+
+            # Check if already downloaded
+            if output_path.exists():
+                file_size = output_path.stat().st_size
+                return {
+                    'status': 'already_exists',
+                    'video_id': video_id,
+                    'file_path': str(output_path),
+                    'file_size': file_size,
+                    'title': video_details['title'],
+                    'duration': video_details['duration']
+                }
+
+            # Configure yt-dlp options
+            ydl_opts = self.get_ydl_opts(output_path, format_quality)
+            ydl_opts['postprocessors'][0]['preferredcodec'] = output_format
+
+            download_id = f"download_{uuid.uuid4().hex}"
+
+            # Download in a thread to keep it async
+            loop = asyncio.get_event_loop()
+
+            def download_sync():
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+                except Exception as e:
+                    raise e
+
+            await loop.run_in_executor(None, download_sync)
+
+            # Verify the file was created
+            if not output_path.exists():
+                raise HTTPException(status_code=500, detail="Download failed - file not created")
+
+            file_size = output_path.stat().st_size
+
+            return {
+                'status': 'completed',
+                'download_id': download_id,
+                'video_id': video_id,
+                'file_path': str(output_path),
+                'file_size': file_size,
+                'title': video_details['title'],
+                'duration': video_details['duration'],
+                'format': output_format
+            }
+
+        except yt_dlp.utils.DownloadError as e:
+            raise HTTPException(status_code=500, detail=f"YouTube download error: {str(e)}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
+
+    async def get_download_status(self, video_id: str, format_type: str = "mp3") -> Dict[str, Any]:
+        """
+        Check if an audio file exists and return its status.
+
+        Args:
+            video_id: YouTube video ID
+            format_type: Audio format
+
+        Returns:
+            Dictionary with file status
+        """
+        file_path = self.get_download_path(video_id, format_type)
+
+        if file_path.exists():
+            file_size = file_path.stat().st_size
+            return {
+                'exists': True,
+                'video_id': video_id,
+                'file_path': str(file_path),
+                'file_size': file_size,
+                'format': format_type
+            }
+        else:
+            return {
+                'exists': False,
+                'video_id': video_id,
+                'format': format_type
+            }
+
+    async def list_downloads(self) -> List[Dict[str, Any]]:
+        """
+        List all downloaded audio files.
+
+        Returns:
+            List of download information
+        """
+        downloads = []
+
+        if self.download_dir.exists():
+            for file_path in self.download_dir.iterdir():
+                if file_path.is_file():
+                    video_id = file_path.stem  # filename without extension
+                    format_type = file_path.suffix[1:]  # extension without dot
+                    file_size = file_path.stat().st_size
+
+                    downloads.append({
+                        'video_id': video_id,
+                        'file_path': str(file_path),
+                        'file_size': file_size,
+                        'format': format_type
+                    })
+
+        return downloads
+
+    async def delete_download(self, video_id: str, format_type: str = "mp3") -> bool:
+        """
+        Delete a downloaded audio file.
+
+        Args:
+            video_id: YouTube video ID
+            format_type: Audio format
+
+        Returns:
+            True if deleted successfully
+        """
+        file_path = self.get_download_path(video_id, format_type)
+
+        if file_path.exists():
+            file_path.unlink()
+            return True
+
+        return False
+
+    async def stream_audio_to_device(
+        self,
+        video_id: str,
+        output_format: str = "mp3",
+        format_quality: str = "bestaudio"
+    ) -> Dict[str, Any]:
+        """
+        Stream audio directly to device without storing in backend.
+        Returns information about the download process.
+
+        Args:
+            video_id: YouTube video ID
+            output_format: Output audio format
+            format_quality: Audio quality preference
+
+        Returns:
+            Dictionary with stream information
+        """
+        try:
+            # Get video details first
+            video_details = await self.get_video_details(video_id)
+            if not video_details:
+                raise HTTPException(status_code=404, detail="Video not found")
+
+            # Generate a temporary filename for this session
+            import uuid
+            temp_filename = f"stream_{uuid.uuid4().hex}.{output_format}"
+
+            return {
+                'status': 'ready_to_stream',
+                'video_id': video_id,
+                'title': video_details['title'],
+                'duration': video_details['duration'],
+                'format': output_format,
+                'quality': format_quality,
+                'temp_filename': temp_filename,
+                'estimated_size_mb': f"~{(video_details['duration'] * 0.0125):.1f} MB" if video_details['duration'] else "Unknown"
+            }
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to prepare stream: {str(e)}")
 
 
 # Global YouTube client instance

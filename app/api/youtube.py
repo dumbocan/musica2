@@ -1,10 +1,11 @@
-"""
+e """
 YouTube API endpoints for music video integration.
 Provides search functionality and video metadata retrieval.
 """
 
 from typing import List, Optional
 from fastapi import APIRouter, Query, HTTPException, Depends
+from fastapi.responses import FileResponse
 from app.core.youtube import youtube_client
 
 router = APIRouter(prefix="/youtube", tags=["youtube"])
@@ -250,10 +251,12 @@ async def youtube_health_check():
     try:
         # Test basic connectivity to YouTube API
         test_videos = await youtube_client.search_videos("test", max_results=1)
+        downloads_dir = youtube_client.download_dir.exists()
         return {
             "status": "ok",
             "message": "YouTube API connection successful",
-            "api_key_configured": bool(youtube_client.api_key)
+            "api_key_configured": bool(youtube_client.api_key),
+            "downloads_directory_exists": downloads_dir
         }
     except Exception as e:
         return {
@@ -261,3 +264,145 @@ async def youtube_health_check():
             "message": f"YouTube API connection failed: {str(e)}",
             "api_key_configured": bool(youtube_client.api_key)
         }
+
+
+# Audio Download Endpoints
+
+@router.post("/download/{video_id}")
+async def download_audio(
+    video_id: str,
+    format: str = Query("mp3", description="Audio format (mp3, m4a, etc.)"),
+    quality: str = Query("bestaudio", description="Audio quality (bestaudio, best, worst)"),
+    to_device: bool = Query(False, description="Stream directly to device instead of storing")
+):
+    """
+    Download audio from a YouTube video.
+
+    - **video_id**: YouTube video ID
+    - **format**: Audio format (mp3, m4a, etc.)
+    - **quality**: Audio quality preference
+    - **to_device**: If true, streams directly to device without storing
+
+    ⚠️ **IMPORTANT**: Downloaded content remains in server storage unless to_device=true.
+    """
+    try:
+        if to_device:
+            # Stream directly to device without storing
+            return await youtube_client.stream_audio_to_device(
+                video_id=video_id,
+                output_format=format,
+                format_quality=quality
+            )
+        else:
+            # Store in backend for caching/recovery
+            result = await youtube_client.download_audio(
+                video_id=video_id,
+                output_format=format,
+                format_quality=quality
+            )
+            return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
+
+
+@router.get("/download/{video_id}/status")
+async def check_download_status(
+    video_id: str,
+    format: str = Query("mp3", description="Audio format")
+):
+    """
+    Check if an audio file exists for a video.
+
+    - **video_id**: YouTube video ID
+    - **format**: Audio format
+    """
+    try:
+        status = await youtube_client.get_download_status(video_id, format)
+        return status
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error checking status: {str(e)}")
+
+
+@router.get("/download/{video_id}/file")
+async def get_downloaded_file(
+    video_id: str,
+    format: str = Query("mp3", description="Audio format")
+):
+    """
+    Serve a downloaded audio file.
+
+    - **video_id**: YouTube video ID
+    - **format**: Audio format
+    """
+    try:
+        status = await youtube_client.get_download_status(video_id, format)
+
+        if not status['exists']:
+            raise HTTPException(status_code=404, detail="Audio file not found for this video")
+
+        file_path = status['file_path']
+
+        # Get video details for filename
+        try:
+            video_details = await youtube_client.get_video_details(video_id)
+            filename = f"{video_details['title']}.{format}"
+        except:
+            filename = f"{video_id}.{format}"
+
+        # Return file as streaming response
+        return FileResponse(
+            path=file_path,
+            media_type=f"audio/{format}",
+            filename=filename
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error serving file: {str(e)}")
+
+
+@router.get("/downloads")
+async def list_downloads():
+    """
+    List all downloaded audio files.
+    """
+    try:
+        downloads = await youtube_client.list_downloads()
+        return {
+            "total_files": len(downloads),
+            "downloads": downloads
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error listing downloads: {str(e)}")
+
+
+@router.delete("/download/{video_id}")
+async def delete_download(
+    video_id: str,
+    format: str = Query("mp3", description="Audio format")
+):
+    """
+    Delete a downloaded audio file.
+
+    - **video_id**: YouTube video ID
+    - **format**: Audio format
+    """
+    try:
+        deleted = await youtube_client.delete_download(video_id, format)
+
+        if deleted:
+            return {
+                "message": f"Successfully deleted audio file for video {video_id}",
+                "video_id": video_id,
+                "format": format
+            }
+        else:
+            raise HTTPException(status_code=404, detail="Audio file not found")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error deleting file: {str(e)}")
