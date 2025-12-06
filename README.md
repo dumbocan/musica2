@@ -199,7 +199,7 @@ PGPASSWORD='monleon' psql -h localhost -U usuario -d music_db -c "\dt"
 - [x] Enable smart playlists.
 - [x] Implement offline detection.
 - [x] Advanced search.
-- [ ] Personal charts.
+- [x] Personal charts.
 - [ ] YouTube integration.
 - [ ] Auth system (JWT) for multiuser (prepared models).
 

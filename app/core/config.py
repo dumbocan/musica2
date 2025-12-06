@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     SPOTIFY_CLIENT_SECRET: str
     LASTFM_API_KEY: str
     MUSIXMATCH_API_KEY: Optional[str] = None  # Optional
+    YOUTUBE_API_KEY: str  # YouTube Data API v3
 
 # Instantiate settings
 settings = Settings()
