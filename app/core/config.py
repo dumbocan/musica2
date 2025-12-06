@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     LASTFM_API_KEY: str
     MUSIXMATCH_API_KEY: Optional[str] = None  # Optional
     YOUTUBE_API_KEY: str  # YouTube Data API v3
+    
+    # Security
+    JWT_SECRET_KEY: str  # Secret key for JWT tokens
 
 # Instantiate settings
 settings = Settings()
