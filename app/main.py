@@ -7,6 +7,7 @@ from .api.tracks import router as tracks_router
 from .api.playlists import router as playlists_router
 from .api.ratings import router as ratings_router
 from .api.tags import router as tags_router
+from .api.smart_playlists import router as smart_playlists_router
 from .core.db import create_db_and_tables
 
 app = FastAPI(title="Audio2 API", description="Personal Music API Backend")
@@ -21,3 +22,4 @@ app.include_router(tracks_router)
 app.include_router(playlists_router)
 app.include_router(ratings_router)
 app.include_router(tags_router)
+app.include_router(smart_playlists_router)

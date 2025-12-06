@@ -4,10 +4,10 @@ CRUD operations using SQLModel.
 
 import unicodedata
 
-from typing import Optional
+from typing import Optional, List
 from sqlmodel import Session, select
 
-from .models.base import Artist, Album, Track, User, Playlist, PlaylistTrack
+from .models.base import Artist, Album, Track, User, Playlist, PlaylistTrack, Tag, TrackTag, PlayHistory
 from .core.db import get_session
 
 
@@ -546,5 +546,191 @@ def get_most_played_tracks(limit: int = 10) -> List[dict]:
             }
             for track in tracks
         ]
+    finally:
+        session.close()
+
+# Smart Playlist Generation
+def generate_top_rated_playlist(user_id: int = 1, name: str = "Top Rated", limit: int = 20) -> Optional[Playlist]:
+    """Generate a playlist of top rated tracks."""
+    session = get_session()
+    try:
+        # Get top rated tracks
+        tracks = session.exec(
+            select(Track)
+            .where(Track.user_score > 0)
+            .order_by(Track.user_score.desc())
+            .limit(limit)
+        ).all()
+
+        if not tracks:
+            return None
+
+        # Create playlist
+        playlist = create_playlist(name, f"Auto-generated top rated tracks", user_id)
+
+        # Add tracks to playlist
+        for track in tracks:
+            add_track_to_playlist(playlist.id, track.id)
+
+        return playlist
+    finally:
+        session.close()
+
+def generate_most_played_playlist(user_id: int = 1, name: str = "Most Played", limit: int = 20) -> Optional[Playlist]:
+    """Generate a playlist of most played tracks."""
+    session = get_session()
+    try:
+        # Get most played tracks
+        most_played = get_most_played_tracks(limit)
+        track_ids = [item['track']['id'] for item in most_played]
+
+        if not track_ids:
+            return None
+
+        # Create playlist
+        playlist = create_playlist(name, f"Auto-generated most played tracks", user_id)
+
+        # Add tracks to playlist
+        for track_id in track_ids:
+            add_track_to_playlist(playlist.id, track_id)
+
+        return playlist
+    finally:
+        session.close()
+
+def generate_favorites_playlist(user_id: int = 1, name: str = "Favorites", limit: int = 50) -> Optional[Playlist]:
+    """Generate a playlist of favorite tracks."""
+    session = get_session()
+    try:
+        # Get favorite tracks
+        tracks = session.exec(
+            select(Track)
+            .where(Track.is_favorite == True)
+            .limit(limit)
+        ).all()
+
+        if not tracks:
+            return None
+
+        # Create playlist
+        playlist = create_playlist(name, f"Auto-generated favorite tracks", user_id)
+
+        # Add tracks to playlist
+        for track in tracks:
+            add_track_to_playlist(playlist.id, track.id)
+
+        return playlist
+    finally:
+        session.close()
+
+def generate_recently_played_playlist(user_id: int = 1, name: str = "Recently Played", limit: int = 20) -> Optional[Playlist]:
+    """Generate a playlist of recently played tracks."""
+    session = get_session()
+    try:
+        # Get recent plays
+        recent_plays = get_recent_plays(limit)
+        track_ids = [play.track_id for play in recent_plays]
+
+        if not track_ids:
+            return None
+
+        # Create playlist
+        playlist = create_playlist(name, f"Auto-generated recently played tracks", user_id)
+
+        # Add tracks to playlist
+        for track_id in track_ids:
+            add_track_to_playlist(playlist.id, track_id)
+
+        return playlist
+    finally:
+        session.close()
+
+def generate_by_tag_playlist(tag_name: str, user_id: int = 1, name: str = None, limit: int = 30) -> Optional[Playlist]:
+    """Generate a playlist of tracks with specific tag."""
+    session = get_session()
+    try:
+        # Get tag
+        tag = get_tag_by_name(tag_name)
+        if not tag:
+            return None
+
+        # Get tracks with this tag
+        track_tags = session.exec(
+            select(TrackTag)
+            .where(TrackTag.tag_id == tag.id)
+        ).all()
+
+        track_ids = [tt.track_id for tt in track_tags][:limit]
+
+        if not track_ids:
+            return None
+
+        # Create playlist name
+        if not name:
+            name = f"Tag: {tag_name}"
+
+        # Create playlist
+        playlist = create_playlist(name, f"Auto-generated tracks with tag '{tag_name}'", user_id)
+
+        # Add tracks to playlist
+        for track_id in track_ids:
+            add_track_to_playlist(playlist.id, track_id)
+
+        return playlist
+    finally:
+        session.close()
+
+def generate_discover_weekly_playlist(user_id: int = 1, name: str = "Discover Weekly", limit: int = 30) -> Optional[Playlist]:
+    """Generate a discover weekly style playlist with mixed criteria."""
+    session = get_session()
+    try:
+        # Get tracks from multiple criteria
+        # 1. Top rated
+        top_rated = session.exec(
+            select(Track)
+            .where(Track.user_score >= 4)
+            .order_by(Track.user_score.desc())
+            .limit(limit // 3)
+        ).all()
+
+        # 2. Most played
+        most_played_data = get_most_played_tracks(limit // 3)
+        most_played_ids = [item['track']['id'] for item in most_played_data]
+        most_played = session.exec(
+            select(Track)
+            .where(Track.id.in_(most_played_ids))
+        ).all()
+
+        # 3. Recent plays
+        recent_plays = get_recent_plays(limit // 3)
+        recent_track_ids = [play.track_id for play in recent_plays]
+        recent_tracks = session.exec(
+            select(Track)
+            .where(Track.id.in_(recent_track_ids))
+        ).all()
+
+        # Combine and deduplicate
+        all_tracks = top_rated + most_played + recent_tracks
+        unique_tracks = []
+        seen_ids = set()
+        for track in all_tracks:
+            if track.id not in seen_ids:
+                seen_ids.add(track.id)
+                unique_tracks.append(track)
+
+        # Limit to requested size
+        unique_tracks = unique_tracks[:limit]
+
+        if not unique_tracks:
+            return None
+
+        # Create playlist
+        playlist = create_playlist(name, "Auto-generated discover weekly style playlist", user_id)
+
+        # Add tracks to playlist
+        for track in unique_tracks:
+            add_track_to_playlist(playlist.id, track.id)
+
+        return playlist
     finally:
         session.close()
