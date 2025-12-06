@@ -195,7 +195,7 @@ PGPASSWORD='monleon' psql -h localhost -U usuario -d music_db -c "\dt"
 - [x] Implement discography endpoints.
 - [x] Add playlist CRUD.
 - [x] Integrate ratings/favorites.
-- [ ] Add tags, play history.
+- [x] Add tags, play history.
 - [ ] Enable smart playlists.
 - [x] Implement offline detection.
 - [ ] Advanced search.

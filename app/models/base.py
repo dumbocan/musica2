@@ -83,6 +83,8 @@ class Track(SQLModel, table=True):
     # Relationships
     artist: Artist = Relationship(back_populates="tracks")
     album: Optional[Album] = Relationship(back_populates="tracks")
+    tags: Optional[List["TrackTag"]] = Relationship(back_populates="track")
+    play_history: Optional[List["PlayHistory"]] = Relationship(back_populates="track")
 
 
 class Playlist(SQLModel, table=True):
@@ -108,6 +110,38 @@ class PlaylistTrack(SQLModel, table=True):
 
     playlist: Playlist = Relationship(back_populates="tracks")
     track: Track = Relationship()
+
+class Tag(SQLModel, table=True):
+    """Tag system for tracks."""
+    id: int = Field(primary_key=True)
+    name: str = Field(max_length=50, unique=True)
+    color: Optional[str] = Field(max_length=20, default="#666666")  # Hex color code
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # Relationships
+    tracks: Optional[List["TrackTag"]] = Relationship(back_populates="tag")
+
+class TrackTag(SQLModel, table=True):
+    """Many-to-many relationship between tracks and tags."""
+    id: int = Field(primary_key=True)
+    track_id: int = Field(foreign_key="track.id", ondelete="CASCADE")
+    tag_id: int = Field(foreign_key="tag.id", ondelete="CASCADE")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    track: Track = Relationship(back_populates="tags")
+    tag: Tag = Relationship(back_populates="tracks")
+
+class PlayHistory(SQLModel, table=True):
+    """Track play history."""
+    id: int = Field(primary_key=True)
+    track_id: int = Field(foreign_key="track.id", ondelete="CASCADE")
+    played_at: datetime = Field(default_factory=datetime.utcnow)
+    user_id: int = Field(foreign_key="user.id", default=1)  # Default user for now
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # Relationships
+    track: Track = Relationship()
+    user: User = Relationship()
 
 
 # Pydantic models for API responses (validation)

@@ -366,3 +366,185 @@ def remove_track_from_playlist(playlist_id: int, track_id: int) -> bool:
         return False
     finally:
         session.close()
+
+# Tags CRUD
+def create_tag(name: str, color: str = "#666666") -> Tag:
+    """Create a new tag."""
+    session = get_session()
+    try:
+        # Check if tag already exists
+        existing_tag = session.exec(select(Tag).where(Tag.name == name)).first()
+        if existing_tag:
+            return existing_tag
+
+        tag = Tag(name=name, color=color)
+        session.add(tag)
+        session.commit()
+        session.refresh(tag)
+        return tag
+    finally:
+        session.close()
+
+def get_tag_by_id(tag_id: int) -> Optional[Tag]:
+    """Get tag by ID."""
+    session = get_session()
+    try:
+        return session.exec(select(Tag).where(Tag.id == tag_id)).first()
+    finally:
+        session.close()
+
+def get_tag_by_name(name: str) -> Optional[Tag]:
+    """Get tag by name."""
+    session = get_session()
+    try:
+        return session.exec(select(Tag).where(Tag.name == name)).first()
+    finally:
+        session.close()
+
+def get_all_tags() -> List[Tag]:
+    """Get all tags."""
+    session = get_session()
+    try:
+        return session.exec(select(Tag)).all()
+    finally:
+        session.close()
+
+def add_tag_to_track(track_id: int, tag_id: int) -> Optional[TrackTag]:
+    """Add tag to track."""
+    session = get_session()
+    try:
+        track = session.exec(select(Track).where(Track.id == track_id)).first()
+        tag = session.exec(select(Tag).where(Tag.id == tag_id)).first()
+
+        if track and tag:
+            # Check if already tagged
+            existing = session.exec(
+                select(TrackTag).where(
+                    TrackTag.track_id == track_id,
+                    TrackTag.tag_id == tag_id
+                )
+            ).first()
+
+            if not existing:
+                track_tag = TrackTag(track_id=track_id, tag_id=tag_id)
+                session.add(track_tag)
+                session.commit()
+                return track_tag
+        return None
+    finally:
+        session.close()
+
+def remove_tag_from_track(track_id: int, tag_id: int) -> bool:
+    """Remove tag from track."""
+    session = get_session()
+    try:
+        track_tag = session.exec(
+            select(TrackTag).where(
+                TrackTag.track_id == track_id,
+                TrackTag.tag_id == tag_id
+            )
+        ).first()
+
+        if track_tag:
+            session.delete(track_tag)
+            session.commit()
+            return True
+        return False
+    finally:
+        session.close()
+
+def get_track_tags(track_id: int) -> List[Tag]:
+    """Get all tags for a track."""
+    session = get_session()
+    try:
+        track_tag_relations = session.exec(
+            select(TrackTag).where(TrackTag.track_id == track_id)
+        ).all()
+
+        tag_ids = [relation.tag_id for relation in track_tag_relations]
+        if tag_ids:
+            tags = session.exec(
+                select(Tag).where(Tag.id.in_(tag_ids))
+            ).all()
+            return tags
+        return []
+    finally:
+        session.close()
+
+# Play History CRUD
+def record_play(track_id: int, user_id: int = 1) -> Optional[PlayHistory]:
+    """Record a track play in history."""
+    session = get_session()
+    try:
+        track = session.exec(select(Track).where(Track.id == track_id)).first()
+        if track:
+            play_history = PlayHistory(
+                track_id=track_id,
+                user_id=user_id,
+                played_at=datetime.utcnow()
+            )
+            session.add(play_history)
+            session.commit()
+            session.refresh(play_history)
+            return play_history
+        return None
+    finally:
+        session.close()
+
+def get_play_history(track_id: int, limit: int = 10) -> List[PlayHistory]:
+    """Get play history for a track."""
+    session = get_session()
+    try:
+        return session.exec(
+            select(PlayHistory)
+            .where(PlayHistory.track_id == track_id)
+            .order_by(PlayHistory.played_at.desc())
+            .limit(limit)
+        ).all()
+    finally:
+        session.close()
+
+def get_recent_plays(limit: int = 20) -> List[PlayHistory]:
+    """Get most recent plays across all tracks."""
+    session = get_session()
+    try:
+        return session.exec(
+            select(PlayHistory)
+            .order_by(PlayHistory.played_at.desc())
+            .limit(limit)
+        ).all()
+    finally:
+        session.close()
+
+def get_most_played_tracks(limit: int = 10) -> List[dict]:
+    """Get most played tracks with play count."""
+    session = get_session()
+    try:
+        # Get play counts per track
+        from sqlmodel import func
+        results = session.exec(
+            select(
+                PlayHistory.track_id,
+                func.count(PlayHistory.id).label("play_count")
+            )
+            .group_by(PlayHistory.track_id)
+            .order_by(func.count(PlayHistory.id).desc())
+            .limit(limit)
+        ).all()
+
+        track_ids = [result[0] for result in results]
+        tracks = session.exec(
+            select(Track).where(Track.id.in_(track_ids))
+        ).all()
+
+        # Combine results
+        track_play_counts = {result[0]: result[1] for result in results}
+        return [
+            {
+                "track": track.dict(),
+                "play_count": track_play_counts[track.id]
+            }
+            for track in tracks
+        ]
+    finally:
+        session.close()
