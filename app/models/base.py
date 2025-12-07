@@ -111,6 +111,29 @@ class PlaylistTrack(SQLModel, table=True):
     playlist: Playlist = Relationship(back_populates="tracks")
     track: Track = Relationship()
 
+class YouTubeDownload(SQLModel, table=True):
+    """Tracking system for YouTube audio downloads."""
+    id: int = Field(primary_key=True)
+    spotify_track_id: str = Field(index=True)  # Spotify track ID
+    spotify_artist_id: str = Field(index=True)  # Spotify artist ID
+    youtube_video_id: str = Field(index=True)
+    download_path: str
+    download_status: str = Field(default="pending")  # 'pending', 'downloading', 'completed', 'error'
+    file_size: Optional[int] = None
+    format_type: str = Field(default="mp3")
+    duration_seconds: Optional[int] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    error_message: Optional[str] = None
+
+    @property
+    def is_completed(self) -> bool:
+        return self.download_status == "completed"
+
+    @property
+    def is_failed(self) -> bool:
+        return self.download_status in ["error", "failed"]
+
 class Tag(SQLModel, table=True):
     """Tag system for tracks."""
     id: int = Field(primary_key=True)

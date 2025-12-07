@@ -4,13 +4,14 @@ Artist endpoints: search, discography, etc.
 
 from typing import List
 
-from fastapi import APIRouter, Query, Path, HTTPException
+from fastapi import APIRouter, Query, Path, HTTPException, BackgroundTasks
 
 from ..core.spotify import spotify_client
 from ..crud import save_artist, delete_artist, update_artist_bio
 from ..core.db import get_session
 from ..models.base import Artist
 from ..core.lastfm import lastfm_client
+from ..core.auto_download import auto_download_service
 from sqlmodel import select
 from sqlalchemy.orm import selectinload
 
@@ -22,6 +23,56 @@ async def search_artists(q: str = Query(..., description="Artist name to search"
     """Search for artists by name using Spotify API."""
     artists = await spotify_client.search_artists(q)
     return artists
+
+
+@router.get("/search-auto-download")
+async def search_artists_auto_download(
+    q: str = Query(..., description="Artist name to search"),
+    background_tasks: BackgroundTasks = None
+) -> dict:
+    """
+    Search for artists by name using Spotify API.
+
+    Automatically triggers download of top 5 tracks for the first result.
+    """
+    artists = await spotify_client.search_artists(q)
+
+    # Check if we have results and start auto-download for the first artist
+    if artists and len(artists) > 0:
+        first_artist = artists[0]  # Take the best match
+        artist_spotify_id = first_artist.get('id')
+        artist_name = first_artist.get('name')
+
+        if artist_spotify_id:
+            # Start background download of top 5 tracks
+            await auto_download_service.auto_download_artist_top_tracks(
+                artist_name=artist_name,
+                artist_spotify_id=artist_spotify_id,
+                limit=5,
+                background_tasks=background_tasks
+            )
+
+            # Get progress status after triggering
+            progress = await auto_download_service.get_artist_download_progress(artist_spotify_id)
+
+            return {
+                "query": q,
+                "artists": artists,
+                "auto_download_triggered": True,
+                "triggered_for_artist": {
+                    "name": artist_name,
+                    "spotify_id": artist_spotify_id
+                },
+                "download_progress": progress
+            }
+
+    # No artists found or no auto-download triggered
+    return {
+        "query": q,
+        "artists": artists,
+        "auto_download_triggered": False,
+        "message": "No artists found for auto-download trigger"
+    }
 
 
 @router.get("/{spotify_id}/albums")
