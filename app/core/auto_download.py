@@ -64,31 +64,45 @@ class AutoDownloadService:
         try:
             logger.info(f"Starting background download for: {artist_name} - {track_name}")
 
-            # Check if already being processed or completed
-            status = await self.track_download_status(spotify_track_id, format_type)
-            if status == "completed" or status == "downloading":
-                logger.info(f"Track already processed or in progress: {spotify_track_id}")
+            # Check if already downloaded - USE SIMPLE FILE-BASED CHECKING FOR NOW
+            expected_filename = f"{artist_name} - {track_name}.{format_type}"
+            from app.core.youtube import YouTubeClient
+            client = YouTubeClient()
+            file_path = client.get_download_path(expected_filename)
+
+            if file_path.exists():
+                logger.info(f"Track already exists on disk: {expected_filename}")
+                # Update database record to completed if not already
+                from app.core.db import get_session
+                session = get_session()
+                try:
+                    # Check if database record exists
+                    existing = session.query(YouTubeDownload).filter(
+                        YouTubeDownload.spotify_track_id == spotify_track_id,
+                        YouTubeDownload.format_type == format_type
+                    ).first()
+
+                    if not existing:
+                        # Create database record
+                        download = YouTubeDownload(
+                            spotify_track_id=spotify_track_id,
+                            spotify_artist_id=spotify_artist_id,
+                            youtube_video_id="unknown",  # Don't have this info
+                            download_path=str(file_path),
+                            download_status="completed",
+                            format_type=format_type,
+                            file_size=file_path.stat().st_size if file_path.exists() else None
+                        )
+                        session.add(download)
+                        session.commit()
+                        logger.info(f"Created database record for existing file: {expected_filename}")
+
+                finally:
+                    session.close()
+
                 return
 
-            # Mark as downloading - use sync session for background operations
-            from app.core.db import get_session
-            session = get_session()
-            try:
-                download = YouTubeDownload(
-                    spotify_track_id=spotify_track_id,
-                    spotify_artist_id=spotify_artist_id,
-                    youtube_video_id="",  # Will be set after finding video
-                    download_path="",
-                    download_status="downloading",
-                    format_type=format_type
-                )
-                session.add(download)
-                session.commit()
-                session.refresh(download)
-                download_id = download.id  # Save ID for later use
-            finally:
-                session.close()
-
+            # Proceed with download if file doesn't exist
             # Find best YouTube video
             try:
                 videos = await youtube_client.search_music_videos(
@@ -111,41 +125,26 @@ class AutoDownloadService:
                     output_format=format_type
                 )
 
-                # Update database with success
+                # Save to database
                 from app.core.db import get_session
                 session = get_session()
                 try:
-                    # Find the download record again
-                    download_obj = session.query(YouTubeDownload).filter(
-                        YouTubeDownload.id == download_id
-                    ).first()
-                    if download_obj:
-                        download_obj.youtube_video_id = youtube_video_id
-                        download_obj.download_path = result['file_path']
-                        download_obj.download_status = "completed"
-                        download_obj.file_size = result.get('file_size')
-                        download_obj.duration_seconds = result.get('duration_seconds', {}).get('duration_seconds')
-                        session.commit()
+                    download = YouTubeDownload(
+                        spotify_track_id=spotify_track_id,
+                        spotify_artist_id=spotify_artist_id,
+                        youtube_video_id=youtube_video_id,
+                        download_path=result['file_path'],
+                        download_status="completed",
+                        format_type=format_type,
+                        file_size=result.get('file_size')
+                    )
+                    session.add(download)
+                    session.commit()
+                    logger.info(f"✅ Successfully downloaded and recorded: {track_name}")
                 finally:
                     session.close()
-
-                logger.info(f"Successfully downloaded: {track_name} - Size: {result.get('file_size', 0)} bytes")
 
             except Exception as e:
-                # Update with error
-                from app.core.db import get_session
-                session = get_session()
-                try:
-                    download_obj = session.query(YouTubeDownload).filter(
-                        YouTubeDownload.id == download_id
-                    ).first()
-                    if download_obj:
-                        download_obj.download_status = "error"
-                        download_obj.error_message = str(e)
-                        session.commit()
-                finally:
-                    session.close()
-
                 logger.error(f"Failed to download {track_name}: {str(e)}")
 
         except Exception as e:
@@ -215,16 +214,22 @@ class AutoDownloadService:
         try:
             from app.models.base import YouTubeDownload
 
-            # Count total downloads for this artist
-            total_downloads = session.query(YouTubeDownload).filter(
-                YouTubeDownload.spotify_artist_id == artist_spotify_id
-            ).count()
+            # Use session.exec (SQLModel recommended way)
+            total_downloads = len(session.exec(
+                select(YouTubeDownload).filter(
+                    YouTubeDownload.spotify_artist_id == artist_spotify_id
+                )
+            ).all())
 
             # Count completed downloads
-            completed_downloads = session.query(YouTubeDownload).filter(
-                YouTubeDownload.spotify_artist_id == artist_spotify_id,
-                YouTubeDownload.download_status == "completed"
-            ).count()
+            completed_downloads = len(session.exec(
+                select(YouTubeDownload).filter(
+                    YouTubeDownload.spotify_artist_id == artist_spotify_id,
+                    YouTubeDownload.download_status == "completed"
+                )
+            ).all())
+
+            print(f"🔍 Debug: Found {total_downloads} total, {completed_downloads} completed for artist {artist_spotify_id[:10]}...")
 
             return {
                 "total_expected": 5,  # We target top 5
