@@ -44,11 +44,12 @@ async def search_artists_auto_download(
         artist_name = first_artist.get('name')
 
         if artist_spotify_id:
-            # Start background download of top 5 tracks
-            await auto_download_service.auto_download_artist_top_tracks(
-                artist_name=artist_name,
-                artist_spotify_id=artist_spotify_id,
-                limit=5,
+            # Start comprehensive background download: main artist + similar artists
+            await auto_download_service.auto_download_with_similar_artists(
+                main_artist_name=artist_name,
+                main_artist_spotify_id=artist_spotify_id,
+                tracks_per_artist=3,
+                related_artists_limit=3,
                 background_tasks=background_tasks
             )
 

@@ -53,6 +53,31 @@ class LastFmClient:
                 "tags": artist_info.get("tags", {}).get("tag", [])  # genres/tags
             }
 
+    async def get_similar_artists(self, artist: str, limit: int = 5) -> list:
+        """Get similar artists from Last.fm."""
+        params = {
+            "method": "artist.getSimilar",
+            "artist": artist,
+            "limit": limit,
+            "api_key": self.api_key,
+            "format": "json"
+        }
+        async with httpx.AsyncClient() as client:
+            response = await client.get(self.base_url, params=params)
+            response.raise_for_status()
+            data = response.json()
+
+            similar_artists = data.get("similarartists", {}).get("artist", [])
+            return [
+                {
+                    "name": artist_info.get("name", ""),
+                    "match": float(artist_info.get("match", 0)),
+                    "url": artist_info.get("url", ""),
+                    "image": artist_info.get("image", [])
+                }
+                for artist_info in similar_artists
+            ]
+
 
 # Global client
 lastfm_client = LastFmClient()

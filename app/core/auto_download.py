@@ -117,8 +117,8 @@ class AutoDownloadService:
                 best_video = videos[0]  # Take first (already scored)
                 youtube_video_id = best_video['video_id']
 
-                # Download the audio with clean filename
-                result = await youtube_client.download_audio_for_track(
+                # Download the audio with organized folder structure
+                result = await youtube_client.download_audio_for_organized_track(
                     video_id=youtube_video_id,
                     artist_name=artist_name,
                     track_name=track_name,
@@ -159,7 +159,7 @@ class AutoDownloadService:
     ):
         """Automatically download top tracks for an artist if needed."""
         try:
-            logger.info(f"Checking auto-download for artist: {artist_name}")
+            logger.info(f"🎵 Checking auto-download for artist: {artist_name}")
 
             # Get top tracks from Spotify
             top_tracks = await spotify_client.get_artist_top_tracks(artist_name, limit=limit)
@@ -177,10 +177,10 @@ class AutoDownloadService:
                     logger.info(f"Track needs download: {track['name']}")
 
             if not tracks_to_download:
-                logger.info(f"All {len(top_tracks)} tracks for {artist_name} already downloaded")
+                logger.info(f"✅ All {len(top_tracks)} tracks for {artist_name} already downloaded")
                 return
 
-            logger.info(f"Starting downloads for {len(tracks_to_download)}/{len(top_tracks)} tracks")
+            logger.info(f"🚀 Starting downloads for {len(tracks_to_download)}/{len(top_tracks)} tracks")
 
             # Start background downloads
             for track in tracks_to_download[:self.max_concurrent_downloads]:  # Limit concurrent
@@ -205,6 +205,82 @@ class AutoDownloadService:
 
         except Exception as e:
             logger.error(f"Error in auto_download_artist_top_tracks: {str(e)}")
+            raise
+
+    async def auto_download_with_similar_artists(
+        self,
+        main_artist_name: str,
+        main_artist_spotify_id: str,
+        tracks_per_artist: int = 3,
+        related_artists_limit: int = 3,
+        background_tasks: BackgroundTasks = None
+    ):
+        """
+        Auto-download tracks for main artist + similar artists using Last.fm.
+
+        Downloads:
+        - 3 tracks from main artist
+        - 3 tracks from each of 3 similar artists (9 tracks total de relacionados)
+        """
+        try:
+            logger.info(f"🌟 Starting comprehensive download for: {main_artist_name}")
+
+            # 1. Download tracks from the main artist
+            logger.info(f"1️⃣ Downloading tracks for main artist: {main_artist_name}")
+            await self.auto_download_artist_top_tracks(
+                artist_name=main_artist_name,
+                artist_spotify_id=main_artist_spotify_id,
+                limit=tracks_per_artist,
+                background_tasks=background_tasks
+            )
+
+            # 2. Get similar artists from Last.fm
+            logger.info("2️⃣ Finding similar artists...")
+            from app.core.lastfm import lastfm_client
+            try:
+                similar_artists = await lastfm_client.get_similar_artists(main_artist_name, limit=related_artists_limit)
+                logger.info(f"Found {len(similar_artists)} similar artists")
+
+                # 3. Download tracks from similar artists
+                logger.info("3️⃣ Downloading tracks from similar artists...")
+                downloaded_related = 0
+
+                for similar_artist in similar_artists:
+                    artist_name = similar_artist['name']
+                    match_score = similar_artist['match']
+
+                    logger.info(f"🎸 Processing similar artist: {artist_name} (match: {match_score:.2f})")
+
+                    try:
+                        # Get Spotify ID for similar artist
+                        search_results = await spotify_client.search_artists(artist_name, limit=1)
+                        if search_results:
+                            spotify_id = search_results[0]['id']
+
+                            # Download tracks for this similar artist
+                            await self.auto_download_artist_top_tracks(
+                                artist_name=artist_name,
+                                artist_spotify_id=spotify_id,
+                                limit=tracks_per_artist,
+                                background_tasks=background_tasks
+                            )
+                            downloaded_related += 1
+                        else:
+                            logger.warning(f"Could not find Spotify data for similar artist: {artist_name}")
+
+                    except Exception as artist_error:
+                        logger.error(f"Error downloading tracks for {artist_name}: {str(artist_error)}")
+                        continue
+
+                logger.info(f"✅ Comprehensive download completed:")
+                logger.info(f"   📀 Main artist: {main_artist_name} ({tracks_per_artist} tracks)")
+                logger.info(f"   🎸 Related artists: {downloaded_related}/{len(similar_artists)} ({downloaded_related * tracks_per_artist} tracks)")
+
+            except Exception as similar_error:
+                logger.warning(f"Could not get similar artists, falling back to main artist only: {str(similar_error)}")
+
+        except Exception as e:
+            logger.error(f"Error in auto_download_with_similar_artists: {str(e)}")
             raise
 
     async def get_artist_download_progress(self, artist_spotify_id: str) -> Dict[str, float]:

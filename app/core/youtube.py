@@ -47,6 +47,15 @@ class YouTubeClient:
         safe_filename = self.clean_filename(filename)
         return self.download_dir / f"{safe_filename}.{format_type}"
 
+    def get_artist_download_path(self, artist_name: str, track_name: str, format_type: str = "mp3") -> Path:
+        """Get organized download path: downloads/Artist/Artist - Track.mp3"""
+        safe_artist = self.clean_filename(artist_name)
+        artist_dir = self.download_dir / safe_artist
+        artist_dir.mkdir(exist_ok=True)  # Create artist folder if needed
+
+        full_filename = f"{safe_artist} - {self.clean_filename(track_name)}.{format_type}"
+        return artist_dir / full_filename
+
     def get_ydl_opts(self, output_path: Path, format_quality: str = "bestaudio") -> Dict[str, Any]:
         """Get yt-dlp options for audio extraction."""
         return {
@@ -463,6 +472,84 @@ class YouTubeClient:
                 'artist': artist_name,
                 'track': track_name,
                 'format': output_format
+            }
+
+        except yt_dlp.utils.DownloadError as e:
+            raise HTTPException(status_code=500, detail=f"YouTube download error: {str(e)}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
+
+    async def download_audio_for_organized_track(
+        self,
+        video_id: str,
+        artist_name: str,
+        track_name: str,
+        format_quality: str = "bestaudio",
+        output_format: str = "mp3"
+    ) -> Dict[str, Any]:
+        """
+        Download audio to organized folder structure: downloads/Artist/Artist - Track.mp3
+        """
+        try:
+            # Get video details first
+            video_details = await self.get_video_details(video_id)
+            if not video_details:
+                raise HTTPException(status_code=404, detail="Video not found")
+
+            # Use organized path: downloads/Artist/Artist - Track.mp3
+            output_path = self.get_artist_download_path(artist_name, track_name, output_format)
+
+            # Check if already downloaded in organized structure
+            if output_path.exists():
+                file_size = output_path.stat().st_size
+                return {
+                    'status': 'already_exists',
+                    'video_id': video_id,
+                    'file_path': str(output_path),
+                    'file_size': file_size,
+                    'title': video_details['title'],
+                    'duration': video_details['duration'],
+                    'artist': artist_name,
+                    'track': track_name,
+                    'organized': True
+                }
+
+            # Configure yt-dlp options for organized path
+            ydl_opts = self.get_ydl_opts(output_path, format_quality)
+            ydl_opts['postprocessors'][0]['preferredcodec'] = output_format
+
+            download_id = f"download_{uuid.uuid4().hex}"
+
+            # Download in a thread to keep it async
+            loop = asyncio.get_event_loop()
+
+            def download_sync():
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+                except Exception as e:
+                    raise e
+
+            await loop.run_in_executor(None, download_sync)
+
+            # Verify the file was created
+            if not output_path.exists():
+                raise HTTPException(status_code=500, detail="Download failed - file not created")
+
+            file_size = output_path.stat().st_size
+
+            return {
+                'status': 'completed',
+                'download_id': download_id,
+                'video_id': video_id,
+                'file_path': str(output_path),
+                'file_size': file_size,
+                'title': video_details['title'],
+                'duration': video_details['duration'],
+                'artist': artist_name,
+                'track': track_name,
+                'format': output_format,
+                'organized': True
             }
 
         except yt_dlp.utils.DownloadError as e:
