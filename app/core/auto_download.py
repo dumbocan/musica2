@@ -103,9 +103,11 @@ class AutoDownloadService:
                 best_video = videos[0]  # Take first (already scored)
                 youtube_video_id = best_video['video_id']
 
-                # Download the audio
-                result = await youtube_client.download_audio(
+                # Download the audio with clean filename
+                result = await youtube_client.download_audio_for_track(
                     video_id=youtube_video_id,
+                    artist_name=artist_name,
+                    track_name=track_name,
                     output_format=format_type
                 )
 

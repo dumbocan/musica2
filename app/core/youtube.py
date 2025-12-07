@@ -30,9 +30,22 @@ class YouTubeClient:
         if not self.api_key:
             raise ValueError("YouTube API key not configured")
 
-    def get_download_path(self, video_id: str, format_type: str = "mp3") -> Path:
-        """Get the download path for a video file."""
-        return self.download_dir / f"{video_id}.{format_type}"
+    def clean_filename(self, text: str) -> str:
+        """
+        Clean text to create safe filenames.
+        Remove/replace problematic characters.
+        """
+        # Replace problematic characters with safe alternatives
+        safe_text = text.replace('/', '-').replace('\\', '-').replace(':', ' -').replace('*', '').replace('?', '').replace('"', '').replace('<', '').replace('>', '').replace('|', '-')
+        # Replace multiple spaces/dashes with single ones
+        safe_text = re.sub(r'[-\s]+', '-', safe_text.strip())
+        # Limit length to avoid filesystem limitations
+        return safe_text[:100].strip('-')
+
+    def get_download_path(self, filename: str, format_type: str = "mp3") -> Path:
+        """Get the download path for a video file using custom filename."""
+        safe_filename = self.clean_filename(filename)
+        return self.download_dir / f"{safe_filename}.{format_type}"
 
     def get_ydl_opts(self, output_path: Path, format_quality: str = "bestaudio") -> Dict[str, Any]:
         """Get yt-dlp options for audio extraction."""
@@ -362,6 +375,93 @@ class YouTubeClient:
                 'file_size': file_size,
                 'title': video_details['title'],
                 'duration': video_details['duration'],
+                'format': output_format
+            }
+
+        except yt_dlp.utils.DownloadError as e:
+            raise HTTPException(status_code=500, detail=f"YouTube download error: {str(e)}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
+
+    async def download_audio_for_track(
+        self,
+        video_id: str,
+        artist_name: str,
+        track_name: str,
+        format_quality: str = "bestaudio",
+        output_format: str = "mp3"
+    ) -> Dict[str, Any]:
+        """
+        Download audio from a YouTube video using clean filename (Artist - Track).
+
+        Args:
+            video_id: YouTube video ID
+            artist_name: Artist name for clean filename
+            track_name: Track name for clean filename
+            format_quality: Audio quality preference
+            output_format: Output audio format (mp3, m4a, etc.)
+
+        Returns:
+            Dictionary with download status and file info
+        """
+        try:
+            # Get video details first
+            video_details = await self.get_video_details(video_id)
+            if not video_details:
+                raise HTTPException(status_code=404, detail="Video not found")
+
+            # Create clean filename: "Artist - Track"
+            filename = f"{artist_name} - {track_name}"
+            output_path = self.get_download_path(filename, output_format)
+
+            # Check if already downloaded
+            if output_path.exists():
+                file_size = output_path.stat().st_size
+                return {
+                    'status': 'already_exists',
+                    'video_id': video_id,
+                    'file_path': str(output_path),
+                    'file_size': file_size,
+                    'title': video_details['title'],
+                    'duration': video_details['duration'],
+                    'artist': artist_name,
+                    'track': track_name
+                }
+
+            # Configure yt-dlp options
+            ydl_opts = self.get_ydl_opts(output_path, format_quality)
+            ydl_opts['postprocessors'][0]['preferredcodec'] = output_format
+
+            download_id = f"download_{uuid.uuid4().hex}"
+
+            # Download in a thread to keep it async
+            loop = asyncio.get_event_loop()
+
+            def download_sync():
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+                except Exception as e:
+                    raise e
+
+            await loop.run_in_executor(None, download_sync)
+
+            # Verify the file was created
+            if not output_path.exists():
+                raise HTTPException(status_code=500, detail="Download failed - file not created")
+
+            file_size = output_path.stat().st_size
+
+            return {
+                'status': 'completed',
+                'download_id': download_id,
+                'video_id': video_id,
+                'file_path': str(output_path),
+                'file_size': file_size,
+                'title': video_details['title'],
+                'duration': video_details['duration'],
+                'artist': artist_name,
+                'track': track_name,
                 'format': output_format
             }
 
