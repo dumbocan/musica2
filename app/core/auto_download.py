@@ -11,6 +11,7 @@ from fastapi import BackgroundTasks
 
 from app.core.youtube import youtube_client
 from app.core.spotify import spotify_client
+from app.core.data_freshness import data_freshness_manager
 from app.models.base import YouTubeDownload, Track
 from app.core.db import SessionDep
 
@@ -23,20 +24,12 @@ class AutoDownloadService:
         self.max_concurrent_downloads = 3  # Limit concurrent downloads
 
     async def is_track_downloaded(self, spotify_track_id: str, format_type: str = "mp3") -> bool:
-        """Check if a Spotify track is already downloaded."""
-        # Use sync session for direct queries (simpler for testing)
-        from app.core.db import get_session
-        session = get_session()
-        try:
-            from app.models.base import YouTubeDownload
-            download = session.query(YouTubeDownload).filter(
-                YouTubeDownload.spotify_track_id == spotify_track_id,
-                YouTubeDownload.format_type == format_type,
-                YouTubeDownload.download_status == "completed"
-            ).first()
-            return download is not None
-        finally:
-            session.close()
+        """
+        Check if a Spotify track is already downloaded.
+
+        DELEGATES TO DATA FRESHNESS MANAGER - ALWAYS check DB first!
+        """
+        return await data_freshness_manager.is_track_downloaded(spotify_track_id)
 
     async def track_download_status(self, spotify_track_id: str, format_type: str = "mp3") -> Optional[str]:
         """Get download status for a track."""

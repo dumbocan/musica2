@@ -9,6 +9,7 @@ from sqlmodel import Session, select
 
 from .models.base import Artist, Album, Track, User, Playlist, PlaylistTrack, Tag, TrackTag, PlayHistory
 from .core.db import get_session
+from datetime import datetime
 
 
 def normalize_name(name: str) -> str:
@@ -41,6 +42,7 @@ def save_artist(artist_data: dict) -> Artist:
             artist.images = str(artist_data.get('images', []))
             artist.popularity = artist_data.get('popularity', 0)
             artist.followers = artist_data.get('followers', {}).get('total', 0)
+            artist.updated_at = datetime.utcnow()  # Update timestamp
             session.add(artist)
         else:
             normalized = normalize_name(artist_data['name'])
@@ -56,6 +58,7 @@ def save_artist(artist_data: dict) -> Artist:
                 existing_artist.images = str(artist_data.get('images', []))
                 existing_artist.popularity = artist_data.get('popularity', 0)
                 existing_artist.followers = artist_data.get('followers', {}).get('total', 0)
+                existing_artist.updated_at = datetime.utcnow()  # Update timestamp
                 artist = existing_artist
             else:
                 artist = Artist(
@@ -172,8 +175,44 @@ def update_track_lastfm(track_id: int, listeners: int, playcount: int):
         if track:
             track.lastfm_listeners = listeners
             track.lastfm_playcount = playcount
+            track.updated_at = datetime.utcnow()  # Update timestamp
             session.commit()
         return track
+    finally:
+        session.close()
+
+def update_track_spotify_data(track_id: int, spotify_data: dict):
+    """Update track with fresh Spotify data."""
+    session = get_session()
+    try:
+        track = session.exec(select(Track).where(Track.id == track_id)).first()
+        if track:
+            # Update with fresh Spotify data
+            track.name = spotify_data.get('name', track.name)
+            track.duration_ms = spotify_data.get('duration_ms', track.duration_ms)
+            track.popularity = spotify_data.get('popularity', track.popularity)
+            track.preview_url = spotify_data.get('preview_url', track.preview_url)
+            track.external_url = spotify_data.get('external_urls', {}).get('spotify', track.external_url)
+            track.updated_at = datetime.utcnow()  # Update timestamp
+            session.commit()
+        return track
+    finally:
+        session.close()
+
+def update_album_spotify_data(album_id: int, spotify_data: dict):
+    """Update album with fresh Spotify data."""
+    session = get_session()
+    try:
+        album = session.exec(select(Album).where(Album.id == album_id)).first()
+        if album:
+            album.name = spotify_data.get('name', album.name)
+            album.release_date = spotify_data.get('release_date', album.release_date)
+            album.total_tracks = spotify_data.get('total_tracks', album.total_tracks)
+            album.images = str(spotify_data.get('images', []))
+            album.label = spotify_data.get('label', album.label)
+            album.updated_at = datetime.utcnow()  # Update timestamp
+            session.commit()
+        return album
     finally:
         session.close()
 
@@ -212,6 +251,7 @@ def update_artist_bio(artist_id: int, bio_summary: str, bio_content: str, lastfm
         if artist:
             artist.bio_summary = bio_summary
             artist.bio_content = bio_content
+            artist.updated_at = datetime.utcnow()  # Update timestamp for fresh data
             # Optionally add lastfm counts if added to model
             session.commit()
         return artist

@@ -2,9 +2,12 @@
 Artist endpoints: search, discography, etc.
 """
 
+import logging
 from typing import List
 
 from fastapi import APIRouter, Query, Path, HTTPException, BackgroundTasks
+
+logger = logging.getLogger(__name__)
 
 from ..core.spotify import spotify_client
 from ..crud import save_artist, delete_artist, update_artist_bio
@@ -12,6 +15,7 @@ from ..core.db import get_session
 from ..models.base import Artist
 from ..core.lastfm import lastfm_client
 from ..core.auto_download import auto_download_service
+from ..core.data_freshness import data_freshness_manager
 from sqlmodel import select
 from sqlalchemy.orm import selectinload
 
@@ -28,51 +32,65 @@ async def search_artists(q: str = Query(..., description="Artist name to search"
 @router.get("/search-auto-download")
 async def search_artists_auto_download(
     q: str = Query(..., description="Artist name to search"),
+    user_id: int = Query(1, description="User ID for personalized recommendations"),
+    expand_library: bool = Query(True, description="Auto-expand with similar artists"),
     background_tasks: BackgroundTasks = None
 ) -> dict:
     """
     Search for artists by name using Spotify API.
 
-    Automatically triggers download of top 5 tracks for the first result.
+    NEW: Automatically expands library with 10 similar artists + 5 tracks each!
     """
     artists = await spotify_client.search_artists(q)
 
-    # Check if we have results and start auto-download for the first artist
+    # Check if we have results
     if artists and len(artists) > 0:
         first_artist = artists[0]  # Take the best match
         artist_spotify_id = first_artist.get('id')
         artist_name = first_artist.get('name')
 
         if artist_spotify_id:
-            # Start comprehensive background download: main artist + similar artists
-            await auto_download_service.auto_download_with_similar_artists(
-                main_artist_name=artist_name,
-                main_artist_spotify_id=artist_spotify_id,
-                tracks_per_artist=3,
-                related_artists_limit=3,
+            expansion_results = None
+
+            # NEW: Auto-expand library with similar artists
+            if expand_library:
+                logger.info(f"🚀 Expanding library for user {user_id} from artist {artist_name}")
+                expansion_results = await data_freshness_manager.expand_user_library_from_artist(
+                    main_artist_name=artist_name,
+                    main_artist_spotify_id=artist_spotify_id,
+                    similar_count=8,  # 8 similar artists
+                    tracks_per_artist=8  # 8 tracks each
+                )
+
+            # Now trigger REAL downloads for the main artist (testing)
+            await auto_download_service.auto_download_artist_top_tracks(
+                artist_name=artist_name,
+                artist_spotify_id=artist_spotify_id,
+                limit=3,  # Download top 3 tracks for testing
                 background_tasks=background_tasks
             )
 
-            # Get progress status after triggering
-            progress = await auto_download_service.get_artist_download_progress(artist_spotify_id)
-
+            # Return enhanced response with expansion results
             return {
                 "query": q,
+                "user_id": user_id,
                 "artists": artists,
-                "auto_download_triggered": True,
-                "triggered_for_artist": {
+                "main_artist_processed": {
                     "name": artist_name,
-                    "spotify_id": artist_spotify_id
+                    "spotify_id": artist_spotify_id,
+                    "followers": first_artist.get('followers', {}).get('total', 0)
                 },
-                "download_progress": progress
+                "library_expansion": expansion_results,
+                "expand_library": expand_library
             }
 
-    # No artists found or no auto-download triggered
+    # No artists found
     return {
         "query": q,
+        "user_id": user_id,
         "artists": artists,
-        "auto_download_triggered": False,
-        "message": "No artists found for auto-download trigger"
+        "library_expansion": None,
+        "message": "No artists found for library expansion"
     }
 
 
@@ -379,3 +397,105 @@ async def manual_download_top_tracks(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error triggering download: {str(e)}")
+
+
+@router.post("/{spotify_id}/refresh-data")
+async def refresh_artist_data(spotify_id: str = Path(..., description="Spotify artist ID")):
+    """
+    Force refresh all data for an artist from external APIs.
+
+    Updates artist metadata, checks for new albums/tracks, and freshens all data.
+    """
+    try:
+        # First ensure artist exists locally
+        session = get_session()
+        try:
+            artist = session.exec(select(Artist).where(Artist.spotify_id == spotify_id)).first()
+            if not artist:
+                raise HTTPException(status_code=404, detail="Artist not found locally. Save artist first.")
+        finally:
+            session.close()
+
+        # Refresh artist metadata
+        await data_freshness_manager.refresh_artist_data(spotify_id)
+
+        # Check for new content
+        new_content = await data_freshness_manager.check_for_new_artist_content(spotify_id)
+
+        return {
+            "message": f"Artist {spotify_id} data refreshed",
+            "new_content_discovered": new_content,
+            "data_freshened": True
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error refreshing artist data: {str(e)}")
+
+
+@router.get("/data-freshness-report")
+async def get_data_freshness_report():
+    """
+    Get a comprehensive report on data freshness across the entire music library.
+    """
+    try:
+        report = await data_freshness_manager.get_data_freshness_report()
+        return {
+            "data_freshness_report": report,
+            "message": "Data freshness report generated successfully"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating freshness report: {str(e)}")
+
+
+@router.post("/bulk-refresh")
+async def bulk_refresh_stale_data(max_artists: int = Query(10, description="Maximum artists to refresh")):
+    """
+    Perform bulk refresh of all stale artist data.
+
+    - **max_artists**: Maximum number of artists to refresh in this batch
+    - Useful for maintenance and keeping data fresh
+    """
+    try:
+        result = await data_freshness_manager.bulk_refresh_stale_artists(max_artists)
+
+        return {
+            "bulk_refresh_result": result,
+            "message": f"Bulk refresh completed for up to {max_artists} artists"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error performing bulk refresh: {str(e)}")
+
+
+@router.get("/{spotify_id}/content-changes")
+async def check_artist_content_changes(spotify_id: str = Path(..., description="Spotify artist ID")):
+    """
+    Check what new content is available for an artist since last sync.
+
+    Returns new albums and tracks found on Spotify.
+    """
+    try:
+        # First ensure artist exists locally
+        session = get_session()
+        try:
+            artist = session.exec(select(Artist).where(Artist.spotify_id == spotify_id)).first()
+            if not artist:
+                raise HTTPException(status_code=404, detail="Artist not found locally. Save artist first.")
+        finally:
+            session.close()
+
+        # Check for new content
+        new_content = await data_freshness_manager.check_for_new_artist_content(spotify_id)
+
+        return {
+            "artist_spotify_id": spotify_id,
+            "new_content_available": new_content,
+            "message": f"Found {new_content['new_albums']} new albums and {new_content['new_tracks']} new tracks"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error checking content changes: {str(e)}")
