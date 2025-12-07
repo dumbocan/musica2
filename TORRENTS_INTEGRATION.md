@@ -75,6 +75,7 @@ def auto_download_artist_top_tracks(artist_name: str, limit: int = 5):
 - **Status tracking** for progress monitoring
 - **Error recovery** and retry logic
 - **Rate limiting** to respect YouTube API limits
+- **VPN Integration**: Configurable proxy/VPN support for geographic restrictions
 
 ### **API Integration Points**
 
@@ -115,6 +116,19 @@ Response + Auto-action:
 ### **Phase 3: Torrent Integration** 🌊
 - Torrent discovery + LLM matching
 - Album-level collection management
+- **VPN proxy integration** for geographic restrictions
+
+### **Phase 3.5: VPN & Proxy Infrastructure** 🔒
+**VPN Requirements for Torrent Downloads:**
+- Geographic access restrictions
+- ISP torrent blocking
+- Legal compliance in different regions
+
+**Proxy/VPN Implementation Options:**
+1. **System-wide VPN**: Configure entire server
+2. **Application-level proxy**: Per-request proxy rotation
+3. **Docker containers** with VPN isolation
+4. **Cloud VPN services**: AWS, DigitalOcean VPN droplets
 
 ### **Phase 4: AI Optimization** 🤖
 - ML-based quality scoring for downloads

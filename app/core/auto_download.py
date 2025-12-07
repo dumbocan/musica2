@@ -24,26 +24,33 @@ class AutoDownloadService:
 
     async def is_track_downloaded(self, spotify_track_id: str, format_type: str = "mp3") -> bool:
         """Check if a Spotify track is already downloaded."""
-        async with SessionDep() as session:
-            download = await session.get_first(
-                select(YouTubeDownload).where(
-                    YouTubeDownload.spotify_track_id == spotify_track_id,
-                    YouTubeDownload.format_type == format_type,
-                    YouTubeDownload.download_status == "completed"
-                )
-            )
+        # Use sync session for direct queries (simpler for testing)
+        from app.core.db import get_session
+        session = get_session()
+        try:
+            from app.models.base import YouTubeDownload
+            download = session.query(YouTubeDownload).filter(
+                YouTubeDownload.spotify_track_id == spotify_track_id,
+                YouTubeDownload.format_type == format_type,
+                YouTubeDownload.download_status == "completed"
+            ).first()
             return download is not None
+        finally:
+            session.close()
 
     async def track_download_status(self, spotify_track_id: str, format_type: str = "mp3") -> Optional[str]:
         """Get download status for a track."""
-        async with SessionDep() as session:
-            download = await session.get_first(
-                select(YouTubeDownload).where(
-                    YouTubeDownload.spotify_track_id == spotify_track_id,
-                    YouTubeDownload.format_type == format_type
-                )
-            )
+        from app.core.db import get_session
+        session = get_session()
+        try:
+            from app.models.base import YouTubeDownload
+            download = session.query(YouTubeDownload).filter(
+                YouTubeDownload.spotify_track_id == spotify_track_id,
+                YouTubeDownload.format_type == format_type
+            ).first()
             return download.download_status if download else None
+        finally:
+            session.close()
 
     async def download_track_background(
         self,
@@ -63,8 +70,10 @@ class AutoDownloadService:
                 logger.info(f"Track already processed or in progress: {spotify_track_id}")
                 return
 
-            # Mark as downloading
-            async with SessionDep() as session:
+            # Mark as downloading - use sync session for background operations
+            from app.core.db import get_session
+            session = get_session()
+            try:
                 download = YouTubeDownload(
                     spotify_track_id=spotify_track_id,
                     spotify_artist_id=spotify_artist_id,
@@ -74,8 +83,11 @@ class AutoDownloadService:
                     format_type=format_type
                 )
                 session.add(download)
-                await session.commit()
-                await session.refresh(download)
+                session.commit()
+                session.refresh(download)
+                download_id = download.id  # Save ID for later use
+            finally:
+                session.close()
 
             # Find best YouTube video
             try:
@@ -98,23 +110,39 @@ class AutoDownloadService:
                 )
 
                 # Update database with success
-                async with SessionDep() as session:
-                    download.youtube_video_id = youtube_video_id
-                    download.download_path = result['file_path']
-                    download.download_status = "completed"
-                    download.file_size = result.get('file_size')
-                    download.duration_seconds = result.get('duration_seconds', {}).get('duration_seconds')
-                    download.updated_at = download.created_at  # Will be auto-updated
-                    await session.commit()
+                from app.core.db import get_session
+                session = get_session()
+                try:
+                    # Find the download record again
+                    download_obj = session.query(YouTubeDownload).filter(
+                        YouTubeDownload.id == download_id
+                    ).first()
+                    if download_obj:
+                        download_obj.youtube_video_id = youtube_video_id
+                        download_obj.download_path = result['file_path']
+                        download_obj.download_status = "completed"
+                        download_obj.file_size = result.get('file_size')
+                        download_obj.duration_seconds = result.get('duration_seconds', {}).get('duration_seconds')
+                        session.commit()
+                finally:
+                    session.close()
 
                 logger.info(f"Successfully downloaded: {track_name} - Size: {result.get('file_size', 0)} bytes")
 
             except Exception as e:
                 # Update with error
-                async with SessionDep() as session:
-                    download.download_status = "error"
-                    download.error_message = str(e)
-                    await session.commit()
+                from app.core.db import get_session
+                session = get_session()
+                try:
+                    download_obj = session.query(YouTubeDownload).filter(
+                        YouTubeDownload.id == download_id
+                    ).first()
+                    if download_obj:
+                        download_obj.download_status = "error"
+                        download_obj.error_message = str(e)
+                        session.commit()
+                finally:
+                    session.close()
 
                 logger.error(f"Failed to download {track_name}: {str(e)}")
 
@@ -180,19 +208,21 @@ class AutoDownloadService:
 
     async def get_artist_download_progress(self, artist_spotify_id: str) -> Dict[str, float]:
         """Get download progress for an artist's tracks."""
-        async with SessionDep() as session:
-            total_downloads = await session.get_count(
-                select(YouTubeDownload).where(
-                    YouTubeDownload.spotify_artist_id == artist_spotify_id
-                )
-            )
+        from app.core.db import get_session
+        session = get_session()
+        try:
+            from app.models.base import YouTubeDownload
 
-            completed_downloads = await session.get_count(
-                select(YouTubeDownload).where(
-                    YouTubeDownload.spotify_artist_id == artist_spotify_id,
-                    YouTubeDownload.download_status == "completed"
-                )
-            )
+            # Count total downloads for this artist
+            total_downloads = session.query(YouTubeDownload).filter(
+                YouTubeDownload.spotify_artist_id == artist_spotify_id
+            ).count()
+
+            # Count completed downloads
+            completed_downloads = session.query(YouTubeDownload).filter(
+                YouTubeDownload.spotify_artist_id == artist_spotify_id,
+                YouTubeDownload.download_status == "completed"
+            ).count()
 
             return {
                 "total_expected": 5,  # We target top 5
@@ -201,6 +231,8 @@ class AutoDownloadService:
                 "progress_percentage": (completed_downloads / 5) * 100 if total_downloads > 0 else 0,
                 "status": "completed" if completed_downloads >= 5 else "in_progress" if completed_downloads > 0 else "not_started"
             }
+        finally:
+            session.close()
 
 # Global service instance
 auto_download_service = AutoDownloadService()

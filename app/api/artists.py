@@ -310,3 +310,71 @@ async def enrich_artist_bio(artist_id: int = Path(..., description="Local artist
     # Update DB
     updated_artist = update_artist_bio(artist_id, bio_summary, bio_content)
     return {"message": "Artist bio enriched", "artist": updated_artist.dict() if updated_artist else {}}
+
+
+@router.get("/{spotify_id}/download-progress")
+async def get_artist_download_progress(spotify_id: str = Path(..., description="Spotify artist ID")):
+    """
+    Get download progress for an artist's top tracks.
+
+    - **spotify_id**: Spotify artist ID
+    - Returns progress percentage and status for the automatic downloads
+    """
+    try:
+        progress = await auto_download_service.get_artist_download_progress(spotify_id)
+        return {
+            "artist_spotify_id": spotify_id,
+            "progress": progress
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting download progress: {str(e)}")
+
+
+@router.post("/{spotify_id}/download-top-tracks")
+async def manual_download_top_tracks(
+    spotify_id: str = Path(..., description="Spotify artist ID"),
+    background_tasks: BackgroundTasks = None,
+    limit: int = Query(5, description="Number of top tracks to download (max 5 for testing)"),
+    force: bool = Query(False, description="Force re-download even if already downloaded")
+):
+    """
+    Manually trigger download of top tracks for an artist.
+
+    - **spotify_id**: Spotify artist ID
+    - **limit**: Number of tracks to download (5 max for testing phase)
+    - **force**: If true, will re-download even already downloaded tracks
+    - **background_tasks**: FastAPI background tasks for non-blocking execution
+    """
+    try:
+        # Validate limit for testing phase
+        if limit > 5:
+            raise HTTPException(status_code=400, detail="Limit must be 5 or less during testing phase")
+
+        # Get artist info from Spotify to get name
+        artist_data = await spotify_client.get_artist(spotify_id)
+        if not artist_data:
+            raise HTTPException(status_code=404, detail="Artist not found on Spotify")
+
+        artist_name = artist_data.get('name')
+
+        # For forced downloads, we would need to modify the logic
+        # For now, just trigger normal auto-download
+        await auto_download_service.auto_download_artist_top_tracks(
+            artist_name=artist_name,
+            artist_spotify_id=spotify_id,
+            limit=limit,
+            background_tasks=background_tasks
+        )
+
+        return {
+            "message": f"Download triggered for top {limit} tracks of {artist_name}",
+            "artist_name": artist_name,
+            "artist_spotify_id": spotify_id,
+            "tracks_requested": limit,
+            "will_execute_in_background": background_tasks is not None
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error triggering download: {str(e)}")

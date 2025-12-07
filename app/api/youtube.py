@@ -1,4 +1,4 @@
-e """
+"""
 YouTube API endpoints for music video integration.
 Provides search functionality and video metadata retrieval.
 """

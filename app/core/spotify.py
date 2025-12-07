@@ -110,6 +110,53 @@ class SpotifyClient:
         response = await self._make_request(endpoint, params)
         return response.get("items", [])
 
+    async def get_artist_top_tracks(self, artist_name: str, limit: int = 5) -> List[dict]:
+        """
+        Get top tracks for an artist.
+        Since Spotify doesn't have a direct "artist top tracks" endpoint in Client Credentials flow,
+        we'll get the most popular tracks from their most recent albums.
+        """
+        # First, search for the artist to get their ID
+        artists = await self.search_artists(artist_name, limit=1)
+        if not artists:
+            return []
+
+        artist_id = artists[0]['id']
+
+        # Get artist's albums (sorted by release date, so most recent first)
+        albums = await self.get_artist_albums(artist_id, limit=10, include_groups="album")
+
+        if not albums:
+            return []
+
+        # Get tracks from the most recent/popular albums
+        all_tracks = []
+        for album in albums[:3]:  # Check first 3 albums
+            try:
+                tracks = await self.get_album_tracks(album['id'], limit=20)
+                for track in tracks:
+                    # Add album info to track for better context
+                    track['album'] = {
+                        'name': album['name'],
+                        'release_date': album['release_date'],
+                        'images': album.get('images', [])
+                    }
+                    # Weight by popularity and recency
+                    track['weighted_popularity'] = track.get('popularity', 0)
+                    all_tracks.append(track)
+            except Exception as e:
+                # Continue if one album fails
+                continue
+
+        # Sort by popularity and return top N
+        sorted_tracks = sorted(
+            all_tracks,
+            key=lambda x: (x.get('weighted_popularity', 0), x.get('popularity', 0)),
+            reverse=True
+        )
+
+        return sorted_tracks[:limit]
+
 
 # Global client instance
 spotify_client = SpotifyClient()
