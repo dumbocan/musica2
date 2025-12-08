@@ -290,4 +290,65 @@ Current Status
 ✅ Auth system (JWT) for multiuser (prepared models).
 
 **🎉 PROJECT 100% COMPLETE AND PRODUCTION READY!**
+
+## 🚀 **Roadmap - Future Enhancements**
+
+### **Phase 2: Advanced Recommendations**
+- [ ] **🎯 Smart Artist Discovery Algorithm** - Implement vector embeddings for better artist similarity
+  - Use genre compatibility, follower similarity, collaboration networks
+  - Replace Last.fm similarity with ML-based recommendations
+  - Filter out non-musical entities (managers, labels, executives)
+- [ ] **🎵 Song-Level Recommendations** - Audio analysis based similarity
+  - Analyze audio features (tempo, key, energy, danceability)
+  - Build listening pattern prediction models
+  - Personalized "Discover Weekly" based on actual preferences
+
+### **Phase 3: Torrent Integration** 🚀
+- [ ] **🎬 Torrent Search & Download** - Integration with torrent APIs
+  - SafeMagnet integration for audio files
+  - Automatic quality selection (FLAC/MP3/AAC)
+  - Torrent client integration (qBittorrent/Transmission)
+- [ ] **🔒 Content Verification** - Ensure downloaded files match expectations
+  - Audio fingerprinting and quality verification
+  - Metadata validation post-download
+  - Duplicate file detection across torrent sources
+- [ ] **💾 Storage Optimization** - Efficient storage management
+  - Automatic transcoding to save space
+  - Cloud storage integration (optional)
+  - Backup and redundancy management
+
+### **Phase 4: Advanced Features**
+- [ ] **👥 Multi-User Collaboration** - Shared music libraries
+  - User permissions and access control
+  - Collaborative playlist creation
+  - Social features (likes, comments, sharing)
+- [ ] **📊 Analytics Dashboard** - Usage statistics and insights
+  - Listening habits analysis
+  - Genre preference evolution tracking
+  - Playback statistics and trends
+- [ ] **🔊 Audio Quality Management** - Quality selection intelligence
+  - Automatic quality selection based on network/requirements
+  - Lossless ✅ vs compressed balancing
+  - Streaming optimization
+
+### **Phase 5: Performance & Scale**
+- [ ] **⚡ Performance Optimization** - Caching and speed improvements
+  - Redis caching for fast metadata lookups
+  - CDN integration for cover art images
+  - Database indexing and query optimization
+- [ ] **🌐 Cross-Platform Sync** - Multi-device synchronization
+  - Web/mobile app companions
+  - Play queue synchronization
+  - Favorites synchronization across devices
+- [ ] **🎙️ Audio Sync Technology** - Listening time synchronization across devices
+
+### **Implementation Priority:**
+1. **High**: Better artist recommendations (eliminate managers like Paul Rosenberg)
+2. **Medium**: Torrent integration for offline-first experience
+3. **Low**: Multi-user collaboration and analytics
+
+**Contribute:** Issues and pull requests welcome! See `CONTRIBUTING.md` (future)
+
+---
+
 Setup Instructions
