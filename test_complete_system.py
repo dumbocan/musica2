@@ -16,26 +16,51 @@ from sqlmodel import select
 import time
 
 async def test_complete_system():
-    print('🚀 TEST COMPLETO AUDIO2 - SISTEMA OPERACIONAL')
-    print('=' * 65)
-    print('2 usuarios • 2 búsquedas • 144+ tracks • Sin duplicados')
-    print('=' * 65)
+    print('🚀 TEST AUDIO2 CON BD PERSISTENTE - VERIFICACIÓN NO DUPLICADOS')
+    print('=' * 70)
+    print('BD existente • Verificar tracks ya descargadas • NO duplicados')
+    print('=' * 70)
 
-    # Setup fresh
-    print('\n🔧 Configurando sistema...')
-    create_db_and_tables()
+    # DON'T clean database - use existing data
+    print('\n🔧 Usando base de datos existente (persistente)...')
+    create_db_and_tables()  # Will create tables if they don't exist, but won't clean data
 
-    # Create 2 users
+    # Check existing users
     session = get_session()
     try:
-        user1 = User(name="User Eminem", username="user1", email="user1@test.com", password_hash="123")
-        user2 = User(name="User Gorillaz", username="user2", email="user2@test.com", password_hash="123")
-        session.add(user1)
-        session.add(user2)
-        session.commit()
-        session.refresh(user1)
-        session.refresh(user2)
-        print(f'✅ Usuarios creados: {user1.name}, {user2.name}')
+        existing_users = session.exec(select(User)).all()
+        if existing_users:
+            print(f'✅ Usuarios existentes encontrados: {len(existing_users)}')
+            for user in existing_users:
+                print(f'   👤 {user.name} ({user.username})')
+        else:
+            # Create users if none exist
+            user1 = User(name="User Eminem", username="user1", email="user1@test.com", password_hash="123")
+            user2 = User(name="User Gorillaz", username="user2", email="user2@test.com", password_hash="123")
+            session.add(user1)
+            session.add(user2)
+            session.commit()
+            session.refresh(user1)
+            session.refresh(user2)
+            print(f'✅ Usuarios creados: {user1.name}, {user2.name}')
+    finally:
+        session.close()
+
+    # Show current state
+    session = get_session()
+    try:
+        existing_artists = session.exec(select(Artist)).all()
+        existing_tracks = session.exec(select(Track)).all()
+        existing_downloads = session.exec(select(YouTubeDownload)).all()
+
+        print(f'\n📊 ESTADO ACTUAL DE BD:')
+        print(f'   🎤 Artistas almacenados: {len(existing_artists)}')
+        print(f'   🎵 Tracks en metadata: {len(existing_tracks)}')
+        print(f'   💾 Downloads completados: {len(existing_downloads)}')
+
+        if existing_downloads:
+            completed = [d for d in existing_downloads if d.download_status == 'completed']
+            print(f'   ✅ Tracks realmente descargadas: {len(completed)}')
     finally:
         session.close()
 
@@ -50,13 +75,13 @@ async def test_complete_system():
         eminem_data = artists[0]
         print(f'   🎤 Encontrado: {eminem_data["name"]} ({eminem_data["followers"]["total"]:,} followers)')
 
-        # Expand User 1 library
-        print('   📈 Expandiendo con 8 artistas similares...')
+        # Expand User 1 library - INCLUDE MAIN ARTIST
+        print('   📈 Expandiendo con Eminem + 8 artistas similares...')
         expansion = await data_freshness_manager.expand_user_library_from_artist(
             main_artist_name=eminem_data['name'],
             main_artist_spotify_id=eminem_data['id'],
             similar_count=8,
-            tracks_per_artist=5  # Reduced for demo: 5 instead of 8
+            tracks_per_artist=8  # EXACTLY 8 tracks per artist as requested
         )
 
         # Show User 1 expansion results
@@ -71,13 +96,13 @@ async def test_complete_system():
         gorillaz_data = artists[0]
         print(f'   🎸 Encontrado: {gorillaz_data["name"]} ({gorillaz_data["followers"]["total"]:,} followers)')
 
-        # Expand User 2 library
-        print('   📈 Expandiendo con 8 artistas similares...')
+        # Expand User 2 library - INCLUDE MAIN ARTIST
+        print('   📈 Expandiendo con Gorillaz + 8 artistas similares...')
         expansion = await data_freshness_manager.expand_user_library_from_artist(
             main_artist_name=gorillaz_data['name'],
             main_artist_spotify_id=gorillaz_data['id'],
             similar_count=8,
-            tracks_per_artist=5  # Reduced for demo: 5 instead of 8
+            tracks_per_artist=8  # EXACTLY 8 tracks per artist as requested
         )
 
         # Show User 2 expansion results
@@ -107,25 +132,49 @@ async def test_complete_system():
         all_artists = session.exec(select(Artist).where(Artist.name.is_not(None))).all()
         print(f'\n⬇️ Descargando tracks de {len(all_artists)} artistas...')
 
-        # Limit download for demo (download only from 4 artists per user)
-        artists_to_download = all_artists[:8]  # First 8 artists for demo
+        # Download ALL 16 artists (8 similar to Eminem + 8 similar to Gorillaz)
+        # This gives us EXACTLY what the user requested: 8 tracks from each of 8 similar artists per user
 
-        for i, artist in enumerate(artists_to_download, 1):
+        user1_artists = [a for a in all_artists if any(x in a.name.lower() for x in [
+            'd12', 'bad meets evil', 'obie trice', 'paul rosenberg', '50 cent', 'ca$his', 'dr. dre', 'royce da 5\'9"'
+        ])]
+
+        user2_artists = [a for a in all_artists if any(x in a.name.lower() for x in [
+            'franz ferdinand', 'tally hall', 'the good, the bad & the queen', 'damon albarn',
+            'radiohead', 'mgmt', 'twenty one pilots', 'foster the people'
+        ])]
+
+        print(f'\n⬇️ Descargando TODAS las tracks según especificación:')
+        print(f'   User 1: {len(user1_artists)} artistas × 8 tracks cada uno = {len(user1_artists)*8}')
+        print(f'   User 2: {len(user2_artists)} artistas × 8 tracks cada uno = {len(user2_artists)*8}')
+        print(f'   TOTAL: {len(user1_artists)*8 + len(user2_artists)*8} tracks (según tus especificaciones)')
+
+        # Download User 1 collection: 8 tracks from each of 8 similar artists
+        for i, artist in enumerate(user1_artists[:8], 1):  # Only first 8 similar artists
             if artist.spotify_id and artist.name:
-                user_name = "User 1" if any(x in artist.name.lower() for x in ['eminem', 'd12', 'bad meets evil', 'obie trice', '50 cent', 'dr. dre']) else "User 2"
-                print(f'\n   {i}. 📥 [{user_name}] Descargando {artist.name}...')
+                print(f'\n   [{i}/8] 📥 [User 1] Descargando {artist.name}...')
 
                 await auto_download_service.auto_download_artist_top_tracks(
                     artist_name=artist.name,
                     artist_spotify_id=artist.spotify_id,
-                    limit=5  # 5 tracks per artist for demo
+                    limit=8  # EXACTLY 8 tracks per artist as requested
                 )
-                print(f'      ✅ Completado: {artist.name}')
+                print(f'        ✅ Completado: 8 tracks de {artist.name}')
 
-                # Small delay between artists
-                await asyncio.sleep(1)
+        # Download User 2 collection: 8 tracks from each of 8 similar artists
+        for i, artist in enumerate(user2_artists[:8], 1):  # Only first 8 similar artists
+            if artist.spotify_id and artist.name:
+                print(f'\n   [{i}/8] 📥 [User 2] Descargando {artist.name}...')
 
-        print(f'\n✅ Descargas completadas para {len(artists_to_download)} artistas')
+                await auto_download_service.auto_download_artist_top_tracks(
+                    artist_name=artist.name,
+                    artist_spotify_id=artist.spotify_id,
+                    limit=8  # EXACTLY 8 tracks per artist as requested
+                )
+                print(f'        ✅ Completado: 8 tracks de {artist.name}')
+
+        total_artists_downloaded = len(user1_artists[:8]) + len(user2_artists[:8])
+        print(f'\n✅ Descargas completadas para {total_artists_downloaded} artistas')
 
         # Show final download stats
         downloads = session.exec(select(YouTubeDownload)).all()

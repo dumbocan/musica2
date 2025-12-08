@@ -285,6 +285,46 @@ def rate_track(track_id: int, rating: int) -> Optional["Track"]:
     finally:
         session.close()
 
+# YouTube Download Records
+def save_youtube_download(youtube_data: dict):
+    """Save YouTube download/link record."""
+    session = get_session()
+    try:
+        from .models.base import YouTubeDownload as YT
+
+        # Check if exists by track ID
+        existing = session.exec(
+            select(YT).where(YT.spotify_track_id == youtube_data['spotify_track_id'])
+        ).first()
+
+        if existing:
+            # Update existing
+            existingyoutube_video_id = youtube_data.get('youtube_video_id', existing.youtube_video_id)
+            existing.download_status = youtube_data.get('download_status', existing.download_status)
+            existing.download_path = youtube_data.get('download_path', existing.download_path)
+            existing.file_size = youtube_data.get('file_size', existing.file_size)
+            existing.error_message = youtube_data.get('error_message', existing.error_message)
+            existing.updated_at = datetime.utcnow()
+            session.add(existing)
+            result = existing
+        else:
+            # Create new
+            download = YT(
+                spotify_track_id=youtube_data['spotify_track_id'],
+                spotify_artist_id=youtube_data.get('spotify_artist_id'),
+                youtube_video_id=youtube_data.get('youtube_video_id'),
+                download_path=youtube_data.get('download_path'),
+                download_status=youtube_data.get('download_status', 'video_not_found'),
+                error_message=youtube_data.get('error_message')
+            )
+            session.add(download)
+            result = download
+
+        session.commit()
+        return result
+    finally:
+        session.close()
+
 # Playlists
 def get_playlist_by_id(playlist_id: int) -> Optional[Playlist]:
     session = get_session()

@@ -55,11 +55,13 @@ async def search_artists_auto_download(
             # NEW: Auto-expand library with similar artists
             if expand_library:
                 logger.info(f"🚀 Expanding library for user {user_id} from artist {artist_name}")
-                expansion_results = await data_freshness_manager.expand_user_library_from_artist(
+                expansion_results = await data_freshness_manager.expand_user_library_from_full_discography(
                     main_artist_name=artist_name,
                     main_artist_spotify_id=artist_spotify_id,
                     similar_count=8,  # 8 similar artists
-                    tracks_per_artist=8  # 8 tracks each
+                    tracks_per_artist=8,  # Will save ALL tracks from ALL albums
+                    include_youtube_links=True,  # Find YouTube links for all tracks
+                    include_full_albums=True  # Save complete discography with artwork
                 )
 
             # Now trigger REAL downloads for the main artist (testing)
