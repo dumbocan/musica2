@@ -3,8 +3,6 @@ import httpx
 from datetime import datetime, timedelta
 from typing import Optional
 
-from ..core.spotify import spotify_client
-from ..core.lastfm import lastfm_client
 from ..core.db import get_session
 from sqlmodel import select
 from ..models.base import Artist
@@ -31,19 +29,20 @@ api_status_cache = {
 }
 
 async def check_spotify_api() -> bool:
-    """Check if Spotify API is available."""
+    """Check if Spotify API is available; skip if no credentials."""
+    from ..core.config import settings
+    if not settings.SPOTIFY_CLIENT_ID or not settings.SPOTIFY_CLIENT_SECRET:
+        api_status_cache['spotify']['is_online'] = None
+        api_status_cache['spotify']['last_error'] = "credentials not set"
+        api_status_cache['spotify']['last_checked'] = datetime.utcnow()
+        return False
+
     try:
-        # Simple API call to check connectivity
         async with httpx.AsyncClient() as client:
-            response = await client.get("https://api.spotify.com/v1/artists/0LyfQWJT6nXafLPZqxe9Of", timeout=5)
-            if response.status_code == 200:
-                api_status_cache['spotify']['is_online'] = True
-                api_status_cache['spotify']['last_error'] = None
-                return True
-            else:
-                api_status_cache['spotify']['is_online'] = False
-                api_status_cache['spotify']['last_error'] = f"HTTP {response.status_code}"
-                return False
+            response = await client.get("https://api.spotify.com/v1", timeout=5)
+            api_status_cache['spotify']['is_online'] = response.status_code == 200
+            api_status_cache['spotify']['last_error'] = None if response.status_code == 200 else f"HTTP {response.status_code}"
+            return response.status_code == 200
     except Exception as e:
         api_status_cache['spotify']['is_online'] = False
         api_status_cache['spotify']['last_error'] = str(e)
@@ -52,19 +51,20 @@ async def check_spotify_api() -> bool:
         api_status_cache['spotify']['last_checked'] = datetime.utcnow()
 
 async def check_lastfm_api() -> bool:
-    """Check if Last.fm API is available."""
+    """Check if Last.fm API is available; skip if no credentials."""
+    from ..core.config import settings
+    if not settings.LASTFM_API_KEY:
+        api_status_cache['lastfm']['is_online'] = None
+        api_status_cache['lastfm']['last_error'] = "credentials not set"
+        api_status_cache['lastfm']['last_checked'] = datetime.utcnow()
+        return False
+
     try:
-        # Simple API call to check connectivity
         async with httpx.AsyncClient() as client:
             response = await client.get("http://ws.audioscrobbler.com/2.0/?method=artist.getinfo&artist=cher&api_key=test&format=json", timeout=5)
-            if response.status_code == 200:
-                api_status_cache['lastfm']['is_online'] = True
-                api_status_cache['lastfm']['last_error'] = None
-                return True
-            else:
-                api_status_cache['lastfm']['is_online'] = False
-                api_status_cache['lastfm']['last_error'] = f"HTTP {response.status_code}"
-                return False
+            api_status_cache['lastfm']['is_online'] = response.status_code == 200
+            api_status_cache['lastfm']['last_error'] = None if response.status_code == 200 else f"HTTP {response.status_code}"
+            return response.status_code == 200
     except Exception as e:
         api_status_cache['lastfm']['is_online'] = False
         api_status_cache['lastfm']['last_error'] = str(e)
