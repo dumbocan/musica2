@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from .api.routes_health import router as health_router
 from .api.artists import router as artists_router
@@ -15,6 +16,16 @@ from .api.auth import router as auth_router
 from .core.db import create_db_and_tables
 
 app = FastAPI(title="Audio2 API", description="Personal Music API Backend")
+
+# Enable CORS for local dev (frontend on Vite)
+# Permitir CORS en desarrollo (comodín para cualquier puerto local de Vite)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Create tables if they don't exist
 create_db_and_tables()

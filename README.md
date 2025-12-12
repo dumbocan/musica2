@@ -58,6 +58,8 @@ pip install -r requirements.txt
 # Copy and edit .env
 cp .env.example .env
 # Edit .env with your database and API credentials
+# The backend now defaults to SQLite (audio2.db) so you can run without Postgres.
+# Add Spotify/Last.fm/Youtube keys only if you will hit those endpoints.
 ```
 
 4. **Start the server:**

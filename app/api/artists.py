@@ -49,6 +49,14 @@ async def search_artists_auto_download(
         artist_spotify_id = first_artist.get('id')
         artist_name = first_artist.get('name')
 
+        # RECORD USER SEARCH FOR ALGORITHM LEARNING
+        try:
+            from ..crud import record_artist_search
+            record_artist_search(user_id, artist_name)
+            logger.info(f"📝 Recorded artist search for user {user_id}: {artist_name}")
+        except Exception as e:
+            logger.warning(f"Failed to record artist search: {e}")
+
         if artist_spotify_id:
             expansion_results = None
 
@@ -94,7 +102,6 @@ async def search_artists_auto_download(
         "library_expansion": None,
         "message": "No artists found for library expansion"
     }
-
 
 @router.get("/{spotify_id}/albums")
 async def get_artist_albums(spotify_id: str = Path(..., description="Spotify artist ID")) -> List[dict]:

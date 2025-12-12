@@ -1,22 +1,28 @@
 from pydantic_settings import BaseSettings
 from typing import Optional
 
+
 class Settings(BaseSettings):
-    # Load env from .env file
+    """
+    Centralized configuration with safe defaults so the app can start
+    even if the user has not populated every API key yet.
+    """
+
     model_config = {"env_file": ".env"}
 
-    # Database
-    DATABASE_URL: str
+    # Database: default to local SQLite for quick start
+    DATABASE_URL: str = "sqlite:///./audio2.db"
 
-    # APIs
-    SPOTIFY_CLIENT_ID: str
-    SPOTIFY_CLIENT_SECRET: str
-    LASTFM_API_KEY: str
-    MUSIXMATCH_API_KEY: Optional[str] = None  # Optional
-    YOUTUBE_API_KEY: str  # YouTube Data API v3
-    
+    # APIs (optional for boot, required when those features are used)
+    SPOTIFY_CLIENT_ID: Optional[str] = None
+    SPOTIFY_CLIENT_SECRET: Optional[str] = None
+    LASTFM_API_KEY: Optional[str] = None
+    MUSIXMATCH_API_KEY: Optional[str] = None
+    YOUTUBE_API_KEY: Optional[str] = None
+
     # Security
-    JWT_SECRET_KEY: str  # Secret key for JWT tokens
+    JWT_SECRET_KEY: str = "changeme-in-.env"
 
-# Instantiate settings
+
+# Instantiate settings once
 settings = Settings()

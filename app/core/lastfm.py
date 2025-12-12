@@ -14,6 +14,8 @@ class LastFmClient:
 
     async def get_track_info(self, artist: str, track: str) -> dict:
         """Get track info including playcount/listeners."""
+        if not self.api_key:
+            return {"listeners": 0, "playcount": 0, "tags": []}
         params = {
             "method": "track.getInfo",
             "artist": artist,
@@ -34,6 +36,8 @@ class LastFmClient:
 
     async def get_artist_info(self, artist: str) -> dict:
         """Get artist info including biography/summary."""
+        if not self.api_key:
+            return {"summary": "", "content": "", "stats": {}, "tags": []}
         params = {
             "method": "artist.getInfo",
             "artist": artist,
@@ -55,6 +59,8 @@ class LastFmClient:
 
     async def get_similar_artists(self, artist: str, limit: int = 5) -> list:
         """Get similar artists from Last.fm."""
+        if not self.api_key:
+            return []
         params = {
             "method": "artist.getSimilar",
             "artist": artist,

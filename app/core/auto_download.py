@@ -23,6 +23,26 @@ class AutoDownloadService:
     def __init__(self):
         self.max_concurrent_downloads = 3  # Limit concurrent downloads
 
+    async def get_artist_download_progress(self, artist_spotify_id: str) -> dict:
+        """
+        Simple progress stub so the endpoint does not break.
+        Returns counts of completed/pending downloads for the artist.
+        """
+        from app.core.db import get_session
+        session = get_session()
+        try:
+            downloads = session.exec(
+                select(YouTubeDownload).where(YouTubeDownload.spotify_artist_id == artist_spotify_id)
+            ).all()
+            completed = [d for d in downloads if d.download_status == "completed"]
+            return {
+                "total": len(downloads),
+                "completed": len(completed),
+                "pending": len(downloads) - len(completed)
+            }
+        finally:
+            session.close()
+
     async def is_track_downloaded(self, spotify_track_id: str, format_type: str = "mp3") -> bool:
         """
         Check if a Spotify track is already downloaded.

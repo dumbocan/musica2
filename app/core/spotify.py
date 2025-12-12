@@ -22,6 +22,9 @@ class SpotifyClient:
 
     async def get_access_token(self):
         """Obtain access token from Spotify."""
+        if not self.client_id or not self.client_secret:
+            raise RuntimeError("Spotify credentials are not configured. Set SPOTIFY_CLIENT_ID/SECRET in .env.")
+
         auth_string = f"{self.client_id}:{self.client_secret}"
         auth_bytes = auth_string.encode("utf-8")
         auth_base64 = base64.b64encode(auth_bytes).decode("utf-8")

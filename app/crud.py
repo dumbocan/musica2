@@ -7,7 +7,7 @@ import unicodedata
 from typing import Optional, List
 from sqlmodel import Session, select
 
-from .models.base import Artist, Album, Track, User, Playlist, PlaylistTrack, Tag, TrackTag, PlayHistory
+from .models.base import Artist, Album, Track, User, Playlist, PlaylistTrack, Tag, TrackTag, PlayHistory, AlgorithmLearning
 from .core.db import get_session
 from datetime import datetime
 
@@ -628,6 +628,218 @@ def get_most_played_tracks(limit: int = 10) -> List[dict]:
         ]
     finally:
         session.close()
+
+# Algorithm Learning CRUD
+def record_artist_search(user_id: int, artist_name: str):
+    """Record when a user searches for an artist to train algorithm."""
+    session = get_session()
+    try:
+        # Check if artist already in user's learned artists
+        existing = session.exec(
+            select(AlgorithmLearning)
+            .where(AlgorithmLearning.user_id == user_id)
+            .where(AlgorithmLearning.artist_name.ilike(artist_name))
+        ).first()
+
+        if existing:
+            # Update existing record
+            existing.times_searched += 1
+            existing.last_searched = datetime.utcnow()
+            session.add(existing)
+        else:
+            # Create new learning record
+            learning = AlgorithmLearning(
+                user_id=user_id,
+                artist_name=artist_name,
+                times_searched=1,
+                first_searched=datetime.utcnow(),
+                last_searched=datetime.utcnow(),
+                compatibility_score=0.5  # Default neutral score
+            )
+            session.add(learning)
+        
+        session.commit()
+        return True
+    finally:
+        session.close()
+
+def get_user_learned_artists(user_id: int, limit: int = 10):
+    """Get artists that user has searched for, sorted by search frequency."""
+    session = get_session()
+    try:
+        learned_artists = session.exec(
+            select(AlgorithmLearning)
+            .where(AlgorithmLearning.user_id == user_id)
+            .order_by(AlgorithmLearning.times_searched.desc())
+            .limit(limit)
+        ).all()
+        return learned_artists
+    finally:
+        session.close()
+
+def update_artist_rating(user_id: int, artist_name: str, rating: int):
+    """Update user rating for an artist (1-5 stars)."""
+    session = get_session()
+    try:
+        learning = session.exec(
+            select(AlgorithmLearning)
+            .where(AlgorithmLearning.user_id == user_id)
+            .where(AlgorithmLearning.artist_name.ilike(artist_name))
+        ).first()
+
+        if learning:
+            learning.user_rating = rating
+            learning.last_searched = datetime.utcnow()
+            
+            # Update algorithm weights based on rating
+            if rating >= 4:
+                learning.compatibility_score = min(1.0, learning.compatibility_score + 0.2)
+            elif rating <= 2:
+                learning.compatibility_score = max(0.0, learning.compatibility_score - 0.2)
+            
+            session.add(learning)
+            session.commit()
+            return learning
+        else:
+            # Create new record with rating
+            learning = AlgorithmLearning(
+                user_id=user_id,
+                artist_name=artist_name,
+                user_rating=rating,
+                times_searched=1,
+                first_searched=datetime.utcnow(),
+                last_searched=datetime.utcnow(),
+                compatibility_score=0.7 if rating >= 4 else (0.3 if rating <= 2 else 0.5)
+            )
+            session.add(learning)
+            session.commit()
+            return learning
+    finally:
+        session.close()
+
+def mark_artist_as_favorite(user_id: int, artist_name: str, is_favorite: bool = True):
+    """Mark/unmark an artist as favorite for the user."""
+    session = get_session()
+    try:
+        learning = session.exec(
+            select(AlgorithmLearning)
+            .where(AlgorithmLearning.user_id == user_id)
+            .where(AlgorithmLearning.artist_name.ilike(artist_name))
+        ).first()
+
+        if learning:
+            learning.is_favorite = is_favorite
+            learning.last_searched = datetime.utcnow()
+            
+            # Boost compatibility score for favorites
+            if is_favorite:
+                learning.compatibility_score = min(1.0, learning.compatibility_score + 0.3)
+            
+            session.add(learning)
+            session.commit()
+            return learning
+        else:
+            # Create new record
+            learning = AlgorithmLearning(
+                user_id=user_id,
+                artist_name=artist_name,
+                is_favorite=is_favorite,
+                times_searched=1,
+                first_searched=datetime.utcnow(),
+                last_searched=datetime.utcnow(),
+                compatibility_score=0.8 if is_favorite else 0.5
+            )
+            session.add(learning)
+            session.commit()
+            return learning
+    finally:
+        session.close()
+
+def get_user_preferred_genres(user_id: int):
+    """Extract preferred genres from user's learned artists."""
+    session = get_session()
+    try:
+        # Get user's top artists
+        learned_artists = session.exec(
+            select(AlgorithmLearning)
+            .where(AlgorithmLearning.user_id == user_id)
+            .order_by(AlgorithmLearning.times_searched.desc())
+            .limit(10)
+        ).all()
+
+        # Get actual artists from database to extract genres
+        artist_names = [la.artist_name for la in learned_artists]
+        
+        genres = []
+        for artist_name in artist_names:
+            artist = session.exec(
+                select(Artist)
+                .where(Artist.name.ilike(f"%{artist_name}%"))
+            ).first()
+            
+            if artist and artist.genres:
+                try:
+                    artist_genres = eval(artist.genres) if isinstance(artist.genres, str) else artist.genres
+                    if isinstance(artist_genres, list):
+                        genres.extend(artist_genres)
+                except:
+                    pass
+        
+        # Count genre frequencies
+        from collections import Counter
+        genre_counts = Counter(genres)
+        return genre_counts.most_common(5)
+    finally:
+        session.close()
+
+def get_recommendations_for_user(user_id: int, limit: int = 10):
+    """Generate artist recommendations based on user's learned preferences."""
+    session = get_session()
+    try:
+        # Get user's learned artists with high compatibility scores
+        user_artists = session.exec(
+            select(AlgorithmLearning)
+            .where(AlgorithmLearning.user_id == user_id)
+            .where(AlgorithmLearning.compatibility_score >= 0.6)
+            .order_by(AlgorithmLearning.compatibility_score.desc())
+            .limit(5)
+        ).all()
+
+        if not user_artists:
+            return []
+
+        # For now, return similar artists using existing similar artist logic
+        # In a real system, this would use Spotify API or ML model
+        recommendations = []
+        for learned in user_artists:
+            # Find similar artists in database (simple example)
+            similar = session.exec(
+                select(Artist)
+                .where(Artist.genres.ilike(f"%{learned.artist_name.lower()}%"))
+                .limit(3)
+            ).all()
+            
+            for artist in similar:
+                if artist.name.lower() != learned.artist_name.lower():
+                    recommendations.append({
+                        "artist": artist.dict(),
+                        "reason": f"Similar to {learned.artist_name}",
+                        "confidence": learned.compatibility_score
+                    })
+        
+        # Deduplicate
+        seen = set()
+        unique_recs = []
+        for rec in recommendations:
+            artist_id = rec["artist"]["id"]
+            if artist_id not in seen:
+                seen.add(artist_id)
+                unique_recs.append(rec)
+        
+        return unique_recs[:limit]
+    finally:
+        session.close()
+
 
 # Smart Playlist Generation
 def generate_top_rated_playlist(user_id: int = 1, name: str = "Top Rated", limit: int = 20) -> Optional[Playlist]:

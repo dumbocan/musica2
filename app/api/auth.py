@@ -8,7 +8,7 @@ from fastapi.security import HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import SessionDep
-from app.core.security import (
+from app.core.simple_security import (
     get_password_hash, 
     verify_password, 
     create_user_token,
@@ -251,3 +251,44 @@ async def auth_health_check():
     Health check for authentication service.
     """
     return {"message": "Authentication service is running"}
+
+
+@router.post("/create-first-user", response_model=UserResponse)
+async def create_first_user(
+    user_data: UserCreate,
+    session: AsyncSession = Depends(SessionDep)
+):
+    """
+    Create the first user in the system (one-time setup).
+    Only works when no users exist yet.
+    """
+    # Check if any users exist; if yes, return the first instead of erroring
+    result = await session.execute(select(User))
+    existing_users = result.scalars().all()
+
+    if len(existing_users) > 0:
+        # Update the first user with provided credentials so the UX remains predictable
+        existing = existing_users[0]
+        existing.name = user_data.name
+        existing.email = user_data.email
+        existing.username = user_data.email.split("@")[0]
+        existing.password_hash = get_password_hash(user_data.password)
+        await session.commit()
+        await session.refresh(existing)
+        return existing
+
+    # Create first user with ID=1
+    hashed_password = get_password_hash(user_data.password)
+    first_user = User(
+        id=1,  # Force ID=1 for first user
+        name=user_data.name,
+        username=user_data.email.split('@')[0],  # Use the part before @ as username
+        email=user_data.email,
+        password_hash=hashed_password
+    )
+
+    session.add(first_user)
+    await session.commit()
+    await session.refresh(first_user)
+
+    return first_user

@@ -15,7 +15,7 @@ from enum import Enum
 
 class User(SQLModel, table=True):
     """Complete user model for multiuser system."""
-    id: int = Field(primary_key=True)
+    id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(max_length=100)
     username: str = Field(max_length=50, unique=True)
     email: str = Field(max_length=150, unique=True)
@@ -39,7 +39,7 @@ class User(SQLModel, table=True):
 
 class Artist(SQLModel, table=True):
     """Artist from Spotify/Last.fm."""
-    id: int = Field(primary_key=True)
+    id: Optional[int] = Field(default=None, primary_key=True)
     spotify_id: Optional[str] = Field(unique=True, default=None)  # Optional if from other source
     name: str = Field(max_length=200, index=True)
     normalized_name: str = Field(default="", index=True)  # For deduplication
@@ -59,7 +59,7 @@ class Artist(SQLModel, table=True):
 
 class Album(SQLModel, table=True):
     """Album from Spotify."""
-    id: int = Field(primary_key=True)
+    id: Optional[int] = Field(default=None, primary_key=True)
     spotify_id: Optional[str] = Field(unique=True, default=None)
     name: str = Field(max_length=200, index=True)
     artist_id: int = Field(foreign_key="artist.id", ondelete="CASCADE")
@@ -77,7 +77,7 @@ class Album(SQLModel, table=True):
 
 class Track(SQLModel, table=True):
     """Track from Spotify, with local data."""
-    id: int = Field(primary_key=True)
+    id: Optional[int] = Field(default=None, primary_key=True)
     spotify_id: Optional[str] = Field(unique=True, default=None)
     name: str = Field(max_length=200, index=True)
     artist_id: int = Field(foreign_key="artist.id", ondelete="CASCADE")
@@ -105,7 +105,7 @@ class Track(SQLModel, table=True):
 
 class Playlist(SQLModel, table=True):
     """User playlists."""
-    id: int = Field(primary_key=True)
+    id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(max_length=150)
     description: Optional[str] = None
     user_id: int = Field(foreign_key="user.id")
@@ -118,7 +118,7 @@ class Playlist(SQLModel, table=True):
 
 class PlaylistTrack(SQLModel, table=True):
     """Many-to-many for playlists and tracks."""
-    id: int = Field(primary_key=True)
+    id: Optional[int] = Field(default=None, primary_key=True)
     playlist_id: int = Field(foreign_key="playlist.id", ondelete="CASCADE")
     track_id: int = Field(foreign_key="track.id")
     added_at: datetime = Field(default_factory=datetime.utcnow)
@@ -129,7 +129,7 @@ class PlaylistTrack(SQLModel, table=True):
 
 class YouTubeDownload(SQLModel, table=True):
     """Tracking system for YouTube audio downloads."""
-    id: int = Field(primary_key=True)
+    id: Optional[int] = Field(default=None, primary_key=True)
     spotify_track_id: str = Field(index=True)  # Spotify track ID
     spotify_artist_id: str = Field(index=True)  # Spotify artist ID
     youtube_video_id: str = Field(index=True)
@@ -152,7 +152,7 @@ class YouTubeDownload(SQLModel, table=True):
 
 class Tag(SQLModel, table=True):
     """Tag system for tracks."""
-    id: int = Field(primary_key=True)
+    id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(max_length=50, unique=True)
     color: Optional[str] = Field(max_length=20, default="#666666")  # Hex color code
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -162,7 +162,7 @@ class Tag(SQLModel, table=True):
 
 class TrackTag(SQLModel, table=True):
     """Many-to-many relationship between tracks and tags."""
-    id: int = Field(primary_key=True)
+    id: Optional[int] = Field(default=None, primary_key=True)
     track_id: int = Field(foreign_key="track.id", ondelete="CASCADE")
     tag_id: int = Field(foreign_key="tag.id", ondelete="CASCADE")
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -172,7 +172,7 @@ class TrackTag(SQLModel, table=True):
 
 class UserProfile(SQLModel, table=True):
     """Advanced user profiles for personalized recommendations."""
-    id: int = Field(primary_key=True)
+    id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id", ondelete="CASCADE")
 
     # Music preferences
@@ -205,7 +205,7 @@ class UserProfile(SQLModel, table=True):
 
 class AlgorithmLearning(SQLModel, table=True):
     """Machine learning data per user - how algorithm improves based on user behavior."""
-    id: int = Field(primary_key=True)
+    id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id", ondelete="CASCADE")
     artist_name: str = Field(max_length=200, index=True)
 
@@ -235,7 +235,7 @@ class AlgorithmLearning(SQLModel, table=True):
 
 class PlayHistory(SQLModel, table=True):
     """Track play history with user tracking."""
-    id: int = Field(primary_key=True)
+    id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id", ondelete="CASCADE")
     track_id: int = Field(foreign_key="track.id", ondelete="CASCADE")
 
