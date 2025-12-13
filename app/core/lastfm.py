@@ -23,7 +23,7 @@ class LastFmClient:
             "api_key": self.api_key,
             "format": "json"
         }
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=4.0) as client:
             response = await client.get(self.base_url, params=params)
             response.raise_for_status()
             data = response.json()
@@ -44,7 +44,7 @@ class LastFmClient:
             "api_key": self.api_key,
             "format": "json"
         }
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=4.0) as client:
             response = await client.get(self.base_url, params=params)
             response.raise_for_status()
             data = response.json()
@@ -68,7 +68,7 @@ class LastFmClient:
             "api_key": self.api_key,
             "format": "json"
         }
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=4.0) as client:
             response = await client.get(self.base_url, params=params)
             response.raise_for_status()
             data = response.json()

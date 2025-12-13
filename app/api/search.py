@@ -11,6 +11,20 @@ from sqlmodel import select, or_, and_
 
 router = APIRouter(prefix="/search", tags=["search"])
 
+from ..core.spotify import spotify_client
+
+@router.get("/spotify")
+async def search_spotify(
+    q: str = Query(..., description="Search query"),
+    limit: int = Query(10, description="Number of artists/tracks to return")
+):
+    """
+    Search Spotify for artists and tracks.
+    """
+    artists = await spotify_client.search_artists(q, limit=limit)
+    tracks = await spotify_client.search_tracks(q, limit=limit)
+    return {"artists": artists, "tracks": tracks}
+
 @router.get("/advanced")
 def advanced_search(
     query: str = Query(None, description="Search query"),

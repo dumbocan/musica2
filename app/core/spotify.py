@@ -95,6 +95,17 @@ class SpotifyClient:
         response = await self._make_request(endpoint, params)
         return response.get("artists", {}).get("items", [])
 
+    async def search_tracks(self, query: str, limit: int = 10) -> List[dict]:
+        """Search for tracks by name."""
+        endpoint = "/search"
+        params = {
+            "q": query,
+            "type": "track",
+            "limit": limit
+        }
+        response = await self._make_request(endpoint, params)
+        return response.get("tracks", {}).get("items", [])
+
     async def get_artist(self, artist_id: str) -> Optional[dict]:
         """Get artist details by ID."""
         endpoint = f"/artists/{artist_id}"
@@ -170,6 +181,12 @@ class SpotifyClient:
         )
 
         return sorted_tracks[:limit]
+
+    async def get_related_artists(self, artist_id: str) -> List[dict]:
+        """Get related artists from Spotify."""
+        endpoint = f"/artists/{artist_id}/related-artists"
+        response = await self._make_request(endpoint)
+        return response.get("artists", [])
 
 
 # Global client instance

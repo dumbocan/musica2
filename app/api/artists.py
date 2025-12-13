@@ -174,59 +174,26 @@ async def get_full_discography(spotify_id: str = Path(..., description="Spotify 
 
 @router.get("/{spotify_id}/info")
 async def get_artist_info(spotify_id: str = Path(..., description="Spotify artist ID")):
-    """Get basic artist info from Spotify (lightweight)."""
-    artist_data = await spotify_client.get_artist(spotify_id)
-    if not artist_data:
-        raise HTTPException(status_code=404, detail="Artist not found on Spotify")
-    return artist_data
+    """Get artist info from Spotify + Last.fm bio/tags/listeners (no DB write)."""
+    from ..core.lastfm import lastfm_client
 
-@router.get("/{spotify_id}/discography-with-save")
-async def get_discography_with_save(spotify_id: str = Path(..., description="Spotify artist ID"), save: bool = Query(False, description="Save to database")):
-    """Get complete discography from Spotify with option to save to DB."""
-    # Get artist info
-    artist_data = await spotify_client.get_artist(spotify_id)
-    if not artist_data:
+    spotify_data = await spotify_client.get_artist(spotify_id)
+    if not spotify_data:
         raise HTTPException(status_code=404, detail="Artist not found on Spotify")
 
-    # Get albums
-    albums_data = await spotify_client.get_artist_albums(spotify_id)
-
-    # For each album, get tracks
-    discography = {
-        "artist": artist_data,
-        "albums": []
-    }
-
-    saved_albums = 0
-    saved_tracks = 0
-
-    for album_data in albums_data:
-        album_id = album_data['id']
-        tracks_data = await spotify_client.get_album_tracks(album_id)
-        album_data['tracks'] = tracks_data
-        discography["albums"].append(album_data)
-
-        if save:
-            # Save album and tracks to DB
-            from ..crud import save_album, save_track, get_artist_by_spotify_id
-            album = save_album(album_data)
-            if album.spotify_id:  # Album was saved (not duplicate)
-                saved_albums += 1
-                artist_id = album.artist_id
-                for track_data in tracks_data:
-                    save_track(track_data, album.id, artist_id)
-                    saved_tracks += 1
-
-    if save:
-        # Save artist if not already saved
-        from ..crud import save_artist
-        artist = save_artist(artist_data)
+    lastfm_data = {}
+    try:
+        name = spotify_data.get("name")
+        if name:
+            lastfm_data = await lastfm_client.get_artist_info(name)
+    except Exception as exc:
+        # Don't fail the request on Last.fm issues
+        print(f"[artist_info] lastfm fetch failed for {spotify_id}: {exc}")
+        lastfm_data = {}
 
     return {
-        "discography": discography,
-        "saved": save,
-        "saved_albums": saved_albums,
-        "saved_tracks": saved_tracks
+        "spotify": spotify_data,
+        "lastfm": lastfm_data
     }
 
 @router.get("/{spotify_id}/recommendations")
@@ -234,6 +201,114 @@ async def get_artist_recommendations(spotify_id: str = Path(..., description="Sp
     """Get music recommendations based on artist (tracks and artists)."""
     recommendations = await spotify_client.get_recommendations(seed_artists=[spotify_id], limit=20)
     return recommendations
+
+
+@router.get("/{spotify_id}/info")
+async def get_artist_info(spotify_id: str = Path(..., description="Spotify artist ID")):
+    """Get artist info from Spotify + Last.fm bio/tags/listeners (no DB write)."""
+    from ..core.lastfm import lastfm_client
+
+    spotify_data = await spotify_client.get_artist(spotify_id)
+    if not spotify_data:
+        raise HTTPException(status_code=404, detail="Artist not found on Spotify")
+
+    lastfm_data = {}
+    try:
+        name = spotify_data.get("name")
+        if name:
+            lastfm_data = await lastfm_client.get_artist_info(name)
+    except Exception as exc:
+        # Don't fail the request on Last.fm issues
+        print(f"[artist_info] lastfm fetch failed for {spotify_id}: {exc}")
+        lastfm_data = {}
+
+    return {
+        "spotify": spotify_data,
+        "lastfm": lastfm_data
+    }
+
+
+@router.get("/{spotify_id}/related")
+async def get_related_artists(spotify_id: str = Path(..., description="Spotify artist ID")):
+    """Get related artists using Last.fm (with listeners/playcount) enriched with Spotify search."""
+    from ..core.config import settings
+    from ..core.lastfm import lastfm_client
+    if not settings.LASTFM_API_KEY:
+        return {"top": [], "discover": []}
+
+    # Get main artist name to feed Last.fm
+    try:
+        main_artist = await spotify_client.get_artist(spotify_id)
+        main_name = main_artist.get("name") if main_artist else None
+    except Exception:
+        main_name = None
+
+    if not main_name:
+        return {"top": [], "discover": []}
+
+    top = []
+    discover = []
+
+    import asyncio
+
+    # Related artists using Last.fm names, enriched with Spotify search (fast-ish)
+    try:
+        similar = await asyncio.wait_for(lastfm_client.get_similar_artists(main_name, limit=8), timeout=5.0)
+    except Exception as exc:
+        print(f"[related] Last.fm similar failed for {main_name}: {exc}")
+        similar = []
+
+    for s in similar:
+        name = s.get("name")
+        if not name:
+            continue
+
+        spotify_match = None
+        try:
+            found = await spotify_client.search_artists(name, limit=1)
+            if found:
+                spotify_match = found[0]
+        except Exception:
+            pass
+
+        followers = spotify_match.get("followers", {}).get("total", 0) if spotify_match else 0
+        if followers < 1_000_000:
+            continue
+
+        listeners = None
+        playcount = None
+        tags = []
+        bio = ""
+        try:
+            info = await asyncio.wait_for(lastfm_client.get_artist_info(name), timeout=3.0)
+            stats = info.get("stats", {}) or {}
+            listeners = int(stats.get("listeners", 0) or 0)
+            playcount = int(stats.get("playcount", 0) or 0)
+            tags = info.get("tags", [])
+            bio = info.get("summary", "") or ""
+        except Exception:
+            pass
+
+        entry = {
+            "name": name,
+            "listeners": listeners,
+            "playcount": playcount,
+            "tags": tags,
+            "bio": bio,
+            "spotify": spotify_match
+        }
+
+        # Deduplicate by Spotify ID
+        already = [a for a in top + discover if a.get("spotify", {}).get("id") == (spotify_match or {}).get("id")]
+        if already:
+            continue
+
+        top.append(entry)
+
+        if len(top) >= 12:
+            break
+
+    return {"top": top, "discover": discover}
 
 
 @router.get("/id/{artist_id}/discography")

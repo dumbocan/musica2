@@ -148,6 +148,44 @@ export interface SpotifyArtist {
   };
 }
 
+export interface SpotifyTrackLite {
+  id: string;
+  name: string;
+  duration_ms: number;
+  popularity: number;
+  preview_url: string | null;
+  external_urls?: {
+    spotify: string;
+  };
+  album?: {
+    name: string;
+    images?: Array<{ url: string; height: number | null; width: number | null }>;
+  };
+  artists: Array<{
+    id: string;
+    name: string;
+  }>;
+}
+
+export interface SpotifyTrackLite {
+  id: string;
+  name: string;
+  duration_ms: number;
+  popularity: number;
+  preview_url: string | null;
+  external_urls?: {
+    spotify: string;
+  };
+  album?: {
+    name: string;
+    images?: Array<{ url: string; height: number | null; width: number | null }>;
+  };
+  artists: Array<{
+    id: string;
+    name: string;
+  }>;
+}
+
 export interface SpotifyTrack {
   id: string;
   name: string;
