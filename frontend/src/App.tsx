@@ -5,6 +5,7 @@ import { useApiStore } from '@/store/useApiStore';
 import { Button } from '@/components/ui/button';
 import { LogOut, User, ChevronDown } from 'lucide-react';
 import { useRef, useState } from 'react';
+import { AlbumDetailPage } from '@/pages/AlbumDetailPage';
 
 // Pages
 import { Dashboard } from '@/pages/Dashboard';
@@ -17,6 +18,7 @@ import { DownloadsPage } from '@/pages/DownloadsPage';
 import { LoginPage } from '@/pages/LoginPage';
 import { HealthPage } from '@/pages/HealthPage';
 import { SettingsPage } from '@/pages/SettingsPage';
+import { ArtistDiscographyPage } from '@/pages/ArtistDiscographyPage';
 
 // Protected Route component
 const ProtectedRoute = ({ children }: { children: React.ReactElement }) => {
@@ -130,6 +132,8 @@ function App() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/login" element={<LoginPage />} />
               <Route path="/search" element={<SearchPage />} />
+              <Route path="/artists/discography/:spotifyId" element={<ArtistDiscographyPage />} />
+              <Route path="/albums/:spotifyId" element={<AlbumDetailPage />} />
               <Route path="/artists" element={<ArtistsPage />} />
               <Route path="/tracks" element={<TracksPage />} />
               <Route path="/playlists" element={<PlaylistsPage />} />

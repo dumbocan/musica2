@@ -51,6 +51,11 @@ class SpotifyClient:
 
         async with httpx.AsyncClient() as client:
             response = await client.get(f"{self.base_url}{endpoint}", headers=headers, params=params)
+            # If token expired, refresh once
+            if response.status_code == 401:
+                await self.get_access_token()
+                headers["Authorization"] = f"Bearer {self.access_token}"
+                response = await client.get(f"{self.base_url}{endpoint}", headers=headers, params=params)
             response.raise_for_status()
             return response.json()
 
@@ -105,6 +110,12 @@ class SpotifyClient:
         }
         response = await self._make_request(endpoint, params)
         return response.get("items", [])
+
+    async def get_album(self, album_id: str) -> Optional[dict]:
+        """Get album details by ID."""
+        endpoint = f"/albums/{album_id}"
+        response = await self._make_request(endpoint)
+        return response
 
     async def get_album_tracks(self, album_id: str, limit: int = 50) -> List[dict]:
         """Get tracks for an album."""

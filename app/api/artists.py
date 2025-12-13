@@ -25,8 +25,11 @@ router = APIRouter(prefix="/artists", tags=["artists"])
 @router.get("/search")
 async def search_artists(q: str = Query(..., description="Artist name to search")) -> List[dict]:
     """Search for artists by name using Spotify API."""
-    artists = await spotify_client.search_artists(q)
-    return artists
+    try:
+        artists = await spotify_client.search_artists(q)
+        return artists
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Spotify search failed: {e}")
 
 
 @router.get("/search-auto-download")
@@ -168,6 +171,14 @@ async def get_full_discography(spotify_id: str = Path(..., description="Spotify 
         discography["albums"].append(album_data)
 
     return discography
+
+@router.get("/{spotify_id}/info")
+async def get_artist_info(spotify_id: str = Path(..., description="Spotify artist ID")):
+    """Get basic artist info from Spotify (lightweight)."""
+    artist_data = await spotify_client.get_artist(spotify_id)
+    if not artist_data:
+        raise HTTPException(status_code=404, detail="Artist not found on Spotify")
+    return artist_data
 
 @router.get("/{spotify_id}/discography-with-save")
 async def get_discography_with_save(spotify_id: str = Path(..., description="Spotify artist ID"), save: bool = Query(False, description="Save to database")):

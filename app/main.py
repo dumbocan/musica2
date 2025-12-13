@@ -18,10 +18,28 @@ from .core.db import create_db_and_tables
 app = FastAPI(title="Audio2 API", description="Personal Music API Backend")
 
 # Enable CORS for local dev (frontend on Vite)
-# Permitir CORS en desarrollo (comodín para cualquier puerto local de Vite)
+# Lista explícita para compatibilidad con credentials
+allowed_origins = [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:5175",
+    "http://localhost:5176",
+    "http://localhost:5177",
+    "http://localhost:5178",
+    "http://localhost:5179",
+    "http://localhost:5180",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "http://127.0.0.1:5175",
+    "http://127.0.0.1:5176",
+    "http://127.0.0.1:5177",
+    "http://127.0.0.1:5178",
+    "http://127.0.0.1:5179",
+    "http://127.0.0.1:5180",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

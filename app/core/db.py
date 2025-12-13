@@ -1,4 +1,3 @@
-from contextlib import contextmanager
 from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -28,14 +27,9 @@ SessionLocal = sessionmaker(sync_engine, class_=Session, expire_on_commit=False)
 AsyncSessionLocal = sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
 
 
-@contextmanager
 def get_session() -> Session:
-    """Yield a database session and always close it."""
-    session: Session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
+    """Return a new database session; caller must close()."""
+    return SessionLocal()
 
 
 async def get_async_session() -> AsyncGenerator[AsyncSession, None]:

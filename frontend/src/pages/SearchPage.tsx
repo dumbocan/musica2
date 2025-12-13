@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { audio2Api } from '@/lib/api';
 import { useApiStore } from '@/store/useApiStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import type { SpotifyArtist, SearchArtistsResponse } from '@/types/api';
+import type { SpotifyArtist } from '@/types/api';
 import { Search, Loader2, Music, Users, Globe } from 'lucide-react';
 
 export function SearchPage() {
@@ -11,8 +12,20 @@ export function SearchPage() {
   const [results, setResults] = useState<SpotifyArtist[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const navigate = useNavigate();
 
-  const { setSearchQuery, setSearchResults, setSearching } = useApiStore();
+  const {
+    searchQuery: storedQuery,
+    searchResults: storedResults,
+    setSearchQuery,
+    setSearchResults,
+    setSearching
+  } = useApiStore();
+
+  useEffect(() => {
+    if (storedQuery) setQuery(storedQuery);
+    if (storedResults?.length) setResults(storedResults as SpotifyArtist[]);
+  }, [storedQuery, storedResults]);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -23,15 +36,10 @@ export function SearchPage() {
     setSearchQuery(query);
 
     try {
-      const response: SearchArtistsResponse = await audio2Api.searchArtistsAutoDownload({
-        q: query,
-        user_id: 1,
-        expand_library: true
-      });
-
-      setResults(response.artists || []);
-      setSearchResults(response.artists || []);
-
+      const response = await audio2Api.searchArtists(query);
+      const items = response.data || [];
+      setResults(items);
+      setSearchResults(items);
     } catch (err) {
       console.error('Search failed:', err);
       setError('Error searching artists. Please try again.');
@@ -44,11 +52,11 @@ export function SearchPage() {
   const handleAutoExpansion = async (artistName: string) => {
     setIsLoading(true);
     try {
-      await audio2Api.searchArtistsAutoDownload({
-        q: artistName,
-        user_id: 1,
-        expand_library: true
-      });
+      const response = await audio2Api.searchArtists(artistName);
+      const items = response.data || [];
+      setResults(items);
+      setSearchResults(items);
+      setSearchQuery(artistName);
     } catch (err) {
       console.error('Auto expansion failed:', err);
     } finally {
@@ -66,29 +74,31 @@ export function SearchPage() {
       </div>
 
       {/* Search Form */}
-      <form onSubmit={handleSearch} className="flex gap-4">
-        <div className="flex-1">
-          <Input
+      <div className="search-container" style={{ width: '40%', minWidth: 300 }}>
+        <form onSubmit={handleSearch} className="search-form">
+          <input
+            id="q"
             type="text"
-            placeholder="Enter artist name..."
+            name="q"
+            placeholder="Search for artists..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="text-lg p-3"
+            className="search-input"
           />
-        </div>
-        <Button
-          type="submit"
-          disabled={isLoading}
-          className="px-8"
-        >
-          {isLoading ? (
-            <Loader2 className="h-5 w-5 animate-spin" />
-          ) : (
-            <Search className="h-5 w-5" />
-          )}
-          <span className="ml-2">Search</span>
-        </Button>
-      </form>
+          <button type="submit" className="search-button" disabled={isLoading}>
+            {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Search className="h-6 w-6" />}
+          </button>
+        </form>
+      </div>
+
+      <style>
+        {`
+        input::placeholder {
+          color: #ffffff;
+          opacity: 0.7;
+        }
+        `}
+      </style>
 
       {/* Error Message */}
       {error && (
@@ -104,21 +114,28 @@ export function SearchPage() {
             Found {results.length} artist{results.length !== 1 ? 's' : ''}
           </h2>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid-cards" style={{ gap: 18 }}>
             {results.map((artist, index) => (
               <div
                 key={artist.id}
-                className="border rounded-lg p-6 hover:shadow-lg transition-shadow"
+                className="card"
+                style={{ background: 'var(--panel-2)', border: `1px solid var(--border)`, borderRadius: 16, padding: 16, minWidth: 262 }}
               >
                 {/* Artist Image */}
                 {artist.images && artist.images.length > 0 ? (
                   <img
                     src={artist.images[0].url}
                     alt={artist.name}
-                    className="w-24 h-24 rounded-lg object-cover mx-auto mb-4"
+                    className="mx-auto mb-3"
+                    style={{ width: 148, height: 148, objectFit: 'cover', borderRadius: 14, cursor: 'pointer' }}
+                    onClick={() => navigate(`/artists/discography/${artist.id}`)}
                   />
                 ) : (
-                  <div className="w-24 h-24 rounded-lg bg-muted flex items-center justify-center mx-auto mb-4">
+                  <div
+                    className="mx-auto mb-3"
+                    style={{ width: 148, height: 148, borderRadius: 14, background: 'var(--panel)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+                    onClick={() => navigate(`/artists/discography/${artist.id}`)}
+                  >
                     <Music className="h-12 w-12 text-muted-foreground" />
                   </div>
                 )}
@@ -127,12 +144,6 @@ export function SearchPage() {
                 <h3 className="font-semibold text-center mb-2">{artist.name}</h3>
 
                 <div className="space-y-2 text-sm">
-                  {index === 0 && (
-                    <div className="text-xs bg-primary/10 text-primary px-2 py-1 rounded text-center font-medium">
-                      Expanding Library +15 Related Artists
-                    </div>
-                  )}
-
                   {artist.genres && artist.genres.length > 0 && (
                     <div className="flex items-center gap-1 text-muted-foreground">
                       <Music className="h-4 w-4" />
@@ -157,32 +168,7 @@ export function SearchPage() {
                   )}
                 </div>
 
-                {/* Actions */}
-                <div className="mt-4 space-y-2">
-                  <Button
-                    onClick={() => handleAutoExpansion(artist.name)}
-                    disabled={isLoading}
-                    className="w-full"
-                    variant="default"
-                  >
-                    {isLoading ? (
-                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                    ) : (
-                      <Music className="h-4 w-4 mr-2" />
-                    )}
-                    Expand Library
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="w-full"
-                    onClick={() => {
-                      // View full discography
-                      window.location.href = `/artists/discography/${artist.id}`;
-                    }}
-                  >
-                    View Discography
-                  </Button>
-                </div>
+                {/* Discography link on image handled by click */}
               </div>
             ))}
           </div>

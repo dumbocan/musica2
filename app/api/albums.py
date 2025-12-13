@@ -7,12 +7,31 @@ from typing import List
 from fastapi import APIRouter, Path, HTTPException
 
 from ..core.spotify import spotify_client
+from ..core.config import settings
 from ..crud import save_album
 from ..core.db import get_session
 from ..models.base import Album, Track
 from sqlmodel import select
 
 router = APIRouter(prefix="/albums", tags=["albums"])
+
+
+@router.get("/spotify/{spotify_id}")
+async def get_album_from_spotify(spotify_id: str = Path(..., description="Spotify album ID")):
+    """Get album details and tracks directly from Spotify."""
+    if not settings.SPOTIFY_CLIENT_ID or not settings.SPOTIFY_CLIENT_SECRET:
+        raise HTTPException(status_code=400, detail="Spotify credentials not configured")
+    try:
+        album = await spotify_client.get_album(spotify_id)
+        if not album:
+            raise HTTPException(status_code=404, detail="Album not found on Spotify")
+        tracks = await spotify_client.get_album_tracks(spotify_id)
+        album["tracks"] = tracks
+        return album
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching album from Spotify: {e}")
 
 
 @router.get("/{spotify_id}/tracks")
