@@ -69,12 +69,14 @@ interface ApiStore {
   relatedSearchResults: any[];
   searchMainInfo: any | null;
   trackSearchResults: any[];
+  searchTrigger: number;
   isSearching: boolean;
   setSearchQuery: (query: string) => void;
   setSearchResults: (results: any[]) => void;
   setRelatedSearchResults: (results: any[]) => void;
   setSearchMainInfo: (info: any | null) => void;
   setTrackSearchResults: (results: any[]) => void;
+  setSearchTrigger: (ts: number) => void;
   setSearching: (searching: boolean) => void;
 
   // Auth state
@@ -165,12 +167,14 @@ export const useApiStore = create<ApiStore>()(
       relatedSearchResults: [],
       searchMainInfo: null,
       trackSearchResults: [],
+      searchTrigger: 0,
       isSearching: false,
       setSearchQuery: (query) => set({ searchQuery: query }),
       setSearchResults: (results) => set({ searchResults: results }),
       setRelatedSearchResults: (results) => set({ relatedSearchResults: results }),
       setSearchMainInfo: (info) => set({ searchMainInfo: info }),
       setTrackSearchResults: (results) => set({ trackSearchResults: results }),
+      setSearchTrigger: (ts) => set({ searchTrigger: ts }),
       setSearching: (searching) => set({ isSearching: searching }),
 
       // Auth

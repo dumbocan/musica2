@@ -6,7 +6,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000
 // Axios instance with defaults
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 20000, // algunas llamadas (discografía completa) tardan más
+  timeout: 30000, // algunas llamadas (discografía completa) tardan más
   headers: {
     'Content-Type': 'application/json',
   },
@@ -35,12 +35,6 @@ export const audio2Api = {
   healthDetailed: () => api.get('/health/detailed'),
 
   // Artists
-  searchArtists: (query: string) =>
-    api.get('/artists/search', { params: { q: query } }),
-  searchArtistsAutoDownload: (params: { q: string; user_id?: number; expand_library?: boolean }) =>
-    api.get('/artists/search-auto-download', { params }),
-  getRelatedArtists: (spotifyId: string) =>
-    api.get(`/artists/${spotifyId}/related`),
   getArtistFullDiscography: (spotifyId: string) =>
     api.get(`/artists/${spotifyId}/full-discography`),
   getArtistInfo: (spotifyId: string) =>
@@ -48,8 +42,12 @@ export const audio2Api = {
   getArtistAlbums: (spotifyId: string) =>
     api.get(`/artists/${spotifyId}/albums`),
 
-  // Combined Spotify search (artists + tracks)
-  searchSpotify: (query: string) => api.get('/search/spotify', { params: { q: query } }),
+  searchOrchestrated: (params: { q: string; limit?: number; page?: number; lastfm_limit?: number; related_limit?: number }) =>
+    api.get('/search/orchestrated', { params }),
+  searchArtistProfile: (params: { q: string; similar_limit?: number; min_followers?: number }) =>
+    api.get('/search/artist-profile', { params }),
+  searchTracksQuick: (params: { q: string; limit?: number }) =>
+    api.get('/search/tracks-quick', { params }),
 
   getAllArtists: () => api.get('/artists/'),
 

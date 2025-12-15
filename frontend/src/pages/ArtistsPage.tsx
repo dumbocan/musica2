@@ -4,7 +4,7 @@ import { useApiStore } from '@/store/useApiStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { Artist } from '@/types/api';
-import { Music, Loader2, Users, Calendar, RefreshCw, ExternalLink } from 'lucide-react';
+import { Music, Loader2, RefreshCw, ExternalLink } from 'lucide-react';
 
 export function ArtistsPage() {
   const [artists, setArtists] = useState<Artist[]>([]);
@@ -23,8 +23,9 @@ export function ArtistsPage() {
     setError('');
 
     try {
-      const artistsData = await audio2Api.getAllArtists();
-      setArtists(artistsData.slice(0, 50)); // Limit for performance
+      const res = await audio2Api.getAllArtists();
+      const data = res.data || [];
+      setArtists(data.slice(0, 50)); // Limit for performance
     } catch (err) {
       console.error('Failed to load artists:', err);
       setError('Failed to load artists. Please try again.');

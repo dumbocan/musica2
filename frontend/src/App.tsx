@@ -1,9 +1,8 @@
-import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { NetworkDebugger } from '@/components/NetworkDebugger';
 import { useApiStore } from '@/store/useApiStore';
-import { Button } from '@/components/ui/button';
-import { LogOut, User, ChevronDown } from 'lucide-react';
+import { LogOut, User, ChevronDown, Search } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { AlbumDetailPage } from '@/pages/AlbumDetailPage';
 
@@ -20,21 +19,11 @@ import { HealthPage } from '@/pages/HealthPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { ArtistDiscographyPage } from '@/pages/ArtistDiscographyPage';
 
-// Protected Route component
-const ProtectedRoute = ({ children }: { children: React.ReactElement }) => {
-  const { isAuthenticated } = useApiStore();
-  
-  if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
-  }
-  
-  return children;
-};
-
-function App() {
-  const { setSidebarOpen, isAuthenticated } = useApiStore();
+function AppShell() {
+  const { setSidebarOpen, isAuthenticated, searchQuery, setSearchQuery, setSearchTrigger } = useApiStore();
   const [menuOpen, setMenuOpen] = useState(false);
   const closeMenuTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const navigate = useNavigate();
 
   const openMenu = () => {
     if (closeMenuTimeout.current) clearTimeout(closeMenuTimeout.current);
@@ -49,29 +38,61 @@ function App() {
   // Si no está autenticado, mostrar solo la página de login
   if (!isAuthenticated) {
     return (
-      <Router>
-        <div className="flex h-screen bg-background">
-          <main className="flex-1 flex items-center justify-center p-6">
-            <LoginPage />
-          </main>
-        </div>
-      </Router>
+      <div className="flex h-screen bg-background">
+        <main className="flex-1 flex items-center justify-center p-6">
+          <LoginPage />
+        </main>
+      </div>
     );
   }
 
   return (
-    <Router>
-      <div className="app-shell">
-        <Sidebar />
+    <div className="app-shell">
+      <Sidebar />
 
-        {/* Main content */}
-        <div className="app-main">
-          {/* Top bar */}
-          <div className="topbar">
-            <div className="flex items-center gap-8">
-              <div className="badge">🎵 Audio2 · Sesión activa</div>
+      {/* Main content */}
+      <div className="app-main">
+        {/* Top bar */}
+        <div className="topbar" style={{ width: '100%' }}>
+          <div
+            className="flex items-center w-full"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'auto 1fr auto',
+              alignItems: 'center',
+              columnGap: 24,
+              width: '100%'
+            }}
+          >
+            <div className="badge" style={{ whiteSpace: 'nowrap' }}>🎵 Audio2 · Sesión activa</div>
+
+            <div className="flex-1 flex justify-center" style={{ padding: '0 24px' }}>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  setSearchTrigger(Date.now());
+                  navigate('/search');
+                }}
+                className="search-form"
+                style={{ maxWidth: 560, minWidth: 260, width: '100%' }}
+              >
+                <input
+                  id="q-top"
+                  type="text"
+                  name="q-top"
+                  placeholder="Search artists or tracks..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  autoComplete="off"
+                  className="search-input"
+                />
+                <button type="submit" className="search-button">
+                  <Search className="h-6 w-6" />
+                </button>
+              </form>
             </div>
-            <div className="flex items-center gap-3 text-sm">
+
+            <div className="flex items-center gap-3 text-sm" style={{ whiteSpace: 'nowrap' }}>
               <div
                 className="relative"
                 onMouseEnter={openMenu}
@@ -125,31 +146,37 @@ function App() {
               </div>
             </div>
           </div>
-
-          {/* Main content area */}
-          <main className="page-content">
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/login" element={<LoginPage />} />
-              <Route path="/search" element={<SearchPage />} />
-              <Route path="/artists/discography/:spotifyId" element={<ArtistDiscographyPage />} />
-              <Route path="/albums/:spotifyId" element={<AlbumDetailPage />} />
-              <Route path="/artists" element={<ArtistsPage />} />
-              <Route path="/tracks" element={<TracksPage />} />
-              <Route path="/playlists" element={<PlaylistsPage />} />
-              <Route path="/tags" element={<TagsPage />} />
-              <Route path="/downloads" element={<DownloadsPage />} />
-              <Route path="/health" element={<HealthPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-            </Routes>
-          </main>
         </div>
 
-        {/* Network Debugger - API Monitor */}
-        <NetworkDebugger />
+        {/* Main content area */}
+        <main className="page-content">
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/search" element={<SearchPage />} />
+            <Route path="/artists/discography/:spotifyId" element={<ArtistDiscographyPage />} />
+            <Route path="/albums/:spotifyId" element={<AlbumDetailPage />} />
+            <Route path="/artists" element={<ArtistsPage />} />
+            <Route path="/tracks" element={<TracksPage />} />
+            <Route path="/playlists" element={<PlaylistsPage />} />
+            <Route path="/tags" element={<TagsPage />} />
+            <Route path="/downloads" element={<DownloadsPage />} />
+            <Route path="/health" element={<HealthPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+          </Routes>
+        </main>
       </div>
-    </Router>
+
+      {/* Network Debugger - API Monitor */}
+      <NetworkDebugger />
+    </div>
   );
 }
 
-export default App;
+export default function App() {
+  return (
+    <Router>
+      <AppShell />
+    </Router>
+  );
+}

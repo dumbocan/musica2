@@ -22,6 +22,15 @@ A **complete REST API backend** for personal music streaming, featuring **comple
 - **✅ Local storage** - PostgreSQL with proper relationships
 - **✅ Tag system** - Personal categorization, play history, tag-track relationships
 
+## 🆕 2025 Search & UX updates (últimos cambios)
+
+- **Búsqueda unificada orquestada**: `/search/orchestrated` arma la respuesta de un solo golpe (Last.fm + Spotify) para tags/géneros. Scroll infinito en el frontend (carga por lotes) y deduplicación de artistas.
+- **Modo artista/grupo**: `/search/artist-profile` devuelve ficha con bio de Last.fm, followers/popularity de Spotify y ~10 artistas afines (Last.fm similares enriquecidos). En la UI, la bio se muestra resumida y al hacer clic saltas a la ficha completa + discografía.
+- **Búsqueda de canciones**: `/search/tracks-quick` devuelve tracks de Spotify con su álbum. En el frontend se muestran solo los álbumes únicos que contienen la canción (ej: “my name is” → álbum correspondiente) con botón directo al detalle del álbum.
+- **Wiki de álbum (Last.fm)**: `/albums/spotify/{id}` se enriquece con `album.getInfo` de Last.fm. En la UI se muestra un resumen de la historia en párrafos, con enlace a la historia completa.
+- **Navegación rápida**: en resultados de tags/géneros, las tarjetas apuntan a tu propia ficha/descografía si hay `spotify.id`, en vez de ir a Last.fm.
+- **Pagos de rendimiento**: timeouts con fallback, concurrencia controlada en enriquecimiento Spotify, lotes de 60+ artistas para tags con carga progresiva en frontend.
+
 ## 🏗️ **Tech Stack**
 
 | Component | Technology | Details |

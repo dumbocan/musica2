@@ -3,6 +3,7 @@ Advanced search endpoints.
 """
 
 from typing import Optional, List
+import asyncio
 from fastapi import APIRouter, HTTPException, Query
 
 from ..core.db import get_session
@@ -12,11 +13,86 @@ from sqlmodel import select, or_, and_
 router = APIRouter(prefix="/search", tags=["search"])
 
 from ..core.spotify import spotify_client
+from ..core.config import settings
+from ..core.lastfm import lastfm_client
+
+
+def _infer_genre_keywords(query: str) -> list[str]:
+    """Lightweight genre inference to filter noisy matches."""
+    ql = (query or "").lower()
+    if any(k in ql for k in ["hip hop", "hiphop", "rap", "trap"]):
+        return ["hip hop", "hip-hop", "rap", "trap", "boom bap", "gangsta"]
+    if "rock" in ql:
+        return ["rock", "alt", "indie"]
+    if "metal" in ql:
+        return ["metal", "heavy", "death"]
+    if "pop" in ql:
+        return ["pop", "dance", "k-pop"]
+    return []
+
+
+def _matches_genre(artist: dict, genre_keys: list[str], extra_tags: Optional[list[str]] = None) -> bool:
+    """Mirror the frontend genre filter server-side."""
+    if not genre_keys:
+        return True
+    disallow = ["tamil", "kollywood", "tollywood", "telugu", "k-pop", "kpop"]
+    genres = [g.lower() for g in artist.get("genres", []) if isinstance(g, str)]
+    tags = [t.lower() for t in extra_tags or [] if isinstance(t, str)]
+    pool = genres + tags
+    if not pool:
+        return False
+    if any(any(bad in g for bad in disallow) for g in pool):
+        return False
+    return any(any(gk in g for g in pool) for gk in genre_keys)
+
+
+async def _safe_call(coro, default):
+    """Run an async call and swallow errors, returning default on failure."""
+    try:
+        return await coro
+    except Exception as exc:
+        print(f"[search_orchestrated] skipping failed call: {exc}")
+        return default
+
+
+async def _safe_timed(coro, default, timeout: float):
+    """Safe call with a hard timeout to avoid frontend request timeouts."""
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout)
+    except Exception as exc:
+        print(f"[search_orchestrated] timed call failed after {timeout}s: {exc}")
+        return default
+
+
+def _normalize_name(name: str) -> str:
+    return "".join(ch for ch in (name or "").lower() if ch.isalnum())
+
+
+def _name_matches(target: str, candidate: str) -> bool:
+    """Basic fuzzy match to avoid mismapped photos (e.g., Snoop showing Eminem)."""
+    t = _normalize_name(target)
+    c = _normalize_name(candidate)
+    if not t or not c:
+        return False
+    return t in c or c in t
+
+
+def _normalize_name(name: str) -> str:
+    return "".join(ch for ch in (name or "").lower() if ch.isalnum())
+
+
+def _name_matches(target: str, candidate: str) -> bool:
+    """Basic fuzzy match to avoid mismapped photos (e.g., Snoop showing Eminem)."""
+    t = _normalize_name(target)
+    c = _normalize_name(candidate)
+    if not t or not c:
+        return False
+    return t in c or c in t
 
 @router.get("/spotify")
 async def search_spotify(
     q: str = Query(..., description="Search query"),
-    limit: int = Query(10, description="Number of artists/tracks to return")
+    limit: int = Query(30, description="Number of artists/tracks to return")
 ):
     """
     Search Spotify for artists and tracks.
@@ -24,6 +100,405 @@ async def search_spotify(
     artists = await spotify_client.search_artists(q, limit=limit)
     tracks = await spotify_client.search_tracks(q, limit=limit)
     return {"artists": artists, "tracks": tracks}
+
+
+@router.get("/lastfm/top-artists")
+async def search_lastfm_top_artists(
+    tag: str = Query(..., description="Last.fm tag, e.g., hip hop"),
+    limit: int = Query(50, description="Number of artists to return")
+):
+    """Return top artists for a given Last.fm tag."""
+    artists = await lastfm_client.get_top_artists_by_tag(tag, limit=limit)
+    return {"tag": tag, "artists": artists}
+
+
+@router.get("/tag-enriched")
+async def search_tag_enriched(
+    tag: str = Query(..., description="Tag/genre (ej: hip hop, rock)"),
+    limit: int = Query(20, description="Max artists to return")
+):
+    """
+    Orquestador: toma artistas de Last.fm por tag y los enriquece con datos de Spotify
+    (imagen, followers, popularidad, géneros). Devuelve una sola respuesta lista
+    para renderizar.
+    """
+    from ..core.lastfm import lastfm_client
+
+    artists = await lastfm_client.get_top_artists_by_tag(tag, limit=limit)
+
+    async def enrich(artist: dict):
+        try:
+            name = artist.get("name", "")
+            sp_matches = await spotify_client.search_artists(name, limit=3)
+            sp_sorted = sorted(
+                sp_matches,
+                key=lambda x: x.get("followers", {}).get("total", 0),
+                reverse=True
+            )
+            best = sp_sorted[0] if sp_sorted else None
+            return {
+                "name": name,
+                "url": artist.get("url"),
+                "listeners": artist.get("listeners"),
+                "image": artist.get("image", []),
+                "lastfm": artist,
+                "spotify": best
+            }
+        except Exception:
+            return {
+                "name": artist.get("name"),
+                "url": artist.get("url"),
+                "listeners": artist.get("listeners"),
+                "image": artist.get("image", []),
+                "lastfm": artist,
+                "spotify": None
+            }
+
+    enriched = await asyncio.gather(*[enrich(a) for a in artists[:limit]])
+    return {"tag": tag, "artists": enriched}
+
+
+@router.get("/orchestrated")
+async def orchestrated_search(
+    q: str = Query(..., description="Query o tag principal"),
+    limit: int = Query(20, description="Máximo artistas a traer de Spotify (no usado, compatibilidad)"),
+    page: int = Query(0, description="Página de resultados (0-index)"),
+    lastfm_limit: int = Query(60, description="Máximo artistas por tag Last.fm"),
+    related_limit: int = Query(8, description="Límite de similares Last.fm"),
+    min_followers: int = Query(300_000, description="Umbral mínimo de followers para mostrar")
+):
+    """
+    Endpoint único que orquesta Spotify + Last.fm y devuelve un payload listo
+    para renderizar, evitando múltiples llamadas desde el frontend.
+    """
+    from ..core.lastfm import lastfm_client
+    if not settings.LASTFM_API_KEY:
+        return {
+            "query": q,
+            "page": max(page, 0),
+            "limit": limit,
+            "has_more_artists": False,
+            "has_more_lastfm": False,
+            "main": None,
+            "artists": [],
+            "related": [],
+            "tracks": [],
+            "lastfm_top": []
+        }
+
+    genre_keys = _infer_genre_keywords(q)
+    timeout_spotify = 4.0
+    timeout_lastfm = 6.0
+    timeout_related = 5.0
+
+    # Solo usamos Last.fm como fuente primaria y enriquecemos con Spotify por nombre
+    lastfm_top_task = asyncio.create_task(
+        _safe_timed(lastfm_client.get_top_artists_by_tag(q, limit=lastfm_limit, page=max(page, 0) + 1), [], timeout_lastfm)
+    )
+
+    lastfm_top_raw = await lastfm_top_task
+
+    # Enriquecer top Last.fm con Spotify (para imágenes/followers)
+    sem_spotify = asyncio.Semaphore(15)
+
+    async def enrich_top_artist(artist: dict):
+        name = artist.get("name", "")
+        if not name:
+            return None
+        async with sem_spotify:
+            sp_matches = await _safe_timed(spotify_client.search_artists(name, limit=3), [], timeout_spotify)
+        if not sp_matches:
+            # Retry once with a smaller limit; try to avoid losing key artists
+            async with sem_spotify:
+                sp_matches = await _safe_timed(spotify_client.search_artists(name, limit=1), [], timeout_spotify)
+        sp_sorted = sorted(
+            sp_matches,
+            key=lambda x: (x.get("followers", {}) or {}).get("total", 0),
+            reverse=True
+        )
+        best = None
+        for candidate in sp_sorted:
+            if not _matches_genre(candidate, genre_keys):
+                continue
+            if not _name_matches(name, candidate.get("name", "")):
+                continue
+            best = candidate
+            break
+        # Si no hay match por nombre, usar el más popular para no perder foto/datos
+        if not best and sp_sorted:
+            best = sp_sorted[0]
+        return {
+            "name": name,
+            "url": artist.get("url"),
+            "listeners": artist.get("listeners"),
+            "image": artist.get("image", []),
+            "lastfm": artist,
+            "spotify": best
+        }
+
+    lastfm_enriched = await asyncio.gather(*[enrich_top_artist(a) for a in (lastfm_top_raw or [])])
+    lastfm_enriched = [a for a in lastfm_enriched if a]
+    # dedup by Spotify ID or normalized name to avoid repeats
+    seen_ids = set()
+    seen_names = set()
+    unique_enriched = []
+    for entry in lastfm_enriched:
+        sp = entry.get("spotify") or {}
+        sp_id = sp.get("id")
+        norm_name = _normalize_name(entry.get("name", ""))
+        if sp_id and sp_id in seen_ids:
+            continue
+        if norm_name and norm_name in seen_names:
+            continue
+        if sp_id:
+            seen_ids.add(sp_id)
+        if norm_name:
+            seen_names.add(norm_name)
+        unique_enriched.append(entry)
+    lastfm_enriched = unique_enriched
+
+    # Fallback: si Last.fm trae pocos resultados, completar con Spotify directo
+    if len(lastfm_enriched) < 10:
+        fallback_sp = await _safe_timed(spotify_client.search_artists(q, limit=20), [], timeout_spotify)
+        fallback_sorted = sorted(
+            fallback_sp,
+            key=lambda x: (x.get("followers", {}) or {}).get("total", 0),
+            reverse=True
+        )
+        for sp in fallback_sorted:
+            sp_id = sp.get("id")
+            norm_name = _normalize_name(sp.get("name", ""))
+            if sp_id and sp_id in seen_ids:
+                continue
+            if norm_name and norm_name in seen_names:
+                continue
+            if not _matches_genre(sp, genre_keys):
+                continue
+            seen_ids.add(sp_id)
+            if norm_name:
+                seen_names.add(norm_name)
+            lastfm_enriched.append({
+                "name": sp.get("name"),
+                "url": sp.get("external_urls", {}).get("spotify"),
+                "listeners": None,
+                "image": sp.get("images", []),
+                "lastfm": {},
+                "spotify": sp
+            })
+    # Priorizar artistas con más seguidores en Spotify; fallback a listeners de Last.fm
+    lastfm_enriched.sort(
+        key=lambda x: (
+            (x.get("spotify") or {}).get("followers", {}).get("total", 0),
+            x.get("listeners", 0)
+        ),
+        reverse=True
+    )
+
+    # El main artist viene del primer resultado Last.fm enriquecido
+    main_artist_block = lastfm_enriched[0] if lastfm_enriched else None
+    main_name = main_artist_block.get("name") if main_artist_block else None
+
+    # Related usando Last.fm similares enriquecidos con Spotify
+    related = []
+    if main_name:
+        similar = await _safe_timed(lastfm_client.get_similar_artists(main_name, limit=related_limit), [], timeout_related)
+
+        async def enrich_similar(entry: dict):
+            name = entry.get("name")
+            if not name:
+                return None
+            spotify_match = None
+            async with sem_spotify:
+                sp_candidates = await _safe_timed(spotify_client.search_artists(name, limit=1), [], timeout_spotify)
+            if sp_candidates:
+                candidate = sp_candidates[0]
+                if _name_matches(name, candidate.get("name", "")):
+                    spotify_match = candidate
+            followers = (spotify_match or {}).get("followers", {}).get("total", 0)
+            if followers < max(min_followers, 1_000_000):
+                return None
+
+            info = await _safe_timed(lastfm_client.get_artist_info(name), {}, timeout_lastfm) if settings.LASTFM_API_KEY else {}
+            tags = info.get("tags", []) or []
+            tags_flat = [t.get("name") for t in tags if isinstance(t, dict)]
+
+            if spotify_match and not _matches_genre(spotify_match, genre_keys, tags_flat):
+                return None
+
+            return {
+                "name": name,
+                "listeners": (info.get("stats", {}) or {}).get("listeners"),
+                "playcount": (info.get("stats", {}) or {}).get("playcount"),
+                "tags": tags,
+                "bio": info.get("summary", ""),
+                "spotify": spotify_match
+            }
+
+        enriched_similar = await asyncio.gather(*[enrich_similar(s) for s in similar])
+        seen_ids = set()
+        for item in enriched_similar:
+            if not item:
+                continue
+            sp_id = (item.get("spotify") or {}).get("id")
+            if sp_id and sp_id in seen_ids:
+                continue
+            if sp_id:
+                seen_ids.add(sp_id)
+            related.append(item)
+
+    # Top por tag Last.fm enriquecidos con Spotify
+    # Compact response
+    main_lastfm = main_artist_block.get("lastfm", {}) if main_artist_block else {}
+    main_spotify = main_artist_block.get("spotify") if main_artist_block else None
+    main_block = {"spotify": main_spotify, "lastfm": main_lastfm} if main_artist_block else None
+
+    # Lista de artistas para el grid: prioriza el objeto Spotify enriquecido
+    artists_for_grid = []
+    seen_spotify_ids = set()
+    seen_norm_names_grid = set()
+    for entry in lastfm_enriched:
+        sp = entry.get("spotify")
+        if sp:
+            sp_id = sp.get("id")
+            norm_name = _normalize_name(sp.get("name", ""))
+            if sp_id and sp_id in seen_spotify_ids:
+                continue
+            if norm_name and norm_name in seen_norm_names_grid:
+                continue
+            if sp_id:
+                seen_spotify_ids.add(sp_id)
+            if norm_name:
+                seen_norm_names_grid.add(norm_name)
+            artists_for_grid.append(sp)
+        else:
+            artists_for_grid.append({"id": entry.get("name"), "name": entry.get("name"), "followers": {"total": entry.get("listeners", 0)}})
+
+    return {
+        "query": q,
+        "page": max(page, 0),
+        "limit": limit,
+        "has_more_artists": len(lastfm_enriched) >= lastfm_limit,
+        "has_more_lastfm": len(lastfm_enriched) >= lastfm_limit,
+        "main": main_block,
+        "artists": artists_for_grid,
+        "related": related,
+        "tracks": [],
+        "lastfm_top": lastfm_enriched
+    }
+
+
+@router.get("/artist-profile")
+async def search_artist_profile(
+    q: str = Query(..., description="Nombre del artista/grupo"),
+    similar_limit: int = Query(10, description="Número de artistas afines"),
+    min_followers: int = Query(200_000, description="Umbral mínimo de followers Spotify para similares")
+):
+    """Devuelve ficha del artista (bio Last.fm + datos Spotify) y similares."""
+    if not settings.LASTFM_API_KEY:
+        raise HTTPException(status_code=400, detail="Se requiere LASTFM_API_KEY para este endpoint")
+
+    timeout_spotify = 4.0
+    timeout_lastfm = 6.0
+    sem_spotify = asyncio.Semaphore(10)
+
+    async def fetch_main():
+        # Last.fm bio/info
+        lfm = await _safe_timed(lastfm_client.get_artist_info(q), {}, timeout_lastfm)
+        # Spotify info
+        async with sem_spotify:
+            sp_matches = await _safe_timed(spotify_client.search_artists(q, limit=3), [], timeout_spotify)
+        sp_sorted = sorted(
+            sp_matches,
+            key=lambda x: (x.get("followers", {}) or {}).get("total", 0),
+            reverse=True
+        )
+        sp_best = None
+        for cand in sp_sorted:
+            if _name_matches(q, cand.get("name", "")):
+                sp_best = cand
+                break
+        if not sp_best and sp_sorted:
+            sp_best = sp_sorted[0]
+        return {"spotify": sp_best, "lastfm": lfm}
+
+    async def fetch_similars(main_name: str):
+        similars = await _safe_timed(lastfm_client.get_similar_artists(main_name, limit=similar_limit + 8), [], timeout_lastfm)
+        results = []
+        seen_ids = set()
+        for entry in similars:
+            name = entry.get("name")
+            if not name:
+                continue
+            async with sem_spotify:
+                sp_candidates = await _safe_timed(spotify_client.search_artists(name, limit=2), [], timeout_spotify)
+            sp_sorted = sorted(
+                sp_candidates,
+                key=lambda x: (x.get("followers", {}) or {}).get("total", 0),
+                reverse=True
+            )
+            sp_best = None
+            for cand in sp_sorted:
+                if not _name_matches(name, cand.get("name", "")):
+                    continue
+                sp_best = cand
+                break
+            if not sp_best and sp_sorted:
+                sp_best = sp_sorted[0]
+            followers = (sp_best or {}).get("followers", {}).get("total", 0)
+            if followers < min_followers:
+                continue
+            sp_id = (sp_best or {}).get("id")
+            if sp_id and sp_id in seen_ids:
+                continue
+            if sp_id:
+                seen_ids.add(sp_id)
+            results.append({
+                "name": name,
+                "match": entry.get("match"),
+                "url": entry.get("url"),
+                "image": entry.get("image", []),
+                "spotify": sp_best,
+                "lastfm": entry
+            })
+            if len(results) >= similar_limit:
+                break
+        return results
+
+    main = await fetch_main()
+    main_name = main.get("spotify", {}).get("name") or q
+    similars = await fetch_similars(main_name)
+
+    return {
+        "query": q,
+        "mode": "artist",
+        "main": main,
+        "similar": similars
+    }
+
+
+@router.get("/tracks-quick")
+async def search_tracks_quick(
+    q: str = Query(..., description="Nombre de canción"),
+    limit: int = Query(10, description="Número de tracks a devolver")
+):
+    """Búsqueda rápida de canciones en Spotify con sus artistas y álbum."""
+    try:
+        tracks = await spotify_client.search_tracks(q, limit=limit)
+        results = []
+        for t in tracks:
+            results.append({
+                "id": t.get("id"),
+                "name": t.get("name"),
+                "preview_url": t.get("preview_url"),
+                "popularity": t.get("popularity"),
+                "explicit": t.get("explicit"),
+                "duration_ms": t.get("duration_ms"),
+                "artists": t.get("artists", []),
+                "album": t.get("album", {})
+            })
+        return {"query": q, "tracks": results}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error searching tracks: {exc}")
 
 @router.get("/advanced")
 def advanced_search(

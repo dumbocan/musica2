@@ -1,14 +1,27 @@
-import { useEffect, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useEffect, useRef, useState, useMemo } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { audio2Api } from '@/lib/api';
 
 type Track = { id: string; name: string; duration_ms?: number; external_urls?: { spotify?: string }; popularity?: number; explicit?: boolean };
 type AlbumImage = { url: string };
 type ArtistMini = { name: string };
-type Album = { id: string; name: string; release_date?: string; images?: AlbumImage[]; artists?: ArtistMini[]; tracks?: { items: Track[] } };
+type Album = {
+  id: string;
+  name: string;
+  release_date?: string;
+  images?: AlbumImage[];
+  artists?: ArtistMini[];
+  tracks?: { items: Track[] };
+  lastfm?: {
+    wiki?: { summary?: string; content?: string };
+    listeners?: string | number;
+    playcount?: string | number;
+  };
+};
 
 export function AlbumDetailPage() {
   const { spotifyId } = useParams<{ spotifyId: string }>();
+  const navigate = useNavigate();
   const [album, setAlbum] = useState<Album | null>(null);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [loading, setLoading] = useState(false);
@@ -17,13 +30,15 @@ export function AlbumDetailPage() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
+    if (!spotifyId) return;
+    let isMounted = true;
     const load = async () => {
-      if (!spotifyId) return;
       setLoading(true);
       setError(null);
       try {
         const res = await audio2Api.getAlbumDetail(spotifyId);
         const data = res.data;
+        if (!isMounted) return;
         setAlbum(data);
         // Spotify returns tracks as items inside "tracks"
         if (data?.tracks?.items) {
@@ -33,15 +48,20 @@ export function AlbumDetailPage() {
         } else {
           // Fallback: fetch tracks endpoint
           const tracksRes = await audio2Api.getAlbumTracks(spotifyId);
+          if (!isMounted) return;
           setTracks(tracksRes.data || []);
         }
       } catch (err: any) {
+        if (!isMounted) return;
         setError(err?.response?.data?.detail || err?.message || 'Error cargando álbum');
       } finally {
-        setLoading(false);
+        if (isMounted) setLoading(false);
       }
     };
     load();
+    return () => {
+      isMounted = false;
+    };
   }, [spotifyId]);
 
   useEffect(() => {
@@ -85,6 +105,21 @@ export function AlbumDetailPage() {
     };
   };
 
+  const wiki = album?.lastfm?.wiki || {};
+  const wikiHtml = wiki.content || wiki.summary || '';
+  const wikiParagraphs = useMemo(() => {
+    if (!wikiHtml) return [];
+    const text = wikiHtml
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/p>/gi, '\n')
+      .replace(/<[^>]+>/g, '');
+    return text
+      .split(/\n\s*\n+/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+  }, [wikiHtml]);
+  const wikiToShow = wikiParagraphs.slice(0, 2);
+
   if (!spotifyId) return <div className="card">Álbum no especificado.</div>;
   if (loading) return <div className="card">Cargando álbum...</div>;
   if (error) return <div className="card">Error: {error}</div>;
@@ -92,6 +127,25 @@ export function AlbumDetailPage() {
 
   return (
     <div className="space-y-4">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <button
+          onClick={() => navigate(-1)}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '8px 14px',
+            borderRadius: 12,
+            background: 'transparent',
+            border: '1px solid var(--accent)',
+            color: 'var(--accent)',
+            cursor: 'pointer'
+          }}
+        >
+          ← Volver
+        </button>
+      </div>
+
       <div className="card" style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: 16, alignItems: 'flex-start' }}>
         {album.images?.[0]?.url && (
           <img
@@ -111,6 +165,28 @@ export function AlbumDetailPage() {
             {(album.artists || []).map((a) => a.name).join(', ') || 'Este álbum'} salió en {album.release_date || 'fecha no disponible'}.
             Explora los temas, márcalos como favoritos, añade tags o descárgalos.
           </div>
+          {wikiToShow.length > 0 && (
+            <div
+              className="text-sm text-muted-foreground space-y-2"
+              style={{ marginTop: 10, padding: '10px 12px', borderRadius: 12, border: '1px solid var(--border)', background: 'var(--panel)' }}
+            >
+              {wikiToShow.map((p, idx) => (
+                <p key={idx} style={{ margin: 0, lineHeight: 1.5 }}>
+                  {p}
+                </p>
+              ))}
+              {wikiParagraphs.length > 2 && (
+                <a
+                  href={wiki?.url || '#'}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ display: 'inline-block', marginTop: 6, color: 'var(--accent)', fontWeight: 600 }}
+                >
+                  Ver historia completa
+                </a>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

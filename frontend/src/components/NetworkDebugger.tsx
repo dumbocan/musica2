@@ -12,44 +12,7 @@ interface RequestLog {
 }
 
 export function NetworkDebugger() {
-  const [logs, setLogs] = useState<RequestLog[]>([
-    {
-      id: '1',
-      method: 'GET',
-      url: 'http://localhost:8000/health',
-      status: 200,
-      response: { status: 'ok' },
-      error: null,
-      timestamp: new Date(Date.now() - 60000)
-    },
-    {
-      id: '2',
-      method: 'GET',
-      url: 'http://localhost:8000/artists/',
-      status: 200,
-      response: { artists: [], total: 0 },
-      error: null,
-      timestamp: new Date(Date.now() - 30000)
-    },
-    {
-      id: '3',
-      method: 'GET',
-      url: 'http://localhost:8000/tracks/',
-      status: 500,
-      response: null,
-      error: { detail: 'No user exists with user_id = 1' },
-      timestamp: new Date(Date.now() - 15000)
-    },
-    {
-      id: '4',
-      method: 'POST',
-      url: 'http://localhost:8000/search/artists',
-      status: 404,
-      response: null,
-      error: { detail: 'Not Found' },
-      timestamp: new Date(Date.now() - 5000)
-    }
-  ]);
+  const [logs, setLogs] = useState<RequestLog[]>([]);
 
   const [isOpen, setIsOpen] = useState(false);
 
@@ -57,13 +20,6 @@ export function NetworkDebugger() {
     if (!status) return <AlertCircle className="h-4 w-4 text-gray-500" />;
     if (status >= 200 && status < 300) return <CheckCircle className="h-4 w-4 text-green-500" />;
     return <XCircle className="h-4 w-4 text-red-500" />;
-  };
-
-  const getStatusColor = (status: number | null) => {
-    if (!status) return 'bg-gray-100 text-gray-800';
-    if (status >= 200 && status < 300) return 'bg-green-100 text-green-800';
-    if (status >= 400 && status < 500) return 'bg-orange-100 text-orange-800';
-    return 'bg-red-100 text-red-800';
   };
 
   if (!isOpen) {

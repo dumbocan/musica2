@@ -84,6 +84,41 @@ class LastFmClient:
                 for artist_info in similar_artists
             ]
 
+    async def get_top_artists_by_tag(self, tag: str, limit: int = 50, page: int = 1) -> list:
+        """Get top artists for a given tag."""
+        if not self.api_key:
+            return []
+        params = {
+            "method": "tag.gettopartists",
+            "tag": tag,
+            "limit": limit,
+            "page": page,
+            "api_key": self.api_key,
+            "format": "json"
+        }
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(self.base_url, params=params)
+            response.raise_for_status()
+            data = response.json()
+            return data.get("topartists", {}).get("artist", [])
+
+    async def get_album_info(self, artist: str, album: str) -> dict:
+        """Get album info including wiki/summary."""
+        if not self.api_key:
+            return {}
+        params = {
+            "method": "album.getInfo",
+            "artist": artist,
+            "album": album,
+            "api_key": self.api_key,
+            "format": "json"
+        }
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            response = await client.get(self.base_url, params=params)
+            response.raise_for_status()
+            data = response.json()
+            return data.get("album", {}) or {}
+
 
 # Global client
 lastfm_client = LastFmClient()

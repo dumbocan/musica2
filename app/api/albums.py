@@ -8,6 +8,7 @@ from fastapi import APIRouter, Path, HTTPException
 
 from ..core.spotify import spotify_client
 from ..core.config import settings
+from ..core.lastfm import lastfm_client
 from ..crud import save_album
 from ..core.db import get_session
 from ..models.base import Album, Track
@@ -27,6 +28,15 @@ async def get_album_from_spotify(spotify_id: str = Path(..., description="Spotif
             raise HTTPException(status_code=404, detail="Album not found on Spotify")
         tracks = await spotify_client.get_album_tracks(spotify_id)
         album["tracks"] = tracks
+        # Enrich with Last.fm wiki if possible
+        try:
+            artist_name = (album.get("artists") or [{}])[0].get("name")
+            album_name = album.get("name")
+            if artist_name and album_name and settings.LASTFM_API_KEY:
+                lfm_info = await lastfm_client.get_album_info(artist_name, album_name)
+                album["lastfm"] = lfm_info
+        except Exception:
+            album["lastfm"] = {}
         return album
     except HTTPException:
         raise

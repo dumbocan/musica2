@@ -84,24 +84,26 @@ class SpotifyClient:
 
         return {"tracks": tracks, "artists": artists}
 
-    async def search_artists(self, query: str, limit: int = 10) -> List[dict]:
+    async def search_artists(self, query: str, limit: int = 10, offset: int = 0) -> List[dict]:
         """Search for artists by name."""
         endpoint = "/search"
         params = {
             "q": query,
             "type": "artist",
-            "limit": limit
+            "limit": limit,
+            "offset": max(offset, 0)
         }
         response = await self._make_request(endpoint, params)
         return response.get("artists", {}).get("items", [])
 
-    async def search_tracks(self, query: str, limit: int = 10) -> List[dict]:
+    async def search_tracks(self, query: str, limit: int = 10, offset: int = 0) -> List[dict]:
         """Search for tracks by name."""
         endpoint = "/search"
         params = {
             "q": query,
             "type": "track",
-            "limit": limit
+            "limit": limit,
+            "offset": max(offset, 0)
         }
         response = await self._make_request(endpoint, params)
         return response.get("tracks", {}).get("items", [])

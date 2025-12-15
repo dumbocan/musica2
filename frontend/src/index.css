@@ -204,6 +204,14 @@ a {
   opacity: 0.7;
 }
 
+.search-input:-webkit-autofill,
+.search-input:-webkit-autofill:hover,
+.search-input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #ffffff;
+  -webkit-box-shadow: 0 0 0px 1000px #000000 inset;
+  box-shadow: 0 0 0px 1000px #000000 inset;
+}
+
 .search-button {
   border: none;
   background: transparent;
