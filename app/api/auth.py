@@ -98,7 +98,7 @@ async def login_user(
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "expires_in": 1800  # 30 minutes in seconds
+        "expires_in": 86400  # 24h in seconds
     }
 
 

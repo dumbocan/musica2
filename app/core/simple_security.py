@@ -4,7 +4,9 @@ Simplified security functions using hashlib instead of bcrypt.
 
 import hashlib
 import secrets
+import time
 from typing import Optional
+from app.core.config import settings
 
 def get_password_hash(password: str) -> str:
     """
@@ -50,73 +52,49 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def create_user_token(user_id: int, email: str) -> str:
     """
-    Create a JWT token for the user.
-    
-    Args:
-        user_id: The user's ID
-        email: The user's email
-        
-    Returns:
-        A JWT token string
+    Create a signed token for the user (simple JWT-like, 24h expiry).
     """
-    # In a real application, this should generate a proper JWT token
-    # For this simplified example, we'll create a simple token
     import base64
     import json
-    
-    # Create a simple token payload
-    payload = {
-        "user_id": user_id,
-        "email": email,
-        "exp": 1800  # 30 minutes
-    }
-    
-    # Encode the payload
+
+    exp = int(time.time()) + 24 * 60 * 60  # 24h
+    payload = {"user_id": user_id, "email": email, "exp": exp}
+
     payload_json = json.dumps(payload)
     payload_b64 = base64.b64encode(payload_json.encode()).decode()
-    
-    # Create a simple signature (in a real app, this would be proper JWT signing)
-    signature = hashlib.sha256((payload_b64 + "secret_key").encode()).hexdigest()
-    
+
+    secret = settings.JWT_SECRET_KEY or "secret_key"
+    signature = hashlib.sha256((payload_b64 + secret).encode()).hexdigest()
+
     return f"{payload_b64}.{signature}"
 
 def get_current_user_id(token: str) -> int:
     """
-    Extract the user ID from a token.
-    
-    Args:
-        token: The JWT token
-        
-    Returns:
-        The user ID extracted from the token
-        
-    Raises:
-        Exception: If the token is invalid
+    Extract the user ID from a token and validate signature/expiration.
     """
     try:
-        # Split the token
         parts = token.split(".")
         if len(parts) != 2:
             raise ValueError("Invalid token format")
-            
+
         payload_b64, signature = parts
-        
-        # Verify the signature
-        expected_signature = hashlib.sha256((payload_b64 + "secret_key").encode()).hexdigest()
-        
+        secret = settings.JWT_SECRET_KEY or "secret_key"
+        expected_signature = hashlib.sha256((payload_b64 + secret).encode()).hexdigest()
+
         if not secrets.compare_digest(signature, expected_signature):
             raise ValueError("Invalid token signature")
-            
-        # Decode the payload
+
         import base64
         import json
-        
+
         payload_json = base64.b64decode(payload_b64.encode()).decode()
         payload = json.loads(payload_json)
-        
-        # In a real application, we should also check the expiration time
-        
+
+        now = int(time.time())
+        exp = payload.get("exp")
+        if exp and now > exp:
+            raise ValueError("Token expired")
+
         return payload["user_id"]
     except (ValueError, json.JSONDecodeError, KeyError) as e:
-        # In a real application, this would raise an appropriate HTTP exception
         raise ValueError(f"Invalid token: {str(e)}")

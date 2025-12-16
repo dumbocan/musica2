@@ -183,7 +183,7 @@ export const useApiStore = create<ApiStore>()(
       setToken: (token) => {
         if (token) {
           localStorage.setItem('token', token);
-          document.cookie = `token=${token}; path=/; max-age=1800; samesite=strict`;
+          document.cookie = `token=${token}; path=/; max-age=86400; samesite=strict`;
         } else {
           localStorage.removeItem('token');
           document.cookie = 'token=; path=/; max-age=0; samesite=strict';

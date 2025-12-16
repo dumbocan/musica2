@@ -1,5 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .api.routes_health import router as health_router
 from .api.artists import router as artists_router
@@ -15,8 +16,11 @@ from .api.youtube import router as youtube_router
 from .api.auth import router as auth_router
 from .api.favorites import router as favorites_router
 from .api.images import router as images_router
-from .core.db import create_db_and_tables
+from .core.db import create_db_and_tables, get_session
 from .core.maintenance import daily_refresh_loop
+from .core.simple_security import get_current_user_id
+from .models.base import User
+from sqlmodel import select
 import asyncio
 
 app = FastAPI(title="Audio2 API", description="Personal Music API Backend")
@@ -51,6 +55,51 @@ app.add_middleware(
 
 # Create tables if they don't exist
 create_db_and_tables()
+
+# Auth guard: block everything if no users exist or no token provided
+PUBLIC_PATHS = {
+    "/health",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+    "/auth/login",
+    "/auth/register",
+    "/auth/create-first-user",
+    "/images/proxy",
+}
+
+
+@app.middleware("http")
+async def require_authenticated_user(request: Request, call_next):
+    path = request.url.path
+    if path in PUBLIC_PATHS or any(path.startswith(p) for p in ("/static", "/favicon")):
+        return await call_next(request)
+
+    # If no users exist, force registration first
+    with get_session() as session:
+        user_exists = session.exec(select(User.id)).first()
+        if not user_exists:
+            return JSONResponse(status_code=401, content={"detail": "No users found. Register via /auth/register."})
+
+        auth_header = request.headers.get("Authorization", "")
+        token = None
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header.split(" ", 1)[1].strip()
+        if not token:
+            return JSONResponse(status_code=401, content={"detail": "Authorization bearer token required"})
+
+        try:
+            user_id = get_current_user_id(token)
+        except ValueError as exc:
+            return JSONResponse(status_code=401, content={"detail": str(exc)})
+
+        user_in_db = session.exec(select(User.id).where(User.id == user_id)).first()
+        if not user_in_db:
+            return JSONResponse(status_code=401, content={"detail": "User not found"})
+
+        request.state.user_id = user_id
+
+    return await call_next(request)
 
 app.include_router(health_router)
 app.include_router(artists_router)
