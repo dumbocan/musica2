@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { audio2Api } from '@/lib/api';
+import { useApiStore } from '@/store/useApiStore';
 
 type Track = { id: string; name: string; duration_ms?: number; external_urls?: { spotify?: string }; popularity?: number; explicit?: boolean };
 type AlbumImage = { url: string };
@@ -27,7 +28,11 @@ export function AlbumDetailPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
+  const [isFavorite, setIsFavorite] = useState(false);
+  const [favoriteLoading, setFavoriteLoading] = useState(false);
+  const [localAlbumId, setLocalAlbumId] = useState<number | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const userId = useApiStore((s) => s.userId);
 
   useEffect(() => {
     if (!spotifyId) return;
@@ -51,6 +56,16 @@ export function AlbumDetailPage() {
           if (!isMounted) return;
           setTracks(tracksRes.data || []);
         }
+        // Try to persist album to get local ID for favorites
+        try {
+          const saveRes = await audio2Api.saveAlbumToDb(spotifyId);
+          const albumId = saveRes.data?.album?.id;
+          if (albumId && isMounted) {
+            setLocalAlbumId(albumId);
+          }
+        } catch (e) {
+          // best effort; ignore
+        }
       } catch (err: any) {
         if (!isMounted) return;
         setError(err?.response?.data?.detail || err?.message || 'Error cargando álbum');
@@ -72,6 +87,22 @@ export function AlbumDetailPage() {
       }
     };
   }, []);
+
+  // Check favorite status once we have local album id
+  useEffect(() => {
+    const checkFavorite = async () => {
+      if (!userId || !localAlbumId) return;
+      try {
+        const res = await audio2Api.listFavorites({ user_id: userId, target_type: 'album' });
+        const favs = Array.isArray(res.data) ? res.data : [];
+        const found = favs.some((f: any) => f.album_id === localAlbumId);
+        setIsFavorite(found);
+      } catch (e) {
+        // ignore
+      }
+    };
+    checkFavorite();
+  }, [userId, localAlbumId]);
 
   const togglePlay = (track: Track) => {
     if (!track.external_urls?.spotify && !track.id) return;
@@ -191,7 +222,36 @@ export function AlbumDetailPage() {
       </div>
 
       <div className="card">
-        <div style={{ fontWeight: 700, marginBottom: 10 }}>Canciones</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <div style={{ fontWeight: 700 }}>Canciones</div>
+          <button
+            className="btn-ghost"
+            style={{ borderRadius: 8, fontSize: 18, opacity: favoriteLoading ? 0.6 : 1 }}
+            disabled={favoriteLoading || !userId || !localAlbumId}
+            onClick={async () => {
+              if (!userId || !localAlbumId) return;
+              setFavoriteLoading(true);
+              try {
+                if (!isFavorite) {
+                  await audio2Api.addFavorite('album', localAlbumId, userId);
+                  setIsFavorite(true);
+                } else {
+                  await audio2Api.removeFavorite('album', localAlbumId, userId);
+                  setIsFavorite(false);
+                }
+              } catch (e) {
+                // ignore error for now
+              } finally {
+                setFavoriteLoading(false);
+              }
+            }}
+            aria-pressed={isFavorite}
+            aria-label={isFavorite ? 'Quitar de favoritos' : 'Agregar a favoritos'}
+            title={isFavorite ? 'Quitar de favoritos' : 'Agregar a favoritos'}
+          >
+            {isFavorite ? '❤️' : '🤍'}
+          </button>
+        </div>
         <div className="space-y-2">
           {tracks.map((t, idx) => (
             <div

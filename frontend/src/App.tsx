@@ -86,7 +86,11 @@ function AppShell() {
                   autoComplete="off"
                   className="search-input"
                 />
-                <button type="submit" className="search-button">
+                <button
+                  type="submit"
+                  className="search-button"
+                  aria-label="Buscar"
+                >
                   <Search className="h-6 w-6" />
                 </button>
               </form>

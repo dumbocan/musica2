@@ -15,6 +15,11 @@ router = APIRouter(prefix="/search", tags=["search"])
 from ..core.spotify import spotify_client
 from ..core.config import settings
 from ..core.lastfm import lastfm_client
+from ..services.library_expansion import save_artist_and_similars
+from ..core.db import get_session
+from ..models.base import Artist, Album, Track
+from sqlmodel import select
+from urllib.parse import quote_plus
 
 
 def _infer_genre_keywords(query: str) -> list[str]:
@@ -44,6 +49,19 @@ def _matches_genre(artist: dict, genre_keys: list[str], extra_tags: Optional[lis
     if any(any(bad in g for bad in disallow) for g in pool):
         return False
     return any(any(gk in g for g in pool) for gk in genre_keys)
+
+
+def _proxy_images(images: list, size: int = 512) -> list:
+    """Replace image URLs with proxied resized versions."""
+    proxied = []
+    for img in images or []:
+        url = None
+        if isinstance(img, dict):
+            url = img.get("url") or img.get("#text")
+        if not url:
+            continue
+        proxied.append({"url": f"/images/proxy?url={quote_plus(url)}&size={size}"})
+    return proxied
 
 
 async def _safe_call(coro, default):
@@ -191,11 +209,42 @@ async def orchestrated_search(
     timeout_lastfm = 6.0
     timeout_related = 5.0
 
-    # Solo usamos Last.fm como fuente primaria y enriquecemos con Spotify por nombre
+    # Primero intentamos desde DB
+    db_artists = []
+    with get_session() as session:
+        db_artists = session.exec(
+            select(Artist).where(Artist.name.ilike(f"%{q}%")).limit(limit)
+        ).all()
+
+    if db_artists:
+        artists_for_grid = []
+        for a in db_artists:
+            data = a.dict()
+            # Rewrite images to proxy
+            try:
+                import json
+                imgs = json.loads(a.images) if a.images else []
+            except Exception:
+                imgs = []
+            data["images"] = _proxy_images(imgs, size=512)
+            artists_for_grid.append(data)
+        return {
+            "query": q,
+            "page": max(page, 0),
+            "limit": limit,
+            "has_more_artists": False,
+            "has_more_lastfm": False,
+            "main": None,
+            "artists": artists_for_grid,
+            "related": [],
+            "tracks": [],
+            "lastfm_top": []
+        }
+
+    # Si no hay suficientes datos locales, usamos Last.fm + Spotify y persistimos
     lastfm_top_task = asyncio.create_task(
         _safe_timed(lastfm_client.get_top_artists_by_tag(q, limit=lastfm_limit, page=max(page, 0) + 1), [], timeout_lastfm)
     )
-
     lastfm_top_raw = await lastfm_top_task
 
     # Enriquecer top Last.fm con Spotify (para imágenes/followers)
@@ -227,6 +276,8 @@ async def orchestrated_search(
         # Si no hay match por nombre, usar el más popular para no perder foto/datos
         if not best and sp_sorted:
             best = sp_sorted[0]
+        if best:
+            best["images"] = _proxy_images(best.get("images", []), size=512)
         return {
             "name": name,
             "url": artist.get("url"),
@@ -314,6 +365,7 @@ async def orchestrated_search(
                 candidate = sp_candidates[0]
                 if _name_matches(name, candidate.get("name", "")):
                     spotify_match = candidate
+                    spotify_match["images"] = _proxy_images(spotify_match.get("images", []), size=512)
             followers = (spotify_match or {}).get("followers", {}).get("total", 0)
             if followers < max(min_followers, 1_000_000):
                 return None
@@ -466,7 +518,24 @@ async def search_artist_profile(
 
     main = await fetch_main()
     main_name = main.get("spotify", {}).get("name") or q
+    # Persist main + similars in background
+    try:
+        main_spotify_id = main.get("spotify", {}).get("id") if isinstance(main, dict) else None
+        similar_ids = [s.get("spotify", {}).get("id") for s in similars if s.get("spotify")]
+        if main_spotify_id:
+            asyncio.create_task(save_artist_and_similars(main_spotify_id, similar_ids, limit=5))
+    except Exception:
+        pass
     similars = await fetch_similars(main_name)
+
+    # Persist main artist and up to 5 similars in background
+    try:
+        main_spotify_id = main.get("spotify", {}).get("id") if isinstance(main, dict) else None
+        similar_ids = [s.get("spotify", {}).get("id") for s in similars if s.get("spotify")]
+        if main_spotify_id:
+            asyncio.create_task(save_artist_and_similars(main_spotify_id, similar_ids, limit=5))
+    except Exception:
+        pass
 
     return {
         "query": q,

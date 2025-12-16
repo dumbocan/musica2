@@ -55,6 +55,8 @@ export const audio2Api = {
   getAllAlbums: () => api.get('/albums/'),
   getAlbumDetail: (spotifyId: string) =>
     api.get(`/albums/spotify/${spotifyId}`),
+  saveAlbumToDb: (spotifyId: string) =>
+    api.post(`/albums/save/${spotifyId}`),
   getAlbumTracks: (spotifyId: string) =>
     api.get(`/albums/${spotifyId}/tracks`),
 
@@ -63,4 +65,12 @@ export const audio2Api = {
 
   // Playlists
   getAllPlaylists: () => api.get('/playlists/'),
+
+  // Favorites
+  addFavorite: (targetType: 'artist' | 'album' | 'track', targetId: number, userId: number) =>
+    api.post(`/favorites/${targetType}/${targetId}`, null, { params: { user_id: userId } }),
+  removeFavorite: (targetType: 'artist' | 'album' | 'track', targetId: number, userId: number) =>
+    api.delete(`/favorites/${targetType}/${targetId}`, { params: { user_id: userId } }),
+  listFavorites: (params: { user_id: number; target_type?: 'artist' | 'album' | 'track' }) =>
+    api.get('/favorites', { params }),
 };

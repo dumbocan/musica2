@@ -1,6 +1,7 @@
 # Base for SQLModel classes
 
 from sqlmodel import SQLModel, Field, Relationship
+from sqlalchemy import UniqueConstraint
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
@@ -58,6 +59,7 @@ class Artist(SQLModel, table=True):
     bio_content: Optional[str] = None  # Last.fm full bio
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)  # Last metadata update
+    last_refreshed_at: Optional[datetime] = None  # For maintenance jobs
 
     # Relationships
     albums: Optional[List["Album"]] = Relationship(back_populates="artist")
@@ -77,6 +79,7 @@ class Album(SQLModel, table=True):
     label: Optional[str] = Field(max_length=150)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)  # Last metadata update
+    last_refreshed_at: Optional[datetime] = None
 
     # Relationships
     artist: Artist = Relationship(back_populates="albums")
@@ -102,6 +105,13 @@ class Track(SQLModel, table=True):
     user_score: int = Field(default=0)  # User rating 1-5
     played_at: Optional[datetime] = None  # Last played
     is_favorite: bool = Field(default=False)  # Favorite flag
+    download_status: Optional[str] = Field(default=None)  # pending/downloading/completed/failed
+    downloaded_at: Optional[datetime] = None
+    download_path: Optional[str] = None
+    download_size_bytes: Optional[int] = None
+    lyrics_source: Optional[str] = None
+    lyrics_language: Optional[str] = None
+    last_refreshed_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)  # Last metadata update
 
@@ -156,6 +166,12 @@ class UserFavorite(SQLModel, table=True):
     artist: Optional[Artist] = Relationship(back_populates="favorites")
     album: Optional[Album] = Relationship(back_populates="favorites")
     track: Optional[Track] = Relationship(back_populates="favorites")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "target_type", "artist_id"),
+        UniqueConstraint("user_id", "target_type", "album_id"),
+        UniqueConstraint("user_id", "target_type", "track_id"),
+    )
 
 class YouTubeDownload(SQLModel, table=True):
     """Tracking system for YouTube audio downloads."""

@@ -27,9 +27,10 @@ watchfiles==1.1.1
 websockets==15.0.1
 yt-dlp
 aiofiles
+Pillow==10.3.0
 
 # Enhanced music APIs for better track metadata
 spotipy==2.23.0          # Official Spotify Python library with better access
 lyricsgenius==3.0.1      # Genius.com lyrics and additional track data
-discogs-client==2.7      # Discogs database API for alternative metadata
+discogs-client==2.3.0      # Discogs database API for alternative metadata
 beautifulsoup4==4.12.0   # For web scraping additional data

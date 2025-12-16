@@ -176,10 +176,18 @@ async def get_full_discography(spotify_id: str = Path(..., description="Spotify 
 async def get_artist_info(spotify_id: str = Path(..., description="Spotify artist ID")):
     """Get artist info from Spotify + Last.fm bio/tags/listeners (no DB write)."""
     from ..core.lastfm import lastfm_client
+    from ..services.library_expansion import save_artist_discography
 
     spotify_data = await spotify_client.get_artist(spotify_id)
     if not spotify_data:
         raise HTTPException(status_code=404, detail="Artist not found on Spotify")
+    # Proxy images
+    try:
+        from urllib.parse import quote_plus
+        from .search import _proxy_images  # reuse helper
+        spotify_data["images"] = _proxy_images(spotify_data.get("images", []), size=512)
+    except Exception:
+        pass
 
     lastfm_data = {}
     try:
@@ -190,6 +198,12 @@ async def get_artist_info(spotify_id: str = Path(..., description="Spotify artis
         # Don't fail the request on Last.fm issues
         print(f"[artist_info] lastfm fetch failed for {spotify_id}: {exc}")
         lastfm_data = {}
+
+    # Persist artist/albums/tracks in background (best effort)
+    try:
+        asyncio.create_task(save_artist_discography(spotify_id))
+    except Exception:
+        pass
 
     return {
         "spotify": spotify_data,
@@ -363,10 +377,13 @@ def get_artist(artist_id: int = Path(..., description="Local artist ID")) -> Art
 @router.delete("/id/{artist_id}")
 def delete_artist_end(artist_id: int = Path(..., description="Local artist ID")):
     """Delete artist and cascade to albums/tracks."""
-    ok = delete_artist(artist_id)
-    if not ok:
-        raise HTTPException(status_code=404, detail="Artist not found")
-    return {"message": "Artist and related data deleted"}
+    try:
+        ok = delete_artist(artist_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Artist not found")
+        return {"message": "Artist and related data deleted"}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/{spotify_id}/save-full-discography")

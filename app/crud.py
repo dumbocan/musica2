@@ -361,7 +361,51 @@ def delete_artist(artist_id: int) -> bool:
     try:
         artist = session.exec(select(Artist).where(Artist.id == artist_id)).first()
         if artist:
+            # Do not delete if favorited by any user
+            fav = session.exec(
+                select(UserFavorite).where(UserFavorite.artist_id == artist_id)
+            ).first()
+            if fav:
+                raise ValueError("Artist is favorited by a user and cannot be deleted")
             session.delete(artist)  # CASCADE handles albums/tracks
+            session.commit()
+            return True
+        return False
+    finally:
+        session.close()
+
+
+def delete_album(album_id: int) -> bool:
+    """Delete album and cascade tracks, unless favorited."""
+    session = get_session()
+    try:
+        album = session.exec(select(Album).where(Album.id == album_id)).first()
+        if album:
+            fav = session.exec(
+                select(UserFavorite).where(UserFavorite.album_id == album_id)
+            ).first()
+            if fav:
+                raise ValueError("Album is favorited by a user and cannot be deleted")
+            session.delete(album)
+            session.commit()
+            return True
+        return False
+    finally:
+        session.close()
+
+
+def delete_track(track_id: int) -> bool:
+    """Delete track unless favorited."""
+    session = get_session()
+    try:
+        track = session.exec(select(Track).where(Track.id == track_id)).first()
+        if track:
+            fav = session.exec(
+                select(UserFavorite).where(UserFavorite.track_id == track_id)
+            ).first()
+            if fav:
+                raise ValueError("Track is favorited by a user and cannot be deleted")
+            session.delete(track)
             session.commit()
             return True
         return False

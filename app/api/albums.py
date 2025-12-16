@@ -9,7 +9,8 @@ from fastapi import APIRouter, Path, HTTPException
 from ..core.spotify import spotify_client
 from ..core.config import settings
 from ..core.lastfm import lastfm_client
-from ..crud import save_album
+from ..api.search import _proxy_images
+from ..crud import save_album, delete_album
 from ..core.db import get_session
 from ..models.base import Album, Track
 from sqlmodel import select
@@ -28,6 +29,7 @@ async def get_album_from_spotify(spotify_id: str = Path(..., description="Spotif
             raise HTTPException(status_code=404, detail="Album not found on Spotify")
         tracks = await spotify_client.get_album_tracks(spotify_id)
         album["tracks"] = tracks
+        album["images"] = _proxy_images(album.get("images", []), size=512)
         # Enrich with Last.fm wiki if possible
         try:
             artist_name = (album.get("artists") or [{}])[0].get("name")
@@ -76,6 +78,18 @@ def get_albums() -> List[Album]:
     with get_session() as session:
         albums = session.exec(select(Album)).all()
     return albums
+
+
+@router.delete("/id/{album_id}")
+def delete_album_endpoint(album_id: int = Path(..., description="Local album ID")):
+    """Delete album unless favorited."""
+    try:
+        ok = delete_album(album_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Album not found")
+        return {"message": "Album deleted"}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/id/{album_id}")

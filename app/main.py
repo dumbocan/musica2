@@ -14,7 +14,10 @@ from .api.charts import router as charts_router
 from .api.youtube import router as youtube_router
 from .api.auth import router as auth_router
 from .api.favorites import router as favorites_router
+from .api.images import router as images_router
 from .core.db import create_db_and_tables
+from .core.maintenance import daily_refresh_loop
+import asyncio
 
 app = FastAPI(title="Audio2 API", description="Personal Music API Backend")
 
@@ -62,3 +65,9 @@ app.include_router(charts_router)
 app.include_router(youtube_router)
 app.include_router(auth_router)
 app.include_router(favorites_router)
+app.include_router(images_router)
+
+
+@app.on_event("startup")
+async def _start_maintenance():
+    asyncio.create_task(daily_refresh_loop())

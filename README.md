@@ -31,6 +31,17 @@ A **complete REST API backend** for personal music streaming, featuring **comple
 - **Navegación rápida**: en resultados de tags/géneros, las tarjetas apuntan a tu propia ficha/descografía si hay `spotify.id`, en vez de ir a Last.fm.
 - **Pagos de rendimiento**: timeouts con fallback, concurrencia controlada en enriquecimiento Spotify, lotes de 60+ artistas para tags con carga progresiva en frontend.
 
+## 🆕 Backend & Data Weekend (favoritos, caché de imágenes, DB-first)
+
+- **Favoritos multi-usuario**: nueva tabla `userfavorite` y API `/favorites` para marcar artistas, álbumes o tracks; los registros no se pueden borrar si están marcados. `target_type = artist|album|track`.
+- **Datos adicionales de descarga**: los tracks guardan `download_status`, `downloaded_at`, `download_path`, `download_size_bytes`, `lyrics_source`, `lyrics_language` y `last_refreshed_at`. Artistas y álbumes también llevan `last_refreshed_at` para refrescos diarios.
+- **Búsqueda DB-first**: las búsquedas orquestadas leen primero de PostgreSQL y solo van a APIs externas si faltan datos; al visitar una ficha de artista se dispara un guardado en background del artista + hasta 5 similares (álbumes + tracks).
+- **Refresco diario**: bucle en `app/core/maintenance.py` que refresca discografía de los artistas favoritos cada 24h (se levanta en `startup`).
+- **Proxy y resize de imágenes**: endpoint `/images/proxy?url=&size=` reduce peso con Pillow y guarda en `cache/images/*.webp`; todas las imágenes de búsqueda/artista/álbum se reescriben para servir desde la caché local.
+- **Rutas de almacenamiento**: `storage/images/artists`, `storage/images/albums`, `storage/music_downloads` para assets locales; la caché redimensionada vive en `cache/images`.
+- **Resistencia a borrados**: `delete_artist`/`delete_album`/`delete_track` rechazan la operación si hay favoritos. Nuevos helpers en `crud` + endpoints `DELETE /albums/id/{id}` ya protegidos.
+- **Dependencias**: añadido `Pillow` para el resize; `discogs-client` fijado a `2.3.0`.
+
 ## 🏗️ **Tech Stack**
 
 | Component | Technology | Details |
@@ -162,18 +173,31 @@ GET /artists/search-auto-download?q=eminem
 Artist (
   id, spotify_id, name, genres, images,
   popularity, followers, bio_summary, bio_content,
+  last_refreshed_at,
   created_at, updated_at
 )
 
 Album (
   id, spotify_id, artist_id, name, release_date,
-  images, total_tracks, label, created_at
+  images, total_tracks, label,
+  last_refreshed_at,
+  created_at, updated_at
 )
 
 Track (
   id, spotify_id, artist_id, album_id, name,
   duration_ms, popularity, user_score, is_favorite,
-  lastfm_listeners, lastfm_playcount, created_at
+  lastfm_listeners, lastfm_playcount,
+  download_status, downloaded_at, download_path, download_size_bytes,
+  lyrics, lyrics_source, lyrics_language,
+  last_refreshed_at,
+  created_at, updated_at
+)
+
+UserFavorite (
+  id, user_id, target_type,
+  artist_id, album_id, track_id,
+  created_at
 )
 
 YouTubeDownload (
@@ -225,6 +249,39 @@ api.mark_favorite(track_id, True)
 favorites = api.get_user_favorites(user_id)
 most_played = api.get_most_played(user_id)
 ```
+
+## 🔌 Endpoints añadidos (fin de semana)
+- `/favorites` **(POST/DELETE/GET)**: marcar y leer favoritos por usuario (`artist|album|track`).
+- `/images/proxy?url=&size=`: proxy + resize WebP en caché local (`cache/images`), usado en búsquedas, fichas y álbumes.
+- `/search/orchestrated`: ahora **lee primero de la base de datos** y solo consulta APIs externas si faltan datos.
+- `/artists/profile/{spotify_id}` y `/search/artist-profile`: al consultarlos, guardan en background la discografía del artista + hasta 5 similares.
+- `/albums/spotify/{id}`: devuelve wiki de Last.fm y URLs de imagen ya proxied.
+- `DELETE /albums/id/{id}` / `delete_track` (CRUD) bloquean la operación si el recurso está en favoritos.
+
+## 📂 Rutas de almacenamiento y caché
+- `storage/images/artists` → retratos finales (ya optimizados).
+- `storage/images/albums` → portadas finales.
+- `storage/music_downloads` → audio descargado/local.
+- `cache/images` → caché WebP generada por `/images/proxy`.
+- `downloads/` (histórico) y `cache/` se pueden limpiar si necesitas espacio; los favoritos bloquean borrados de registros en BD.
+
+## 🧪 Tests rápidos + cómo ver la base de datos
+- **Smoke de expansión y favoritos**: `python test_library_expansion.py` (requiere `SPOTIFY_CLIENT_ID/SECRET` y `LASTFM_API_KEY` en `.env`). Verifica que artistas/albums/tracks se guarden con campos nuevos (`download_status`, `lyrics_*`, `last_refreshed_at`, etc.).
+- **Inspección manual vía psql**:
+  ```bash
+  psql "$DATABASE_URL" -c "SELECT table_name FROM information_schema.tables WHERE table_schema='public';"
+  psql "$DATABASE_URL" -c "SELECT id, name, followers, last_refreshed_at FROM artist ORDER BY followers DESC LIMIT 5;"
+  psql "$DATABASE_URL" -c "SELECT id, target_type, artist_id, album_id, track_id FROM userfavorite LIMIT 5;"
+  ```
+- **Script de inspección**: `python database_inspection.py` imprime usuarios, artistas, tracks y descargas para una vista rápida.
+- **Reset total (cuidado, borra todo)**:
+  ```bash
+  psql "$DATABASE_URL" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+  python - <<'PY'
+  from app.core.db import create_db_and_tables
+  create_db_and_tables()
+  PY
+  ```
 
 ## 📊 **Architecture Highlights**
 
