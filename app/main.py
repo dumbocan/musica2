@@ -13,6 +13,7 @@ from .api.search import router as search_router
 from .api.charts import router as charts_router
 from .api.youtube import router as youtube_router
 from .api.auth import router as auth_router
+from .api.favorites import router as favorites_router
 from .core.db import create_db_and_tables
 
 app = FastAPI(title="Audio2 API", description="Personal Music API Backend")
@@ -60,3 +61,4 @@ app.include_router(search_router)
 app.include_router(charts_router)
 app.include_router(youtube_router)
 app.include_router(auth_router)
+app.include_router(favorites_router)

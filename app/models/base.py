@@ -13,6 +13,12 @@ from enum import Enum
 #     POP = "pop"
 #     # etc.
 
+
+class FavoriteTargetType(str, Enum):
+    ARTIST = "artist"
+    ALBUM = "album"
+    TRACK = "track"
+
 class User(SQLModel, table=True):
     """Complete user model for multiuser system."""
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -35,6 +41,7 @@ class User(SQLModel, table=True):
     playlists: Optional[List["Playlist"]] = Relationship(back_populates="user")
     play_history: Optional[List["PlayHistory"]] = Relationship(back_populates="user")
     learned_artists: Optional[List["AlgorithmLearning"]] = Relationship(back_populates="user")
+    favorites: Optional[List["UserFavorite"]] = Relationship(back_populates="user")
 
 
 class Artist(SQLModel, table=True):
@@ -55,6 +62,7 @@ class Artist(SQLModel, table=True):
     # Relationships
     albums: Optional[List["Album"]] = Relationship(back_populates="artist")
     tracks: Optional[List["Track"]] = Relationship(back_populates="artist")
+    favorites: Optional[List["UserFavorite"]] = Relationship(back_populates="artist")
 
 
 class Album(SQLModel, table=True):
@@ -73,6 +81,7 @@ class Album(SQLModel, table=True):
     # Relationships
     artist: Artist = Relationship(back_populates="albums")
     tracks: Optional[List["Track"]] = Relationship(back_populates="album")
+    favorites: Optional[List["UserFavorite"]] = Relationship(back_populates="album")
 
 
 class Track(SQLModel, table=True):
@@ -101,6 +110,7 @@ class Track(SQLModel, table=True):
     album: Optional[Album] = Relationship(back_populates="tracks")
     tags: Optional[List["TrackTag"]] = Relationship(back_populates="track")
     play_history: Optional[List["PlayHistory"]] = Relationship(back_populates="track")
+    favorites: Optional[List["UserFavorite"]] = Relationship(back_populates="track")
 
 
 class Playlist(SQLModel, table=True):
@@ -109,7 +119,11 @@ class Playlist(SQLModel, table=True):
     name: str = Field(max_length=150)
     description: Optional[str] = None
     user_id: int = Field(foreign_key="user.id")
+    external_source: Optional[str] = Field(default=None, max_length=50)  # e.g., 'spotify'
+    external_id: Optional[str] = Field(default=None, max_length=120)  # playlist id on source
+    imported_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
     # Relationships
     user: User = Relationship(back_populates="playlists")
@@ -126,6 +140,22 @@ class PlaylistTrack(SQLModel, table=True):
 
     playlist: Playlist = Relationship(back_populates="tracks")
     track: Track = Relationship()
+
+
+class UserFavorite(SQLModel, table=True):
+    """User favorites for artists, albums, tracks."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", ondelete="CASCADE")
+    target_type: FavoriteTargetType = Field(default=FavoriteTargetType.TRACK)
+    artist_id: Optional[int] = Field(default=None, foreign_key="artist.id", index=True)
+    album_id: Optional[int] = Field(default=None, foreign_key="album.id", index=True)
+    track_id: Optional[int] = Field(default=None, foreign_key="track.id", index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    user: User = Relationship(back_populates="favorites")
+    artist: Optional[Artist] = Relationship(back_populates="favorites")
+    album: Optional[Album] = Relationship(back_populates="favorites")
+    track: Optional[Track] = Relationship(back_populates="favorites")
 
 class YouTubeDownload(SQLModel, table=True):
     """Tracking system for YouTube audio downloads."""

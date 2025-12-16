@@ -7,7 +7,10 @@ import unicodedata
 from typing import Optional, List
 from sqlmodel import Session, select
 
-from .models.base import Artist, Album, Track, User, Playlist, PlaylistTrack, Tag, TrackTag, PlayHistory, AlgorithmLearning
+from .models.base import (
+    Artist, Album, Track, User, Playlist, PlaylistTrack, Tag, TrackTag,
+    PlayHistory, AlgorithmLearning, UserFavorite, FavoriteTargetType
+)
 from .core.db import get_session
 from datetime import datetime
 
@@ -196,6 +199,99 @@ def update_track_spotify_data(track_id: int, spotify_data: dict):
             track.updated_at = datetime.utcnow()  # Update timestamp
             session.commit()
         return track
+    finally:
+        session.close()
+
+
+# Favorites
+def add_favorite(user_id: int, target_type: FavoriteTargetType, target_id: int) -> UserFavorite:
+    session = get_session()
+    try:
+        fav = None
+        if target_type == FavoriteTargetType.ARTIST:
+            fav = session.exec(
+                select(UserFavorite).where(
+                    UserFavorite.user_id == user_id,
+                    UserFavorite.target_type == target_type,
+                    UserFavorite.artist_id == target_id
+                )
+            ).first()
+            if not fav:
+                fav = UserFavorite(user_id=user_id, target_type=target_type, artist_id=target_id)
+        elif target_type == FavoriteTargetType.ALBUM:
+            fav = session.exec(
+                select(UserFavorite).where(
+                    UserFavorite.user_id == user_id,
+                    UserFavorite.target_type == target_type,
+                    UserFavorite.album_id == target_id
+                )
+            ).first()
+            if not fav:
+                fav = UserFavorite(user_id=user_id, target_type=target_type, album_id=target_id)
+        elif target_type == FavoriteTargetType.TRACK:
+            fav = session.exec(
+                select(UserFavorite).where(
+                    UserFavorite.user_id == user_id,
+                    UserFavorite.target_type == target_type,
+                    UserFavorite.track_id == target_id
+                )
+            ).first()
+            if not fav:
+                fav = UserFavorite(user_id=user_id, target_type=target_type, track_id=target_id)
+        else:
+            raise ValueError("Unsupported favorite type")
+        session.add(fav)
+        session.commit()
+        session.refresh(fav)
+        return fav
+    finally:
+        session.close()
+
+
+def remove_favorite(user_id: int, target_type: FavoriteTargetType, target_id: int) -> bool:
+    session = get_session()
+    try:
+        fav = None
+        if target_type == FavoriteTargetType.ARTIST:
+            fav = session.exec(
+                select(UserFavorite).where(
+                    UserFavorite.user_id == user_id,
+                    UserFavorite.target_type == target_type,
+                    UserFavorite.artist_id == target_id
+                )
+            ).first()
+        elif target_type == FavoriteTargetType.ALBUM:
+            fav = session.exec(
+                select(UserFavorite).where(
+                    UserFavorite.user_id == user_id,
+                    UserFavorite.target_type == target_type,
+                    UserFavorite.album_id == target_id
+                )
+            ).first()
+        elif target_type == FavoriteTargetType.TRACK:
+            fav = session.exec(
+                select(UserFavorite).where(
+                    UserFavorite.user_id == user_id,
+                    UserFavorite.target_type == target_type,
+                    UserFavorite.track_id == target_id
+                )
+            ).first()
+        if fav:
+            session.delete(fav)
+            session.commit()
+            return True
+        return False
+    finally:
+        session.close()
+
+
+def list_favorites(user_id: int, target_type: Optional[FavoriteTargetType] = None):
+    session = get_session()
+    try:
+        stmt = select(UserFavorite).where(UserFavorite.user_id == user_id)
+        if target_type:
+            stmt = stmt.where(UserFavorite.target_type == target_type)
+        return session.exec(stmt).all()
     finally:
         session.close()
 
