@@ -353,14 +353,26 @@ def get_artist_discography(artist_id: int = Path(..., description="Local artist 
             album_data["tracks"] = [track.dict() for track in tracks]
             discography["albums"].append(album_data)
 
-        return discography
+    return discography
+
+
+@router.get("/spotify/{spotify_id}/local")
+def get_artist_by_spotify(spotify_id: str) -> Artist | None:
+    """Get the locally stored artist by Spotify ID."""
+    with get_session() as session:
+        artist = session.exec(select(Artist).where(Artist.spotify_id == spotify_id)).first()
+        return artist
 
 
 @router.get("/")
-def get_artists() -> List[Artist]:
-    """Get all saved artists from DB."""
+def get_artists(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100)
+) -> List[Artist]:
+    """Get saved artists from DB with pagination."""
     with get_session() as session:
-        artists = session.exec(select(Artist)).all()
+        statement = select(Artist).offset(offset).limit(limit)
+        artists = session.exec(statement).all()
     return artists
 
 

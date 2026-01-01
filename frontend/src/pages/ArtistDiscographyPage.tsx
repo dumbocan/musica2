@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { audio2Api } from '@/lib/api';
+import { audio2Api, API_BASE_URL } from '@/lib/api';
+import type { Artist as LocalArtist } from '@/types/api';
 
 type AlbumImage = { url: string };
 type Album = { id: string; name: string; release_date?: string; images?: AlbumImage[] };
@@ -26,6 +27,7 @@ export function ArtistDiscographyPage() {
   const navigate = useNavigate();
   const [artist, setArtist] = useState<ArtistInfo | null>(null);
   const [albums, setAlbums] = useState<Album[]>([]);
+  const [localArtist, setLocalArtist] = useState<LocalArtist | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showFullBio, setShowFullBio] = useState(false);
@@ -36,12 +38,14 @@ export function ArtistDiscographyPage() {
       setLoading(true);
       setError(null);
       try {
-        const [artistRes, albumsRes] = await Promise.all([
+        const [artistRes, albumsRes, localRes] = await Promise.all([
           audio2Api.getArtistInfo(spotifyId),
           audio2Api.getArtistAlbums(spotifyId),
+          audio2Api.getLocalArtistBySpotifyId(spotifyId).catch(() => ({ data: null })),
         ]);
         setArtist(artistRes.data);
         setAlbums(albumsRes.data || []);
+        setLocalArtist(localRes.data || null);
       } catch (err: any) {
         setError(err?.response?.data?.detail || err?.message || 'Error cargando discografía');
       } finally {
@@ -93,27 +97,11 @@ export function ArtistDiscographyPage() {
 
       <div className="card" style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: 16 }}>
         <div>
-          {artist?.spotify?.images?.[0]?.url ? (
-            <img
-              src={artist.spotify.images[0].url}
-              alt={artistName}
-              style={{ width: '100%', borderRadius: 12, objectFit: 'cover' }}
-            />
-          ) : (
-            <div
-              style={{
-                width: '100%',
-                height: 200,
-                borderRadius: 12,
-                background: 'var(--panel)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center'
-              }}
-            >
-              {artistName}
-            </div>
-          )}
+          <ArtistPhoto
+            name={artistName}
+            remoteUrl={artist?.spotify?.images?.[0]?.url}
+            localImage={localArtist?.images}
+          />
         </div>
         <div className="space-y-3">
           <div>
@@ -212,6 +200,70 @@ export function ArtistDiscographyPage() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function parseStoredImages(raw?: string | null): string[] {
+  if (!raw) return [];
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+  const tryParse = (value: string) => {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((item) => (typeof item === 'string' ? item : item?.url))
+          .filter(Boolean);
+      }
+    } catch (err) {
+      return [];
+    }
+    return [];
+  };
+
+  const first = tryParse(trimmed);
+  if (first.length) return first;
+  const normalized = trimmed
+    .replace(/'/g, '"')
+    .replace(/None/g, 'null')
+    .replace(/True/g, 'true')
+    .replace(/False/g, 'false');
+  return tryParse(normalized);
+}
+
+function ArtistPhoto({ name, remoteUrl, localImage }: { name: string; remoteUrl?: string; localImage?: string | null }) {
+  const localImages = parseStoredImages(localImage);
+  const candidate = remoteUrl || localImages[0] || '';
+  let proxied: string | null = null;
+  if (candidate.startsWith('/images/proxy')) {
+    proxied = `${API_BASE_URL}${candidate}`;
+  } else if (candidate) {
+    proxied = `${API_BASE_URL}/images/proxy?url=${encodeURIComponent(candidate)}&size=512`;
+  }
+
+  if (proxied) {
+    return (
+      <img
+        src={proxied}
+        alt={name}
+        style={{ width: '100%', borderRadius: 12, objectFit: 'cover' }}
+      />
+    );
+  }
+  return (
+    <div
+      style={{
+        width: '100%',
+        height: 200,
+        borderRadius: 12,
+        background: 'var(--panel)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+    >
+      {name}
     </div>
   );
 }

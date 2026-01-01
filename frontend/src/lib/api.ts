@@ -49,6 +49,8 @@ export const audio2Api = {
     api.get(`/artists/${spotifyId}/full-discography`),
   getArtistInfo: (spotifyId: string) =>
     api.get(`/artists/${spotifyId}/info`),
+  getLocalArtistBySpotifyId: (spotifyId: string) =>
+    api.get(`/artists/spotify/${spotifyId}/local`),
   getArtistAlbums: (spotifyId: string) =>
     api.get(`/artists/${spotifyId}/albums`),
 
@@ -59,7 +61,8 @@ export const audio2Api = {
   searchTracksQuick: (params: { q: string; limit?: number }) =>
     api.get('/search/tracks-quick', { params }),
 
-  getAllArtists: () => api.get('/artists/'),
+  getAllArtists: (params?: { offset?: number; limit?: number }) =>
+    api.get('/artists/', { params }),
 
   // Albums
   getAllAlbums: () => api.get('/albums/'),

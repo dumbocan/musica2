@@ -7,6 +7,14 @@ export default {
     './app/**/*.{ts,tsx}',
     './src/**/*.{ts,tsx}',
   ],
+  safelist: [
+    'rounded-full',
+    'w-28',
+    'h-28',
+    'bg-[#151823]',
+    'border-white/10',
+    'shadow-[0_8px_18px_rgba(0,0,0,0.35)]'
+  ],
   prefix: "",
   theme: {
     container: {
