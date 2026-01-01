@@ -159,6 +159,7 @@ function AppShell() {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/artists/discography/:spotifyId" element={<ArtistDiscographyPage />} />
+            <Route path="/artists/:spotifyId" element={<ArtistDiscographyPage />} />
             <Route path="/albums/:spotifyId" element={<AlbumDetailPage />} />
             <Route path="/artists" element={<ArtistsPage />} />
             <Route path="/tracks" element={<TracksPage />} />

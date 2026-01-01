@@ -72,6 +72,8 @@ PUBLIC_PATHS = {
 @app.middleware("http")
 async def require_authenticated_user(request: Request, call_next):
     path = request.url.path
+    if request.method == "OPTIONS":
+        return await call_next(request)
     if path in PUBLIC_PATHS or any(path.startswith(p) for p in ("/static", "/favicon")):
         return await call_next(request)
 

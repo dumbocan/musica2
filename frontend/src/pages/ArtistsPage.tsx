@@ -1,18 +1,57 @@
 import { useEffect, useState } from 'react';
-import { audio2Api } from '@/lib/api';
+import { useNavigate } from 'react-router-dom';
+import { audio2Api, API_BASE_URL } from '@/lib/api';
 import { useApiStore } from '@/store/useApiStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { Artist } from '@/types/api';
-import { Music, Loader2, RefreshCw, ExternalLink } from 'lucide-react';
+import { Music, Loader2, RefreshCw } from 'lucide-react';
+
+const parseStoredJsonArray = (raw?: string | null) => {
+  if (!raw) return [] as any[];
+  const trimmed = raw.trim();
+  if (!trimmed) return [] as any[];
+
+  const tryParse = (value: string) => {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const firstAttempt = tryParse(trimmed);
+  if (firstAttempt.length) return firstAttempt;
+
+  // Backend stores Python-style lists (single quotes), normalize for JSON.parse
+  const normalized = trimmed
+    .replace(/'/g, '"')
+    .replace(/None/g, 'null');
+  return tryParse(normalized);
+};
+const getArtistAssets = (artist: Artist) => {
+  const images = parseStoredJsonArray(artist.images);
+  const firstImage = images.find((img) => typeof img?.url === 'string');
+  const genres = parseStoredJsonArray(artist.genres).filter((g) => typeof g === 'string');
+
+  const proxyUrl = firstImage?.url
+    ? `${API_BASE_URL}/images/proxy?url=${encodeURIComponent(firstImage.url)}&size=256`
+    : null;
+
+  return {
+    imageUrl: proxyUrl ?? null,
+    genres,
+  };
+};
 
 export function ArtistsPage() {
   const [artists, setArtists] = useState<Artist[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
-
   const { isArtistsLoading } = useApiStore();
+  const navigate = useNavigate();
 
   useEffect(() => {
     loadArtists();
@@ -25,7 +64,8 @@ export function ArtistsPage() {
     try {
       const res = await audio2Api.getAllArtists();
       const data = res.data || [];
-      setArtists(data.slice(0, 50)); // Limit for performance
+      const limited = data.slice(0, 50);
+      setArtists(limited);
     } catch (err) {
       console.error('Failed to load artists:', err);
       setError('Failed to load artists. Please try again.');
@@ -97,90 +137,50 @@ export function ArtistsPage() {
         </div>
       )}
 
-      {/* Artist Grid */}
       {!isLoading && !isArtistsLoading && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredArtists.map((artist) => (
-            <div
-              key={artist.id}
-              className="border rounded-lg p-6 hover:shadow-lg transition-shadow"
-            >
-              {/* Artist Header */}
-              <div className="flex items-center space-x-4 mb-4">
-                {artist.images ? (
-                  <img
-                    src={JSON.parse(artist.images)[0]?.url || ''}
-                    alt={artist.name}
-                    className="w-16 h-16 rounded-lg object-cover"
-                    onError={(e) => {
-                      e.currentTarget.style.display = 'none';
-                    }}
-                  />
-                ) : null}
+        <div className="grid grid-cols-1 gap-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4 sm:gap-5">
+            {filteredArtists.map((artist) => {
+              const { imageUrl, genres } = getArtistAssets(artist);
+              const disabled = !artist.spotify_id;
 
-                {!artist.images && (
-                  <div className="w-16 h-16 rounded-lg bg-primary/10 flex items-center justify-center">
-                    <Music className="h-8 w-8 text-primary" />
-                  </div>
-                )}
-
-                <div className="flex-1 min-w-0">
-                  <h3 className="font-semibold text-lg truncate">{artist.name}</h3>
-                  <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                    {artist.popularity > 0 && (
-                      <span>Popularity: {artist.popularity}</span>
-                    )}
-                    {artist.followers && artist.followers > 0 && (
-                      <span>{artist.followers.toLocaleString()} followers</span>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Artist Details */}
-              <div className="space-y-2 text-sm">
-                {artist.genres && (
-                  <div>
-                    <span className="font-medium">Genres:</span>{' '}
-                    <span className="text-muted-foreground">
-                      {[artist.genres].flat().slice(0, 3).join(', ')}
-                    </span>
-                  </div>
-                )}
-
-                {artist.bio_summary && (
-                  <div>
-                    <span className="font-medium">Bio:</span>{' '}
-                    <span className="text-muted-foreground line-clamp-2">
-                      {artist.bio_summary}
-                    </span>
-                  </div>
-                )}
-
-                <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>Added: {formatDate(artist.created_at)}</span>
-                  <span>Updated: {formatDate(artist.updated_at)}</span>
-                </div>
-              </div>
-
-              {/* Actions */}
-              <div className="mt-4 flex gap-2">
-                <Button variant="outline" size="sm" className="flex-1">
-                  <ExternalLink className="h-4 w-4 mr-1" />
-                  Discography
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
+              return (
+                <button
+                  key={artist.id}
                   onClick={() => {
-                    // TODO: Implement enrich bio
+                    if (artist.spotify_id) {
+                      navigate(`/artists/${artist.spotify_id}`);
+                    }
                   }}
+                  className={`w-full h-full text-left rounded-2xl border bg-card/80 p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+                    disabled ? 'opacity-70 cursor-not-allowed' : ''
+                  }`}
+                  disabled={disabled}
                 >
-                  <RefreshCw className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-          ))}
+                  <div className="flex items-center gap-3">
+                    {imageUrl ? (
+                      <img
+                        src={imageUrl}
+                        alt={artist.name}
+                        className="w-12 h-12 rounded-xl object-cover"
+                      />
+                    ) : (
+                      <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
+                        <Music className="h-6 w-6 text-primary" />
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <p className="font-semibold truncate">{artist.name}</p>
+                      <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground mt-1">
+                        {artist.popularity > 0 && <span>Pop {artist.popularity}</span>}
+                        {genres.length > 0 && <span>{genres.slice(0, 2).join(', ')}</span>}
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 
