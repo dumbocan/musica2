@@ -30,6 +30,7 @@ A **complete REST API backend** for personal music streaming, featuring **comple
 - **Wiki de álbum (Last.fm)**: `/albums/spotify/{id}` se enriquece con `album.getInfo` de Last.fm. En la UI se muestra un resumen de la historia en párrafos, con enlace a la historia completa.
 - **Navegación rápida**: en resultados de tags/géneros, las tarjetas apuntan a tu propia ficha/descografía si hay `spotify.id`, en vez de ir a Last.fm.
 - **Pagos de rendimiento**: timeouts con fallback, concurrencia controlada en enriquecimiento Spotify, lotes de 60+ artistas para tags con carga progresiva en frontend.
+- **Biblioteca de artistas renovada**: filtros “Filtered Results / Sort / Genre” usan una tarjeta única, tipografía uniforme y controles alineados con la barra global. Las imágenes ahora vienen siempre desde cache local y el scroll infinito respeta el orden elegido (popularidad asc/desc o alfabético) sin reorganizar la lista cargada.
 
 ## 🆕 Backend & Data Weekend (favoritos, caché de imágenes, DB-first)
 
@@ -38,6 +39,7 @@ A **complete REST API backend** for personal music streaming, featuring **comple
 - **Búsqueda DB-first**: las búsquedas orquestadas leen primero de PostgreSQL y solo van a APIs externas si faltan datos; al visitar una ficha de artista se dispara un guardado en background del artista + hasta 5 similares (álbumes + tracks).
 - **Refresco diario**: bucle en `app/core/maintenance.py` que refresca discografía de los artistas favoritos cada 24h (se levanta en `startup`).
 - **Proxy y resize de imágenes**: endpoint `/images/proxy?url=&size=` reduce peso con Pillow y guarda en `cache/images/*.webp`; todas las imágenes de búsqueda/artista/álbum se reescriben para servir desde la caché local.
+- **Arte cacheado en la BD**: cada vez que se guarda o se lista un artista, las portadas se serializan ya proxificadas (`app/core/image_proxy.py` + `save_artist`). El endpoint `/artists/` refresca automáticamente las entradas antiguas para que incluso al cargar “fallbacks” nunca se golpee Spotify desde el frontend.
 - **Rutas de almacenamiento**: `storage/images/artists`, `storage/images/albums`, `storage/music_downloads` para assets locales; la caché redimensionada vive en `cache/images`.
 - **Resistencia a borrados**: `delete_artist`/`delete_album`/`delete_track` rechazan la operación si hay favoritos. Nuevos helpers en `crud` + endpoints `DELETE /albums/id/{id}` ya protegidos.
 - **Dependencias**: añadido `Pillow` para el resize; `discogs-client` fijado a `2.3.0`.

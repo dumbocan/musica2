@@ -91,7 +91,8 @@ export function ArtistDiscographyPage() {
             cursor: 'pointer'
           }}
         >
-          ← Volver a búsqueda
+          <span style={{ marginRight: 5 }}>←</span>
+          <span>ATRAS</span>
         </button>
       </div>
 

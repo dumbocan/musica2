@@ -21,6 +21,8 @@ from ..models.base import Artist, Album, Track
 from sqlmodel import select
 from urllib.parse import quote_plus
 
+from ..core.image_proxy import proxy_image_list
+
 
 def _infer_genre_keywords(query: str) -> list[str]:
     """Lightweight genre inference to filter noisy matches."""
@@ -49,19 +51,6 @@ def _matches_genre(artist: dict, genre_keys: list[str], extra_tags: Optional[lis
     if any(any(bad in g for bad in disallow) for g in pool):
         return False
     return any(any(gk in g for g in pool) for gk in genre_keys)
-
-
-def _proxy_images(images: list, size: int = 512) -> list:
-    """Replace image URLs with proxied resized versions."""
-    proxied = []
-    for img in images or []:
-        url = None
-        if isinstance(img, dict):
-            url = img.get("url") or img.get("#text")
-        if not url:
-            continue
-        proxied.append({"url": f"/images/proxy?url={quote_plus(url)}&size={size}"})
-    return proxied
 
 
 async def _safe_call(coro, default):
@@ -226,7 +215,7 @@ async def orchestrated_search(
                 imgs = json.loads(a.images) if a.images else []
             except Exception:
                 imgs = []
-            data["images"] = _proxy_images(imgs, size=512)
+            data["images"] = proxy_image_list(imgs, size=512)
             artists_for_grid.append(data)
         return {
             "query": q,
@@ -277,7 +266,7 @@ async def orchestrated_search(
         if not best and sp_sorted:
             best = sp_sorted[0]
         if best:
-            best["images"] = _proxy_images(best.get("images", []), size=512)
+            best["images"] = proxy_image_list(best.get("images", []), size=512)
         return {
             "name": name,
             "url": artist.get("url"),
@@ -365,7 +354,7 @@ async def orchestrated_search(
                 candidate = sp_candidates[0]
                 if _name_matches(name, candidate.get("name", "")):
                     spotify_match = candidate
-                    spotify_match["images"] = _proxy_images(spotify_match.get("images", []), size=512)
+                    spotify_match["images"] = proxy_image_list(spotify_match.get("images", []), size=512)
             followers = (spotify_match or {}).get("followers", {}).get("total", 0)
             if followers < max(min_followers, 1_000_000):
                 return None

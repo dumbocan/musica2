@@ -5,9 +5,10 @@ import type { Artist } from '@/types/api';
 interface Options {
   pageSize?: number;
   searchTerm?: string;
+  sortOption?: 'pop-desc' | 'pop-asc' | 'name-asc';
 }
 
-export function usePaginatedArtists({ pageSize = 30, searchTerm = '' }: Options = {}) {
+export function usePaginatedArtists({ pageSize = 30, searchTerm = '', sortOption = 'pop-desc' }: Options = {}) {
   const [artists, setArtists] = useState<Artist[]>([]);
   const [offset, setOffset] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
@@ -17,11 +18,12 @@ export function usePaginatedArtists({ pageSize = 30, searchTerm = '' }: Options 
   const loadInitial = useCallback(async () => {
     setIsLoading(true);
     setError('');
+    setArtists([]);
+    setOffset(0);
     try {
-      const res = await audio2Api.getAllArtists({ offset: 0, limit: pageSize });
+      const res = await audio2Api.getAllArtists({ offset: 0, limit: pageSize, order: sortOption });
       const data = res.data || [];
-      const sorted = data.sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
-      setArtists(sorted);
+      setArtists(data);
       setOffset(data.length);
       setHasMore(data.length === pageSize && data.length > 0);
     } catch (err) {
@@ -30,20 +32,19 @@ export function usePaginatedArtists({ pageSize = 30, searchTerm = '' }: Options 
     } finally {
       setIsLoading(false);
     }
-  }, [pageSize]);
+  }, [pageSize, sortOption]);
 
   const loadMore = useCallback(async () => {
     if (!hasMore || isLoading || searchTerm.trim()) return;
     setIsLoading(true);
     setError('');
     try {
-      const res = await audio2Api.getAllArtists({ offset, limit: pageSize });
+      const res = await audio2Api.getAllArtists({ offset, limit: pageSize, order: sortOption });
       const data = res.data || [];
       setArtists((prev) => {
         const existingIds = new Set(prev.map((artist) => artist.id));
         const deduped = data.filter((artist) => !existingIds.has(artist.id));
-        const combined = [...prev, ...deduped];
-        return combined.sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
+        return [...prev, ...deduped];
       });
       setOffset((prev) => prev + data.length);
       setHasMore(data.length === pageSize && data.length > 0);
@@ -53,7 +54,7 @@ export function usePaginatedArtists({ pageSize = 30, searchTerm = '' }: Options 
     } finally {
       setIsLoading(false);
     }
-  }, [hasMore, isLoading, offset, pageSize, searchTerm]);
+  }, [hasMore, isLoading, offset, pageSize, searchTerm, sortOption]);
 
   return {
     artists,

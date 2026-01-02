@@ -9,7 +9,7 @@ from fastapi import APIRouter, Path, HTTPException
 from ..core.spotify import spotify_client
 from ..core.config import settings
 from ..core.lastfm import lastfm_client
-from ..api.search import _proxy_images
+from ..core.image_proxy import proxy_image_list
 from ..crud import save_album, delete_album
 from ..core.db import get_session
 from ..models.base import Album, Track
@@ -29,7 +29,7 @@ async def get_album_from_spotify(spotify_id: str = Path(..., description="Spotif
             raise HTTPException(status_code=404, detail="Album not found on Spotify")
         tracks = await spotify_client.get_album_tracks(spotify_id)
         album["tracks"] = tracks
-        album["images"] = _proxy_images(album.get("images", []), size=512)
+        album["images"] = proxy_image_list(album.get("images", []), size=512)
         # Enrich with Last.fm wiki if possible
         try:
             artist_name = (album.get("artists") or [{}])[0].get("name")

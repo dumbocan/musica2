@@ -1,11 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { API_BASE_URL } from '@/lib/api';
 import { useApiStore } from '@/store/useApiStore';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import type { Artist } from '@/types/api';
-import { Music, Loader2, RefreshCw } from 'lucide-react';
+import { Music, Loader2 } from 'lucide-react';
 import { usePaginatedArtists } from '@/hooks/usePaginatedArtists';
 
 const parseStoredJsonArray = (raw?: string | null) => {
@@ -32,12 +30,22 @@ const parseStoredJsonArray = (raw?: string | null) => {
 };
 const getArtistAssets = (artist: Artist) => {
   const images = parseStoredJsonArray(artist.images);
-  const firstImage = images.find((img) => typeof img?.url === 'string');
+  const firstImageEntry = images.find((img) => {
+    if (typeof img === 'string') return !!img.trim();
+    return typeof img?.url === 'string';
+  });
+  const rawUrl = typeof firstImageEntry === 'string'
+    ? firstImageEntry
+    : firstImageEntry?.url;
   const genres = parseStoredJsonArray(artist.genres).filter((g) => typeof g === 'string');
 
-  const proxyUrl = firstImage?.url
-    ? `${API_BASE_URL}/images/proxy?url=${encodeURIComponent(firstImage.url)}&size=256`
-    : null;
+  let proxyUrl: string | null = null;
+  const candidate = rawUrl || '';
+  if (candidate) {
+    proxyUrl = candidate.startsWith('/images/proxy')
+      ? `${API_BASE_URL}${candidate}`
+      : `${API_BASE_URL}/images/proxy?url=${encodeURIComponent(candidate)}&size=256`;
+  }
 
   return {
     imageUrl: proxyUrl ?? null,
@@ -47,7 +55,9 @@ const getArtistAssets = (artist: Artist) => {
 
 export function ArtistsPage() {
   const [searchTerm, setSearchTerm] = useState('');
-  const { artists, isLoading, error, hasMore, loadInitial, loadMore } = usePaginatedArtists({ pageSize: 30, searchTerm });
+  const [sortOption, setSortOption] = useState<'pop-desc' | 'pop-asc' | 'name-asc'>('pop-desc');
+  const [genreFilter, setGenreFilter] = useState('');
+  const { artists, isLoading, error, hasMore, loadInitial, loadMore } = usePaginatedArtists({ pageSize: 30, searchTerm, sortOption });
   const { isArtistsLoading } = useApiStore();
   const navigate = useNavigate();
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -72,45 +82,84 @@ export function ArtistsPage() {
     return () => observer.disconnect();
   }, [hasMore, loadMore, searchTerm]);
 
-  const filteredArtists = artists.filter(artist =>
-    artist.name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const genreOptions = useMemo(() => {
+    const set = new Set<string>();
+    artists.forEach((artist) => {
+      parseStoredJsonArray(artist.genres).forEach((genre) => {
+        if (typeof genre === 'string' && genre.trim()) set.add(genre.trim());
+      });
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [artists]);
+
+  const filteredArtists = useMemo(() => {
+    return artists.filter((artist) => {
+      const matchesSearch = artist.name.toLowerCase().includes(searchTerm.toLowerCase());
+      const genres = parseStoredJsonArray(artist.genres)
+        .map((g) => (typeof g === 'string' ? g.toLowerCase() : ''))
+        .filter(Boolean);
+      const matchesGenre = !genreFilter || genres.includes(genreFilter.toLowerCase());
+      return matchesSearch && matchesGenre;
+    });
+  }, [artists, searchTerm, genreFilter]);
+
+  const displayArtists = filteredArtists;
 
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Artists Library</h1>
-          <p className="text-muted-foreground">
-            Browse your saved artists and manage your music collection
-          </p>
         </div>
-        <Button onClick={loadInitial} disabled={isLoading || isArtistsLoading}>
-          <RefreshCw className="h-4 w-4 mr-2" />
-          Refresh
-        </Button>
       </div>
 
-      <div className="max-w-sm">
-        <Input
-          placeholder="Search artists..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-        />
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="border rounded-lg p-4">
-          <h3 className="font-semibold">Total Artists</h3>
-          <p className="text-2xl font-bold text-primary">{artists.length}</p>
-        </div>
-        <div className="border rounded-lg p-4">
-          <h3 className="font-semibold">Filtered Results</h3>
-          <p className="text-2xl font-bold text-blue-600">{filteredArtists.length}</p>
-        </div>
-        <div className="border rounded-lg p-4">
-          <h3 className="font-semibold">Average Popularity</h3>
-          <p className="text-2xl font-bold text-green-600">-</p>
+      <div className="filter-card mb-12">
+        <div className="filter-panel">
+          <div style={{ flexBasis: 'calc(33.33% - 1rem)', flexGrow: 0, flexShrink: 0 }}>
+            <div className="filter-stat">
+              <p className="text-2xl font-bold" style={{ margin: 0, color: 'var(--accent)' }}>
+                {filteredArtists.length}
+              </p>
+              <h3 className="filter-label uppercase tracking-wide" style={{ margin: 0, color: '#fff' }}>
+                Filtered Results
+              </h3>
+            </div>
+          </div>
+          <div style={{ flexBasis: 'calc(33.33% - 1rem)', flexGrow: 0, flexShrink: 0 }}>
+            <div className="filter-control rounded-full border border-white/10 bg-[#151823] px-4 py-2">
+              <label className="filter-label uppercase tracking-wide text-white shrink-0">
+                Sort by
+              </label>
+              <select
+                value={sortOption}
+                onChange={(e) => setSortOption(e.target.value as typeof sortOption)}
+                className="filter-select text-white"
+              >
+                <option value="pop-desc">Popularity (high → low)</option>
+                <option value="pop-asc">Popularity (low → high)</option>
+                <option value="name-asc">Name (A → Z)</option>
+              </select>
+            </div>
+          </div>
+          <div style={{ flexBasis: 'calc(33.33% - 1rem)', flexGrow: 0, flexShrink: 0 }}>
+            <div className="filter-control rounded-full border border-white/10 bg-[#151823] px-4 py-2">
+              <label className="filter-label uppercase tracking-wide text-white shrink-0">
+                Genre
+              </label>
+              <select
+                value={genreFilter}
+                onChange={(e) => setGenreFilter(e.target.value)}
+                className="filter-select text-white"
+              >
+                <option value="">All</option>
+                {genreOptions.map((genre) => (
+                  <option key={genre} value={genre}>
+                    {genre}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -129,11 +178,6 @@ export function ArtistsPage() {
 
       {!isLoading && !isArtistsLoading && (
         <div className="space-y-4">
-          <div>
-            <p className="text-xs uppercase tracking-[0.35em] text-muted-foreground">Trending</p>
-            <h2 className="text-2xl font-semibold">Hot Artists</h2>
-          </div>
-
           <div
             className="grid gap-6"
             style={{
@@ -141,7 +185,7 @@ export function ArtistsPage() {
               gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
             }}
           >
-            {filteredArtists.map((artist) => {
+            {displayArtists.map((artist) => {
               const { imageUrl, genres } = getArtistAssets(artist);
               const disabled = !artist.spotify_id;
 
@@ -168,18 +212,45 @@ export function ArtistsPage() {
                   }}
                   type="button"
                 >
-                  <img
-                    src={imageUrl || ''}
-                    alt={artist.name}
-                    style={{
-                      width: '200px',
-                      height: '200px',
-                      borderRadius: '50%',
-                      objectFit: 'cover',
-                      display: 'block',
-                      margin: '0 auto 10px auto',
-                    }}
-                  />
+                  {imageUrl ? (
+                    <img
+                      src={imageUrl}
+                      alt={artist.name}
+                      style={{
+                        width: '200px',
+                        height: '200px',
+                        borderRadius: '50%',
+                        objectFit: 'cover',
+                        display: 'block',
+                        margin: '0 auto 10px auto',
+                      }}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        width: '200px',
+                        height: '200px',
+                        borderRadius: '50%',
+                        border: '1px solid var(--border)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        margin: '0 auto 10px auto',
+                        background: '#0f1320',
+                        color: '#fff',
+                        fontSize: '18px',
+                        letterSpacing: '2px',
+                      }}
+                    >
+                      {artist.name
+                        .split(' ')
+                        .filter(Boolean)
+                        .slice(0, 2)
+                        .map((word) => word[0]?.toUpperCase())
+                        .join('')
+                        .padEnd(2, '•')}
+                    </div>
+                  )}
                   <div style={{ color: 'white', textAlign: 'center', width: '100%' }}>
                     <p className="text-sm font-semibold truncate">{artist.name}</p>
                     {artist.popularity > 0 && (

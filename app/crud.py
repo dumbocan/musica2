@@ -3,6 +3,7 @@ CRUD operations using SQLModel.
 """
 
 import unicodedata
+import json
 
 from typing import Optional, List
 from sqlmodel import Session, select
@@ -12,6 +13,7 @@ from .models.base import (
     PlayHistory, AlgorithmLearning, UserFavorite, FavoriteTargetType
 )
 from .core.db import get_session
+from .core.image_proxy import proxy_image_list
 from datetime import datetime
 
 
@@ -38,11 +40,14 @@ def save_artist(artist_data: dict) -> Artist:
     artist = get_artist_by_spotify_id(spotify_id)
     session = get_session()
     try:
+        images_data = artist_data.get('images', []) or []
+        proxied_images = proxy_image_list(images_data, size=512)
+        serialized_images = json.dumps(proxied_images)
         if artist:
             artist.name = artist_data['name']
             artist.normalized_name = normalize_name(artist_data['name'])
             artist.genres = str(artist_data.get('genres', []))
-            artist.images = str(artist_data.get('images', []))
+            artist.images = serialized_images
             artist.popularity = artist_data.get('popularity', 0)
             artist.followers = artist_data.get('followers', {}).get('total', 0)
             artist.updated_at = datetime.utcnow()  # Update timestamp
@@ -58,7 +63,7 @@ def save_artist(artist_data: dict) -> Artist:
                 existing_artist.name = artist_data['name']
                 existing_artist.normalized_name = normalized
                 existing_artist.genres = str(artist_data.get('genres', []))
-                existing_artist.images = str(artist_data.get('images', []))
+                existing_artist.images = serialized_images
                 existing_artist.popularity = artist_data.get('popularity', 0)
                 existing_artist.followers = artist_data.get('followers', {}).get('total', 0)
                 existing_artist.updated_at = datetime.utcnow()  # Update timestamp
@@ -69,7 +74,7 @@ def save_artist(artist_data: dict) -> Artist:
                     name=artist_data['name'],
                     normalized_name=normalized,
                     genres=str(artist_data.get('genres', [])),
-                    images=str(artist_data.get('images', [])),
+                    images=serialized_images,
                     popularity=artist_data.get('popularity', 0),
                     followers=artist_data.get('followers', {}).get('total', 0)
                 )

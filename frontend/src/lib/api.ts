@@ -61,7 +61,7 @@ export const audio2Api = {
   searchTracksQuick: (params: { q: string; limit?: number }) =>
     api.get('/search/tracks-quick', { params }),
 
-  getAllArtists: (params?: { offset?: number; limit?: number }) =>
+  getAllArtists: (params?: { offset?: number; limit?: number; order?: 'pop-desc' | 'pop-asc' | 'name-asc' }) =>
     api.get('/artists/', { params }),
 
   // Albums

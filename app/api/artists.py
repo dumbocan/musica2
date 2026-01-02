@@ -3,9 +3,12 @@ Artist endpoints: search, discography, etc.
 """
 
 import logging
+import json
+import ast
 from typing import List
 
 from fastapi import APIRouter, Query, Path, HTTPException, BackgroundTasks
+from sqlalchemy import desc, asc
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +19,7 @@ from ..models.base import Artist
 from ..core.lastfm import lastfm_client
 from ..core.auto_download import auto_download_service
 from ..core.data_freshness import data_freshness_manager
+from ..core.image_proxy import proxy_image_list
 from sqlmodel import select
 from sqlalchemy.orm import selectinload
 
@@ -183,9 +187,7 @@ async def get_artist_info(spotify_id: str = Path(..., description="Spotify artis
         raise HTTPException(status_code=404, detail="Artist not found on Spotify")
     # Proxy images
     try:
-        from urllib.parse import quote_plus
-        from .search import _proxy_images  # reuse helper
-        spotify_data["images"] = _proxy_images(spotify_data.get("images", []), size=512)
+        spotify_data["images"] = proxy_image_list(spotify_data.get("images", []), size=512)
     except Exception:
         pass
 
@@ -364,15 +366,75 @@ def get_artist_by_spotify(spotify_id: str) -> Artist | None:
         return artist
 
 
+def _parse_images_field(raw) -> list:
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return raw
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        try:
+            return ast.literal_eval(raw)
+        except (ValueError, SyntaxError):
+            return []
+
+
+def _extract_url(entry) -> str | None:
+    if isinstance(entry, dict):
+        url = entry.get("url") or entry.get("#text")
+    elif isinstance(entry, str):
+        url = entry
+    else:
+        url = None
+    return url if isinstance(url, str) else None
+
+
+def _is_proxied_images(images: list) -> bool:
+    if not images:
+        return False
+    return all((_extract_url(img) or "").startswith("/images/proxy") for img in images)
+
+
 @router.get("/")
-def get_artists(
+async def get_artists(
     offset: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=100)
+    limit: int = Query(50, ge=1, le=100),
+    order: str = Query(
+        "pop-desc",
+        pattern="^(pop-desc|pop-asc|name-asc)$",
+        description="Ordering for returned artists"
+    )
 ) -> List[Artist]:
-    """Get saved artists from DB with pagination."""
+    """Get saved artists with pagination, ordering, and ensure cached images are proxied."""
+    order_by_map = {
+        "pop-desc": desc(Artist.popularity),
+        "pop-asc": asc(Artist.popularity),
+        "name-asc": asc(Artist.name)
+    }
+    order_by_clause = order_by_map.get(order, desc(Artist.popularity))
     with get_session() as session:
-        statement = select(Artist).offset(offset).limit(limit)
+        statement = select(Artist).order_by(order_by_clause).offset(offset).limit(limit)
         artists = session.exec(statement).all()
+        needs_commit = False
+        for artist in artists:
+            stored_images = _parse_images_field(artist.images)
+            if _is_proxied_images(stored_images):
+                continue
+            proxied = proxy_image_list(stored_images, size=256)
+            if not proxied and artist.spotify_id:
+                try:
+                    spotify_data = await spotify_client.get_artist(artist.spotify_id)
+                    proxied = proxy_image_list(spotify_data.get("images", []), size=256)
+                except Exception as exc:
+                    logger.warning("Failed to refresh artist %s images: %s", artist.spotify_id, exc)
+                    proxied = []
+            if proxied:
+                artist.images = json.dumps(proxied)
+                session.add(artist)
+                needs_commit = True
+        if needs_commit:
+            session.commit()
     return artists
 
 
