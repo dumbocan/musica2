@@ -41,11 +41,7 @@ export function usePaginatedArtists({ pageSize = 30, searchTerm = '', sortOption
     try {
       const res = await audio2Api.getAllArtists({ offset, limit: pageSize, order: sortOption });
       const data = res.data || [];
-      setArtists((prev) => {
-        const existingIds = new Set(prev.map((artist) => artist.id));
-        const deduped = data.filter((artist) => !existingIds.has(artist.id));
-        return [...prev, ...deduped];
-      });
+      setArtists((prev) => [...prev, ...data]);
       setOffset((prev) => prev + data.length);
       setHasMore(data.length === pageSize && data.length > 0);
     } catch (err) {

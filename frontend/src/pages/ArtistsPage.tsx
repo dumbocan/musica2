@@ -169,7 +169,7 @@ export function ArtistsPage() {
         </div>
       )}
 
-      {(isLoading || isArtistsLoading) && (
+      {(isLoading || isArtistsLoading) && artists.length === 0 && (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-8 w-8 animate-spin mr-3" />
           Loading artists...
@@ -266,6 +266,12 @@ export function ArtistsPage() {
               ref={sentinelRef}
               style={{ height: 1 }}
             />
+          )}
+          {isLoading && artists.length > 0 && (
+            <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin mr-2" />
+              Loading more artists...
+            </div>
           )}
         </div>
       )}
