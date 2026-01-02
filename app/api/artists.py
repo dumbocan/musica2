@@ -408,13 +408,13 @@ async def get_artists(
 ) -> List[Artist]:
     """Get saved artists with pagination, ordering, and ensure cached images are proxied."""
     order_by_map = {
-        "pop-desc": desc(Artist.popularity),
-        "pop-asc": asc(Artist.popularity),
-        "name-asc": asc(Artist.name)
+        "pop-desc": [desc(Artist.popularity), asc(Artist.id)],
+        "pop-asc": [asc(Artist.popularity), asc(Artist.id)],
+        "name-asc": [asc(Artist.name), asc(Artist.id)]
     }
-    order_by_clause = order_by_map.get(order, desc(Artist.popularity))
+    order_by_clause = order_by_map.get(order, order_by_map["pop-desc"])
     with get_session() as session:
-        statement = select(Artist).order_by(order_by_clause).offset(offset).limit(limit)
+        statement = select(Artist).order_by(*order_by_clause).offset(offset).limit(limit)
         artists = session.exec(statement).all()
         needs_commit = False
         for artist in artists:
