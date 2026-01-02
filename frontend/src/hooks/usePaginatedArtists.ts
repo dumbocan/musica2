@@ -15,6 +15,18 @@ export function usePaginatedArtists({ pageSize = 30, searchTerm = '', sortOption
   const [error, setError] = useState('');
   const [hasMore, setHasMore] = useState(true);
 
+  const mergeUnique = useCallback((current: Artist[], incoming: Artist[]) => {
+    const seen = new Set(current.map((artist) => artist.id));
+    const merged = [...current];
+    incoming.forEach((artist) => {
+      if (!seen.has(artist.id)) {
+        seen.add(artist.id);
+        merged.push(artist);
+      }
+    });
+    return merged;
+  }, []);
+
   const loadInitial = useCallback(async () => {
     setIsLoading(true);
     setError('');
@@ -23,7 +35,7 @@ export function usePaginatedArtists({ pageSize = 30, searchTerm = '', sortOption
     try {
       const res = await audio2Api.getAllArtists({ offset: 0, limit: pageSize, order: sortOption });
       const data = res.data || [];
-      setArtists(data);
+      setArtists(mergeUnique([], data));
       setOffset(data.length);
       setHasMore(data.length === pageSize && data.length > 0);
     } catch (err) {
@@ -32,7 +44,7 @@ export function usePaginatedArtists({ pageSize = 30, searchTerm = '', sortOption
     } finally {
       setIsLoading(false);
     }
-  }, [pageSize, sortOption]);
+  }, [mergeUnique, pageSize, sortOption]);
 
   const loadMore = useCallback(async () => {
     if (!hasMore || isLoading || searchTerm.trim()) return;
@@ -41,7 +53,7 @@ export function usePaginatedArtists({ pageSize = 30, searchTerm = '', sortOption
     try {
       const res = await audio2Api.getAllArtists({ offset, limit: pageSize, order: sortOption });
       const data = res.data || [];
-      setArtists((prev) => [...prev, ...data]);
+      setArtists((prev) => mergeUnique(prev, data));
       setOffset((prev) => prev + data.length);
       setHasMore(data.length === pageSize && data.length > 0);
     } catch (err) {
@@ -50,7 +62,7 @@ export function usePaginatedArtists({ pageSize = 30, searchTerm = '', sortOption
     } finally {
       setIsLoading(false);
     }
-  }, [hasMore, isLoading, offset, pageSize, searchTerm, sortOption]);
+  }, [hasMore, isLoading, offset, pageSize, searchTerm, sortOption, mergeUnique]);
 
   return {
     artists,

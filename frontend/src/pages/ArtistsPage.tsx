@@ -191,7 +191,7 @@ export function ArtistsPage() {
 
               return (
                 <button
-                  key={artist.id}
+                  key={artist.spotify_id || `local-${artist.id}`}
                   onClick={() => {
                     if (artist.spotify_id) {
                       navigate(`/artists/${artist.spotify_id}`);
