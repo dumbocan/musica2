@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { audio2Api } from '@/lib/api';
 import type { Artist } from '@/types/api';
 
@@ -14,6 +14,8 @@ export function usePaginatedArtists({ pageSize = 30, searchTerm = '', sortOption
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [hasMore, setHasMore] = useState(true);
+  const hasFetched = useRef(false);
+  const lastSort = useRef(sortOption);
 
   const mergeUnique = useCallback((current: Artist[], incoming: Artist[]) => {
     const seen = new Set(current.map((artist) => artist.id));
@@ -63,6 +65,14 @@ export function usePaginatedArtists({ pageSize = 30, searchTerm = '', sortOption
       setIsLoading(false);
     }
   }, [hasMore, isLoading, offset, pageSize, sortOption, mergeUnique]);
+
+  useEffect(() => {
+    const shouldFetch = !hasFetched.current || lastSort.current !== sortOption;
+    if (!shouldFetch) return;
+    hasFetched.current = true;
+    lastSort.current = sortOption;
+    loadInitial();
+  }, [loadInitial, sortOption]);
 
   return {
     artists,

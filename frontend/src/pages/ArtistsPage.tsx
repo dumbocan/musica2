@@ -57,20 +57,10 @@ export function ArtistsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortOption, setSortOption] = useState<'pop-desc' | 'pop-asc' | 'name-asc'>('pop-desc');
   const [genreFilter, setGenreFilter] = useState('');
-  const { artists, isLoading, error, hasMore, loadInitial, loadMore } = usePaginatedArtists({ pageSize: 30, searchTerm, sortOption });
+  const { artists, isLoading, error, hasMore, loadMore } = usePaginatedArtists({ pageSize: 30, searchTerm, sortOption });
   const { isArtistsLoading } = useApiStore();
   const navigate = useNavigate();
   const sentinelRef = useRef<HTMLDivElement | null>(null);
-  const initialLoadDone = useRef(false);
-  const lastSortOption = useRef(sortOption);
-
-  useEffect(() => {
-    const shouldReload = !initialLoadDone.current || lastSortOption.current !== sortOption;
-    if (!shouldReload) return;
-    initialLoadDone.current = true;
-    lastSortOption.current = sortOption;
-    loadInitial();
-  }, [loadInitial, sortOption]);
 
   useEffect(() => {
     if (!hasMore) return;
