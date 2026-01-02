@@ -67,7 +67,7 @@ export function ArtistsPage() {
   }, [loadInitial]);
 
   useEffect(() => {
-    if (!hasMore || searchTerm.trim()) return;
+    if (!hasMore) return;
     const sentinel = sentinelRef.current;
     if (!sentinel) return;
     const observer = new IntersectionObserver(
@@ -80,7 +80,7 @@ export function ArtistsPage() {
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [hasMore, loadMore, searchTerm]);
+  }, [hasMore, loadMore]);
 
   const genreOptions = useMemo(() => {
     const set = new Set<string>();

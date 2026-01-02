@@ -47,7 +47,7 @@ export function usePaginatedArtists({ pageSize = 30, searchTerm = '', sortOption
   }, [mergeUnique, pageSize, sortOption]);
 
   const loadMore = useCallback(async () => {
-    if (!hasMore || isLoading || searchTerm.trim()) return;
+    if (!hasMore || isLoading) return;
     setIsLoading(true);
     setError('');
     try {
@@ -62,7 +62,7 @@ export function usePaginatedArtists({ pageSize = 30, searchTerm = '', sortOption
     } finally {
       setIsLoading(false);
     }
-  }, [hasMore, isLoading, offset, pageSize, searchTerm, sortOption, mergeUnique]);
+  }, [hasMore, isLoading, offset, pageSize, sortOption, mergeUnique]);
 
   return {
     artists,
