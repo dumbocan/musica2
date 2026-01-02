@@ -61,10 +61,16 @@ export function ArtistsPage() {
   const { isArtistsLoading } = useApiStore();
   const navigate = useNavigate();
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const initialLoadDone = useRef(false);
+  const lastSortOption = useRef(sortOption);
 
   useEffect(() => {
+    const shouldReload = !initialLoadDone.current || lastSortOption.current !== sortOption;
+    if (!shouldReload) return;
+    initialLoadDone.current = true;
+    lastSortOption.current = sortOption;
     loadInitial();
-  }, [loadInitial]);
+  }, [loadInitial, sortOption]);
 
   useEffect(() => {
     if (!hasMore) return;
