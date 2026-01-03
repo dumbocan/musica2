@@ -399,7 +399,7 @@ def _is_proxied_images(images: list) -> bool:
 @router.get("/")
 async def get_artists(
     offset: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=1000),
     order: str = Query(
         "pop-desc",
         pattern="^(pop-desc|pop-asc|name-asc)$",
