@@ -1,5 +1,6 @@
 // API Client for Audio2 Frontend
 import axios from 'axios';
+import { useApiStore } from '@/store/useApiStore';
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
@@ -26,7 +27,13 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 500) {
+    const status = error.response?.status;
+    if (status === 401) {
+      const store = useApiStore.getState();
+      if (store.isAuthenticated) {
+        store.logout();
+      }
+    } else if (status === 500) {
       console.error('Server Error:', error.response.data);
     }
     return Promise.reject(error);
