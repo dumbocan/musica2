@@ -28,8 +28,8 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     const status = error.response?.status;
-    if (status === 401) {
-      const store = useApiStore.getState();
+    const store = useApiStore.getState();
+    if (status === 401 || error.code === 'ERR_NETWORK') {
       if (store.isAuthenticated) {
         store.logout();
       }
