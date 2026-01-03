@@ -35,7 +35,6 @@ export function usePaginatedArtists({ limit = 500, sortOption = 'pop-desc' }: Op
       setArtists(items);
       setTotal(totalCount ?? items.length);
     } catch (err) {
-      console.error('Failed to load artists:', err);
       setError('Failed to load artists. Please try again.');
     } finally {
       setIsLoading(false);

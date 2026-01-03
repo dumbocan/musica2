@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { API_BASE_URL } from '@/lib/api';
+import { API_BASE_URL, audio2Api } from '@/lib/api';
 import { useApiStore } from '@/store/useApiStore';
 import type { Artist } from '@/types/api';
-import { Music, Loader2 } from 'lucide-react';
+import { Music, Loader2, Heart, Trash2 } from 'lucide-react';
 import { usePaginatedArtists } from '@/hooks/usePaginatedArtists';
 
 const parseStoredJsonArray = (raw?: string | null) => {
@@ -58,14 +58,54 @@ export function ArtistsPage() {
   const [sortOption, setSortOption] = useState<'pop-desc' | 'pop-asc' | 'name-asc'>('pop-desc');
   const [genreFilter, setGenreFilter] = useState('');
   const { artists, isLoading, error, total } = usePaginatedArtists({ limit: 1000, sortOption });
-  const { isArtistsLoading } = useApiStore();
+  const { isArtistsLoading, userId } = useApiStore();
   const navigate = useNavigate();
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const [favoriteIds, setFavoriteIds] = useState<Set<number>>(new Set());
+  const [hiddenIds, setHiddenIds] = useState<Set<number>>(new Set());
   const [visibleCount, setVisibleCount] = useState(20);
 
   useEffect(() => {
     setVisibleCount(20);
   }, [searchTerm, genreFilter, sortOption]);
+
+  useEffect(() => {
+    let aborted = false;
+    const loadPreferences = async () => {
+      if (!userId) {
+        setFavoriteIds(new Set());
+        setHiddenIds(new Set());
+        return;
+      }
+      try {
+        const [favoriteRes, hiddenRes] = await Promise.all([
+          audio2Api.listFavorites({ user_id: userId, target_type: 'artist' }),
+          audio2Api.listHiddenArtists({ user_id: userId })
+        ]);
+        if (aborted) return;
+        const favSet = new Set<number>();
+        (favoriteRes.data || []).forEach((fav: any) => {
+          if (typeof fav?.artist_id === 'number') {
+            favSet.add(fav.artist_id);
+          }
+        });
+        const hiddenSet = new Set<number>();
+        (hiddenRes.data || []).forEach((entry: any) => {
+          if (typeof entry?.artist_id === 'number') {
+            hiddenSet.add(entry.artist_id);
+          }
+        });
+        setFavoriteIds(favSet);
+        setHiddenIds(hiddenSet);
+      } catch (prefErr) {
+        console.error('Failed to load artist preferences', prefErr);
+      }
+    };
+    loadPreferences();
+    return () => {
+      aborted = true;
+    };
+  }, [userId]);
 
   const genreOptions = useMemo(() => {
     const set = new Set<string>();
@@ -77,8 +117,13 @@ export function ArtistsPage() {
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [artists]);
 
+  const visibleArtists = useMemo(
+    () => artists.filter((artist) => !hiddenIds.has(artist.id)),
+    [artists, hiddenIds]
+  );
+
   const filteredArtists = useMemo(() => {
-    return artists.filter((artist) => {
+    return visibleArtists.filter((artist) => {
       const matchesSearch = artist.name.toLowerCase().includes(searchTerm.toLowerCase());
       const genres = parseStoredJsonArray(artist.genres)
         .map((g) => (typeof g === 'string' ? g.toLowerCase() : ''))
@@ -86,7 +131,7 @@ export function ArtistsPage() {
       const matchesGenre = !genreFilter || genres.includes(genreFilter.toLowerCase());
       return matchesSearch && matchesGenre;
     });
-  }, [artists, searchTerm, genreFilter]);
+  }, [visibleArtists, searchTerm, genreFilter]);
 
   const displayArtists = useMemo(() => filteredArtists.slice(0, visibleCount), [filteredArtists, visibleCount]);
 
@@ -105,6 +150,49 @@ export function ArtistsPage() {
     observer.observe(target);
     return () => observer.disconnect();
   }, [filteredArtists.length]);
+
+  const disabledActions = !userId;
+
+  const toggleFavorite = async (event: React.MouseEvent, artistId: number) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!userId) return;
+    try {
+      if (favoriteIds.has(artistId)) {
+        await audio2Api.removeFavorite('artist', artistId, userId);
+        setFavoriteIds((prev) => {
+          const next = new Set(prev);
+          next.delete(artistId);
+          return next;
+        });
+      } else {
+        await audio2Api.addFavorite('artist', artistId, userId);
+        setFavoriteIds((prev) => {
+          const next = new Set(prev);
+          next.add(artistId);
+          return next;
+        });
+      }
+    } catch (err) {
+      console.error('Failed to toggle favorite', err);
+    }
+  };
+
+  const hideArtist = async (event: React.MouseEvent, artistId: number) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!userId) return;
+    try {
+      await audio2Api.hideArtist(artistId, userId);
+      setHiddenIds((prev) => {
+        const next = new Set(prev);
+        next.add(artistId);
+        return next;
+      });
+    } catch (err) {
+      console.error('Failed to hide artist', err);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -195,18 +283,25 @@ export function ArtistsPage() {
               const { imageUrl, genres } = getArtistAssets(artist);
               const disabled = !artist.spotify_id;
 
+              const isFavorite = favoriteIds.has(artist.id);
               return (
-                <button
+                <div
                   key={artist.spotify_id || `local-${artist.id}`}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => {
                     if (artist.spotify_id) {
                       navigate(`/artists/${artist.spotify_id}`);
                     }
                   }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && artist.spotify_id) {
+                      navigate(`/artists/${artist.spotify_id}`);
+                    }
+                  }}
                   className={`flex flex-col items-center justify-center gap-3 rounded-2xl bg-transparent p-6 text-center text-white transition ${
-                    disabled ? 'opacity-40 cursor-not-allowed' : ''
+                    disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'
                   }`}
-                  disabled={disabled}
                   style={{
                     display: 'flex',
                     flexDirection: 'column',
@@ -215,8 +310,8 @@ export function ArtistsPage() {
                     padding: '20px',
                     background: 'none',
                     border: 'none',
+                    outline: 'none'
                   }}
-                  type="button"
                 >
                   {imageUrl ? (
                     <img
@@ -264,7 +359,58 @@ export function ArtistsPage() {
                       <p className="text-xs text-white/60">Popularity {artist.popularity}</p>
                     )}
                   </div>
-                </button>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      width: '100%',
+                      marginTop: 8,
+                      gap: 12
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={(e) => toggleFavorite(e, artist.id)}
+                      disabled={disabledActions}
+                      style={{
+                        border: '1px solid var(--border)',
+                        borderRadius: 999,
+                        padding: '6px 10px',
+                        background: isFavorite ? 'rgba(236, 72, 153, 0.15)' : 'rgba(255,255,255,0.08)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        color: isFavorite ? '#ec4899' : '#fff',
+                        opacity: disabledActions ? 0.4 : 1
+                      }}
+                    >
+                      <Heart
+                        className="h-4 w-4"
+                        style={{ fill: isFavorite ? '#ec4899' : 'none', color: isFavorite ? '#ec4899' : '#fff' }}
+                      />
+                      <span style={{ fontSize: 12 }}>Favorito</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => hideArtist(e, artist.id)}
+                      disabled={disabledActions}
+                      style={{
+                        border: '1px solid var(--border)',
+                        borderRadius: 999,
+                        padding: '6px 10px',
+                        background: 'rgba(255,255,255,0.08)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        color: '#fff',
+                        opacity: disabledActions ? 0.4 : 1
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      <span style={{ fontSize: 12 }}>Ocultar</span>
+                    </button>
+                  </div>
+                </div>
               );
             })}
           </div>

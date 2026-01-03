@@ -10,7 +10,8 @@ from sqlmodel import Session, select
 
 from .models.base import (
     Artist, Album, Track, User, Playlist, PlaylistTrack, Tag, TrackTag,
-    PlayHistory, AlgorithmLearning, UserFavorite, FavoriteTargetType
+    PlayHistory, AlgorithmLearning, UserFavorite, FavoriteTargetType,
+    UserHiddenArtist
 )
 from .core.db import get_session
 from .core.image_proxy import proxy_image_list
@@ -297,6 +298,59 @@ def list_favorites(user_id: int, target_type: Optional[FavoriteTargetType] = Non
         if target_type:
             stmt = stmt.where(UserFavorite.target_type == target_type)
         return session.exec(stmt).all()
+    finally:
+        session.close()
+
+
+def hide_artist_for_user(user_id: int, artist_id: int) -> UserHiddenArtist:
+    session = get_session()
+    try:
+        hidden = session.exec(
+            select(UserHiddenArtist).where(
+                UserHiddenArtist.user_id == user_id,
+                UserHiddenArtist.artist_id == artist_id
+            )
+        ).first()
+        if hidden:
+            return hidden
+
+        artist = session.get(Artist, artist_id)
+        if not artist:
+            raise ValueError("Artist not found")
+
+        hidden = UserHiddenArtist(user_id=user_id, artist_id=artist_id)
+        session.add(hidden)
+        session.commit()
+        session.refresh(hidden)
+        return hidden
+    finally:
+        session.close()
+
+
+def unhide_artist_for_user(user_id: int, artist_id: int) -> bool:
+    session = get_session()
+    try:
+        hidden = session.exec(
+            select(UserHiddenArtist).where(
+                UserHiddenArtist.user_id == user_id,
+                UserHiddenArtist.artist_id == artist_id
+            )
+        ).first()
+        if not hidden:
+            return False
+        session.delete(hidden)
+        session.commit()
+        return True
+    finally:
+        session.close()
+
+
+def list_hidden_artists(user_id: int) -> list[UserHiddenArtist]:
+    session = get_session()
+    try:
+        return session.exec(
+            select(UserHiddenArtist).where(UserHiddenArtist.user_id == user_id)
+        ).all()
     finally:
         session.close()
 

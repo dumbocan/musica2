@@ -7,7 +7,7 @@ import { useApiStore } from '@/store/useApiStore';
 
 export function LoginPage() {
   const navigate = useNavigate();
-  const { setToken, setAuthenticated, setUserEmail } = useApiStore();
+  const { setToken, setAuthenticated, setUserEmail, setUserId } = useApiStore();
 
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [formData, setFormData] = useState({
@@ -39,6 +39,13 @@ export function LoginPage() {
       setToken(token);
       setAuthenticated(true);
       setUserEmail(formData.email.trim());
+      try {
+        const profile = await audio2Api.getCurrentUser();
+        setUserId(profile.data?.id ?? null);
+      } catch (profileErr) {
+        console.error('Failed to fetch current user', profileErr);
+        setUserId(null);
+      }
       setSuccess(true);
       setTimeout(() => navigate('/'), 300);
     } else {

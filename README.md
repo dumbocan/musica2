@@ -31,6 +31,7 @@ A **complete REST API backend** for personal music streaming, featuring **comple
 - **Navegación rápida**: en resultados de tags/géneros, las tarjetas apuntan a tu propia ficha/descografía si hay `spotify.id`, en vez de ir a Last.fm.
 - **Pagos de rendimiento**: timeouts con fallback, concurrencia controlada en enriquecimiento Spotify, lotes de 60+ artistas para tags con carga progresiva en frontend.
 - **Biblioteca de artistas renovada**: filtros “Filtered Results / Sort / Genre” usan una tarjeta única, tipografía uniforme y controles alineados con la barra global. Las imágenes ahora vienen siempre desde cache local y el scroll infinito respeta el orden elegido (popularidad asc/desc o alfabético) sin reorganizar la lista cargada.
+- **Scroll infinito virtualizado**: las vistas con catálogos grandes (artists, search) precargan el inventario completo (lotes de 20/1000) y muestran sólo los elementos visibles + lazy images. Esto evita saltos al paginar, mantiene el total al día y permite reutilizar el patrón en cualquier listado (usa `usePaginatedArtists` / `IntersectionObserver`).
 
 ## 🆕 Backend & Data Weekend (favoritos, caché de imágenes, DB-first)
 
@@ -109,6 +110,9 @@ curl http://localhost:8000/health
 | `/artists/id/{local_id}/discography` | GET | Full discography (local DB) |
 | `/artists/save/{spotify_id}` | POST | Save artist to DB |
 | `/artists/{spotify_id}/full-discography` | POST | **Save complete discography** |
+| `/artists/hidden?user_id=1` | GET | List artists hidden by the user |
+| `/artists/id/{artist_id}/hide?user_id=1` | POST | Hide artist from the user's library |
+| `/artists/id/{artist_id}/hide?user_id=1` | DELETE | Unhide artist for the user |
 
 ### 📀 **Albums**
 | Endpoint | Method | Description |

@@ -13,7 +13,14 @@ from sqlalchemy import desc, asc, func
 logger = logging.getLogger(__name__)
 
 from ..core.spotify import spotify_client
-from ..crud import save_artist, delete_artist, update_artist_bio
+from ..crud import (
+    save_artist,
+    delete_artist,
+    update_artist_bio,
+    hide_artist_for_user,
+    unhide_artist_for_user,
+    list_hidden_artists
+)
 from ..core.db import get_session
 from ..models.base import Artist
 from ..core.lastfm import lastfm_client
@@ -437,6 +444,38 @@ async def get_artists(
         if needs_commit:
             session.commit()
     return {"items": artists, "total": int(total)}
+
+
+@router.get("/hidden")
+def get_hidden_artists(user_id: int = Query(..., ge=1, description="User ID")):
+    """List artists hidden by the given user."""
+    hidden = list_hidden_artists(user_id)
+    return [h.dict() for h in hidden]
+
+
+@router.post("/id/{artist_id}/hide")
+def hide_artist_for_user_endpoint(
+    artist_id: int = Path(..., description="Local artist ID"),
+    user_id: int = Query(..., ge=1, description="User ID"),
+):
+    """Hide an artist for the specified user."""
+    try:
+        hidden = hide_artist_for_user(user_id, artist_id)
+        return {"message": "Artist hidden", "hidden": hidden.dict()}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.delete("/id/{artist_id}/hide")
+def unhide_artist_for_user_endpoint(
+    artist_id: int = Path(..., description="Local artist ID"),
+    user_id: int = Query(..., ge=1, description="User ID"),
+):
+    """Remove user-specific hidden flag."""
+    removed = unhide_artist_for_user(user_id, artist_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Hidden artist entry not found")
+    return {"message": "Artist unhidden"}
 
 
 @router.get("/id/{artist_id}")

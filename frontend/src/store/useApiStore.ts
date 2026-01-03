@@ -194,11 +194,19 @@ export const useApiStore = create<ApiStore>()(
       logout: () => {
         localStorage.removeItem('token');
         localStorage.removeItem('userEmail');
+        localStorage.removeItem('userId');
         document.cookie = 'token=; path=/; max-age=0; samesite=strict';
         set({ token: null, isAuthenticated: false, userId: null, userEmail: null });
       },
-      userId: null,
-      setUserId: (id) => set({ userId: id }),
+      userId: localStorage.getItem('userId') ? Number(localStorage.getItem('userId')) : null,
+      setUserId: (id) => {
+        if (id === null || id === undefined) {
+          localStorage.removeItem('userId');
+        } else {
+          localStorage.setItem('userId', String(id));
+        }
+        set({ userId: id });
+      },
       userEmail: localStorage.getItem('userEmail'),
       setUserEmail: (email) => {
         if (email) {

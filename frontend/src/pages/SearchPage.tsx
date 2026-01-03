@@ -52,14 +52,21 @@ export function SearchPage() {
       'reggaeton',
       'edm', 'electronic', 'house', 'techno', 'trance', 'dnb', 'drum and bass',
       'folk', 'country', 'jazz', 'blues', 'soul', 'r&b', 'rb'
-    ],
+    ].map((k) => k.toLowerCase()),
     []
   );
 
   const inferMode = (query: string): SearchMode => {
-    const ql = query.toLowerCase();
-    if (genreKeywords.some((g) => ql.includes(g))) return 'tag';
-    return 'artist';
+    const cleaned = query.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    if (!cleaned) return 'artist';
+    const padded = ` ${cleaned} `;
+    const isGenreSearch = genreKeywords.some((keyword) => {
+      const normalizedKeyword = keyword.replace(/[^a-z0-9]+/g, ' ').trim();
+      if (!normalizedKeyword) return false;
+      const paddedKeyword = ` ${normalizedKeyword} `;
+      return padded.includes(paddedKeyword);
+    });
+    return isGenreSearch ? 'tag' : 'artist';
   };
 
   const performSearch = async (queryToUse: string, pageToLoad: number = 0, append = false) => {
@@ -324,6 +331,15 @@ export function SearchPage() {
                     lfmImgList.find((im: any) => im?.size === 'large') ||
                     lfmImgList.find((im: any) => im?.size === 'medium');
                   const img = spImg || lfmPreferred?.['#text'];
+                  const spotifyId = a.spotify?.id;
+                  const externalUrl = a.url || a.spotify?.external_urls?.spotify;
+                  const handleClick = () => {
+                    if (spotifyId) {
+                      navigate(`/artists/discography/${spotifyId}`);
+                    } else if (externalUrl) {
+                      window.open(externalUrl, '_blank');
+                    }
+                  };
                   return (
                     <div
                       key={`sim-${idx}-${a.name}`}
@@ -333,8 +349,10 @@ export function SearchPage() {
                         border: `1px solid var(--border)`,
                         borderRadius: 16,
                         padding: 14,
-                        minWidth: 220
+                        minWidth: 220,
+                        cursor: spotifyId || externalUrl ? 'pointer' : 'default'
                       }}
+                      onClick={handleClick}
                     >
                       {img ? (
                         <img

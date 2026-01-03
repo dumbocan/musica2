@@ -46,6 +46,7 @@ export const audio2Api = {
     api.post('/auth/create-first-user', userData),
   login: (userData: { email: string; password: string }) =>
     api.post('/auth/login', userData),
+  getCurrentUser: () => api.get('/auth/me'),
 
   // Health
   healthCheck: () => api.get('/health'),
@@ -70,6 +71,12 @@ export const audio2Api = {
 
   getAllArtists: (params?: { offset?: number; limit?: number; order?: 'pop-desc' | 'pop-asc' | 'name-asc' }) =>
     api.get('/artists/', { params }),
+  listHiddenArtists: (params: { user_id: number }) =>
+    api.get('/artists/hidden', { params }),
+  hideArtist: (artistId: number, userId: number) =>
+    api.post(`/artists/id/${artistId}/hide`, null, { params: { user_id: userId } }),
+  unhideArtist: (artistId: number, userId: number) =>
+    api.delete(`/artists/id/${artistId}/hide`, { params: { user_id: userId } }),
 
   // Albums
   getAllAlbums: () => api.get('/albums/'),

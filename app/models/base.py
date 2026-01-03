@@ -173,6 +173,21 @@ class UserFavorite(SQLModel, table=True):
         UniqueConstraint("user_id", "target_type", "track_id"),
     )
 
+
+class UserHiddenArtist(SQLModel, table=True):
+    """Artists hidden by a user from their personal view."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", ondelete="CASCADE")
+    artist_id: int = Field(foreign_key="artist.id", ondelete="CASCADE")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    user: User = Relationship()
+    artist: Artist = Relationship()
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "artist_id"),
+    )
+
 class YouTubeDownload(SQLModel, table=True):
     """Tracking system for YouTube audio downloads."""
     id: Optional[int] = Field(default=None, primary_key=True)
