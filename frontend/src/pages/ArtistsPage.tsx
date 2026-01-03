@@ -57,26 +57,15 @@ export function ArtistsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortOption, setSortOption] = useState<'pop-desc' | 'pop-asc' | 'name-asc'>('pop-desc');
   const [genreFilter, setGenreFilter] = useState('');
-  const { artists, isLoading, error, hasMore, total, loadMore } = usePaginatedArtists({ pageSize: 20, searchTerm, sortOption });
+  const { artists, isLoading, error, total } = usePaginatedArtists({ limit: 1000, sortOption });
   const { isArtistsLoading } = useApiStore();
   const navigate = useNavigate();
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const [visibleCount, setVisibleCount] = useState(20);
 
   useEffect(() => {
-    if (!hasMore) return;
-    const sentinel = sentinelRef.current;
-    if (!sentinel) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting) {
-          loadMore();
-        }
-      },
-      { rootMargin: '200px' }
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [hasMore, loadMore]);
+    setVisibleCount(20);
+  }, [searchTerm, genreFilter, sortOption]);
 
   const genreOptions = useMemo(() => {
     const set = new Set<string>();
@@ -99,7 +88,23 @@ export function ArtistsPage() {
     });
   }, [artists, searchTerm, genreFilter]);
 
-  const displayArtists = filteredArtists;
+  const displayArtists = useMemo(() => filteredArtists.slice(0, visibleCount), [filteredArtists, visibleCount]);
+
+  useEffect(() => {
+    const target = loadMoreRef.current;
+    if (!target) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          setVisibleCount((prev) => Math.min(prev + 20, filteredArtists.length));
+        });
+      },
+      { root: null, rootMargin: '200px' }
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [filteredArtists.length]);
 
   return (
     <div className="space-y-6">
@@ -263,18 +268,7 @@ export function ArtistsPage() {
               );
             })}
           </div>
-          {hasMore && (
-            <div
-              ref={sentinelRef}
-              style={{ height: 1 }}
-            />
-          )}
-          {isLoading && artists.length > 0 && (
-            <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
-              <Loader2 className="h-5 w-5 animate-spin mr-2" />
-              Loading more artists...
-            </div>
-          )}
+          <div ref={loadMoreRef} style={{ height: 1 }} />
         </div>
       )}
     </div>
