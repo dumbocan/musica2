@@ -8,25 +8,24 @@ interface Options {
   sortOption?: 'pop-desc' | 'pop-asc' | 'name-asc';
 }
 
-export function usePaginatedArtists({ pageSize = 30, searchTerm = '', sortOption = 'pop-desc' }: Options = {}) {
+export function usePaginatedArtists({ pageSize = 20, searchTerm = '', sortOption = 'pop-desc' }: Options = {}) {
   const [artists, setArtists] = useState<Artist[]>([]);
   const [offset, setOffset] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [hasMore, setHasMore] = useState(true);
+  const [total, setTotal] = useState<number | null>(null);
   const hasFetched = useRef(false);
   const lastSort = useRef(sortOption);
 
-  const mergeUnique = useCallback((current: Artist[], incoming: Artist[]) => {
-    const seen = new Set(current.map((artist) => artist.id));
-    const merged = [...current];
-    incoming.forEach((artist) => {
-      if (!seen.has(artist.id)) {
-        seen.add(artist.id);
-        merged.push(artist);
-      }
-    });
-    return merged;
+  const normalizeResponse = useCallback((payload: any): { items: Artist[]; total: number | null } => {
+    if (Array.isArray(payload)) {
+      return { items: payload, total: null };
+    }
+    if (payload && Array.isArray(payload.items)) {
+      return { items: payload.items, total: typeof payload.total === 'number' ? payload.total : null };
+    }
+    return { items: [], total: null };
   }, []);
 
   const loadInitial = useCallback(async () => {
@@ -36,17 +35,19 @@ export function usePaginatedArtists({ pageSize = 30, searchTerm = '', sortOption
     setOffset(0);
     try {
       const res = await audio2Api.getAllArtists({ offset: 0, limit: pageSize, order: sortOption });
-      const data = res.data || [];
-      setArtists(mergeUnique([], data));
-      setOffset(data.length);
-      setHasMore(data.length === pageSize && data.length > 0);
+      const { items, total: totalCount } = normalizeResponse(res.data);
+      setArtists(items);
+      setTotal(totalCount ?? items.length);
+      setOffset(items.length);
+      const effectiveTotal = totalCount ?? null;
+      setHasMore(effectiveTotal !== null ? items.length < effectiveTotal : items.length === pageSize);
     } catch (err) {
       console.error('Failed to load artists:', err);
       setError('Failed to load artists. Please try again.');
     } finally {
       setIsLoading(false);
     }
-  }, [mergeUnique, pageSize, sortOption]);
+  }, [normalizeResponse, pageSize, sortOption]);
 
   const loadMore = useCallback(async () => {
     if (!hasMore || isLoading) return;
@@ -54,17 +55,24 @@ export function usePaginatedArtists({ pageSize = 30, searchTerm = '', sortOption
     setError('');
     try {
       const res = await audio2Api.getAllArtists({ offset, limit: pageSize, order: sortOption });
-      const data = res.data || [];
-      setArtists((prev) => mergeUnique(prev, data));
-      setOffset((prev) => prev + data.length);
-      setHasMore(data.length === pageSize && data.length > 0);
+      const { items, total: totalCount } = normalizeResponse(res.data);
+      setArtists((prev) => [...prev, ...items]);
+      const nextOffset = offset + items.length;
+      const nextTotal = totalCount ?? total;
+      setOffset(nextOffset);
+      setTotal(nextTotal ?? null);
+      setHasMore(
+        nextTotal !== null
+          ? nextOffset < nextTotal
+          : items.length === pageSize
+      );
     } catch (err) {
       console.error('Failed to load artists:', err);
       setError('Failed to load artists. Please try again.');
     } finally {
       setIsLoading(false);
     }
-  }, [hasMore, isLoading, offset, pageSize, sortOption, mergeUnique]);
+  }, [hasMore, isLoading, offset, pageSize, sortOption, normalizeResponse, total]);
 
   useEffect(() => {
     const shouldFetch = !hasFetched.current || lastSort.current !== sortOption;
@@ -79,6 +87,7 @@ export function usePaginatedArtists({ pageSize = 30, searchTerm = '', sortOption
     isLoading,
     error,
     hasMore,
+    total,
     loadInitial,
     loadMore,
     setArtists,

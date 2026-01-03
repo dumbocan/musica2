@@ -57,7 +57,7 @@ export function ArtistsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortOption, setSortOption] = useState<'pop-desc' | 'pop-asc' | 'name-asc'>('pop-desc');
   const [genreFilter, setGenreFilter] = useState('');
-  const { artists, isLoading, error, hasMore, loadMore } = usePaginatedArtists({ pageSize: 30, searchTerm, sortOption });
+  const { artists, isLoading, error, hasMore, total, loadMore } = usePaginatedArtists({ pageSize: 20, searchTerm, sortOption });
   const { isArtistsLoading } = useApiStore();
   const navigate = useNavigate();
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -112,13 +112,18 @@ export function ArtistsPage() {
       <div className="filter-card mb-12">
         <div className="filter-panel">
           <div style={{ flexBasis: 'calc(33.33% - 1rem)', flexGrow: 0, flexShrink: 0 }}>
-            <div className="filter-stat">
+            <div className="filter-stat" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
               <p className="text-2xl font-bold" style={{ margin: 0, color: 'var(--accent)' }}>
-                {filteredArtists.length}
+                {total ?? '...'}
               </p>
-              <h3 className="filter-label uppercase tracking-wide" style={{ margin: 0, color: '#fff' }}>
-                Filtered Results
-              </h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <h3 className="filter-label uppercase tracking-wide" style={{ margin: 0, color: '#fff' }}>
+                  Artists Found
+                </h3>
+                <span className="text-xs text-white/70">
+                  Filtered: {filteredArtists.length}
+                </span>
+              </div>
             </div>
           </div>
           <div style={{ flexBasis: 'calc(33.33% - 1rem)', flexGrow: 0, flexShrink: 0 }}>
@@ -212,6 +217,7 @@ export function ArtistsPage() {
                     <img
                       src={imageUrl}
                       alt={artist.name}
+                      loading="lazy"
                       style={{
                         width: '200px',
                         height: '200px',

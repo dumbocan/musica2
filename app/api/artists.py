@@ -8,7 +8,7 @@ import ast
 from typing import List
 
 from fastapi import APIRouter, Query, Path, HTTPException, BackgroundTasks
-from sqlalchemy import desc, asc
+from sqlalchemy import desc, asc, func
 
 logger = logging.getLogger(__name__)
 
@@ -399,13 +399,13 @@ def _is_proxied_images(images: list) -> bool:
 @router.get("/")
 async def get_artists(
     offset: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=100),
     order: str = Query(
         "pop-desc",
         pattern="^(pop-desc|pop-asc|name-asc)$",
         description="Ordering for returned artists"
     )
-) -> List[Artist]:
+) -> dict:
     """Get saved artists with pagination, ordering, and ensure cached images are proxied."""
     order_by_map = {
         "pop-desc": [desc(Artist.popularity), asc(Artist.id)],
@@ -414,6 +414,7 @@ async def get_artists(
     }
     order_by_clause = order_by_map.get(order, order_by_map["pop-desc"])
     with get_session() as session:
+        total = session.exec(select(func.count()).select_from(Artist)).one()
         statement = select(Artist).order_by(*order_by_clause).offset(offset).limit(limit)
         artists = session.exec(statement).all()
         needs_commit = False
@@ -435,7 +436,7 @@ async def get_artists(
                 needs_commit = True
         if needs_commit:
             session.commit()
-    return artists
+    return {"items": artists, "total": int(total)}
 
 
 @router.get("/id/{artist_id}")
