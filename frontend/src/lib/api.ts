@@ -89,6 +89,7 @@ export const audio2Api = {
 
   // Tracks
   getAllTracks: () => api.get('/tracks/'),
+  getTracksOverview: () => api.get('/tracks/overview'),
 
   // Playlists
   getAllPlaylists: () => api.get('/playlists/'),
@@ -100,4 +101,26 @@ export const audio2Api = {
     api.delete(`/favorites/${targetType}/${targetId}`, { params: { user_id: userId } }),
   listFavorites: (params: { user_id: number; target_type?: 'artist' | 'album' | 'track' }) =>
     api.get('/favorites', { params }),
+
+  // YouTube
+  searchYoutubeMusic: (params: { artist: string; track: string; album?: string; max_results?: number }) =>
+    api.get('/youtube/search/music', { params }),
+  downloadYoutubeAudio: (
+    videoId: string,
+    params?: { format?: string; quality?: string; to_device?: boolean }
+  ) =>
+    api.post(`/youtube/download/${videoId}`, null, { params }),
+  getYoutubeDownloadStatus: (videoId: string, params?: { format?: string }) =>
+    api.get(`/youtube/download/${videoId}/status`, { params }),
+  prefetchYoutubeAlbum: (spotifyId: string) =>
+    api.post(`/youtube/album/${spotifyId}/prefetch`),
+  getYoutubeTrackLink: (spotifyTrackId: string) =>
+    api.get(`/youtube/track/${spotifyTrackId}/link`),
+  refreshYoutubeTrackLink: (
+    spotifyTrackId: string,
+    payload: { artist?: string; track?: string; album?: string }
+  ) => api.post(`/youtube/track/${spotifyTrackId}/refresh`, payload),
+  getYoutubeTrackLinks: (spotifyTrackIds: string[]) =>
+    api.post('/youtube/links', { spotify_track_ids: spotifyTrackIds }),
+  getYoutubeUsage: () => api.get('/youtube/usage'),
 };

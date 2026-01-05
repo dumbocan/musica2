@@ -9,6 +9,7 @@ Audio2 couples a FastAPI backend (`app/`) with a Vite + TypeScript frontend (`fr
 - `uvicorn app.main:app --reload` — start the API locally with a populated `.env`.
 - `npm install && npm run dev --prefix frontend` — boot the Vite UI wired to the localhost CORS origins in `app/main.py`.
 - `python smoke_test.py` / `python test_complete_system.py` — run integration checks that call live APIs.
+Note: this repository is configured to use PostgreSQL only. Ensure `DATABASE_URL` points to Postgres before running the API.
 
 ## Coding Style & Naming Conventions
 Follow PEP 8 with four-space indents, type hints, and snake_case names; keep SQLModel and Pydantic classes in PascalCase (see `app/models/base.py`). Endpoints should expose concise nouns or verbs (`/artists/save/{spotify_id}`) and return typed schemas, not raw dicts. Shared utilities must accept dependency-injected sessions (`Depends(get_session)`) and avoid bare prints. Frontend code follows the Vite ESLint and Tailwind defaults in `frontend/src`.
@@ -21,3 +22,14 @@ Most recent commits use a Conventional prefix (`feat:`, `docs:`, `fix:`); keep t
 
 ## Security & Configuration Tips
 Secrets stay in `.env`; never hard-code tokens or client secrets. Honor the auth middleware in `app/main.py`—if you add public endpoints, list them in `PUBLIC_PATHS` with justification. Cached media often contains licensed artwork, so clear `cache/` and `storage/` before sharing archives, and reuse the throttling helpers in `app/core/data_freshness.py` when calling external APIs.
+
+## YouTube Prefetch & Downloads
+- The backend launches `youtube_prefetch_loop()` on startup. It fetches one track every 5 s and sleeps 15 minutes after any 403/429. Do not spawn additional tight loops; use the existing helper or `POST /youtube/album/{spotify_id}/prefetch` if you need bursts.
+- Every change touching YouTube must ensure `save_youtube_download()` writes `spotify_track_id`, `spotify_artist_id`, `youtube_video_id`, and `download_status`. The album counters and the Tracks dashboard depend on that table, even if MP3 files already exist.
+- When debugging or documenting, instruct the user to redirect logs (`uvicorn app.main:app --reload > uvicorn.log 2>&1`) and tail for `[youtube_prefetch]` to monitor progress.
+- Always remind contributors to set `YOUTUBE_API_KEY` in `.env`; without it, `/youtube/...` endpoints return errors and the frontend surfaces warnings.
+
+## Tracks Overview Workflow
+- The route `GET /tracks/overview` is the canonical way to expose track/YouTube/cache status. Any frontend widget that needs link/file info should consume this endpoint instead of hitting `/youtube/track/...` en masa.
+- The Tracks page (`frontend/src/pages/TracksPage.tsx`) expects fields like `youtube_status`, `youtube_url`, and `local_file_exists`. When updating backend schemas, keep those keys stable or update the UI in the same change.
+- Album link counters should combine DB data (`YouTubeDownload` joins) with downloaded track IDs. Make sure new features keep that dual-source logic intact, especially when introducing migrations or cleanup scripts.

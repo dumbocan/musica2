@@ -490,6 +490,10 @@ def save_youtube_download(youtube_data: dict):
     session = get_session()
     try:
         from .models.base import YouTubeDownload as YT
+        status = youtube_data.get("download_status")
+        youtube_video_id = youtube_data.get("youtube_video_id")
+        if status in ("error", "video_not_found") and not youtube_video_id:
+            youtube_data["download_status"] = "missing"
 
         # Check if exists by track ID
         existing = session.exec(
@@ -498,11 +502,14 @@ def save_youtube_download(youtube_data: dict):
 
         if existing:
             # Update existing
-            existingyoutube_video_id = youtube_data.get('youtube_video_id', existing.youtube_video_id)
+            existing.youtube_video_id = youtube_data.get('youtube_video_id', existing.youtube_video_id)
             existing.download_status = youtube_data.get('download_status', existing.download_status)
             existing.download_path = youtube_data.get('download_path', existing.download_path)
             existing.file_size = youtube_data.get('file_size', existing.file_size)
-            existing.error_message = youtube_data.get('error_message', existing.error_message)
+            if existing.youtube_video_id:
+                existing.error_message = None
+            else:
+                existing.error_message = youtube_data.get('error_message', existing.error_message)
             existing.updated_at = datetime.utcnow()
             session.add(existing)
             result = existing

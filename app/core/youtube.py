@@ -8,6 +8,10 @@ import re
 import uuid
 import asyncio
 import tempfile
+import time
+from datetime import datetime, timedelta
+import logging
+from collections import OrderedDict
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from urllib.parse import urlparse, parse_qs
@@ -17,15 +21,31 @@ import aiofiles
 from fastapi import HTTPException
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
+
 
 class YouTubeClient:
     """YouTube Data API v3 client for music-related video operations."""
 
     def __init__(self):
-        self.api_key = settings.YOUTUBE_API_KEY
+        self.api_keys = [key for key in (settings.YOUTUBE_API_KEY, settings.YOUTUBE_API_KEY_2) if key]
+        self._api_key_index = 0
+        self.api_key = self.api_keys[0] if self.api_keys else None
         self.base_url = "https://www.googleapis.com/youtube/v3"
         self.download_dir = Path("downloads")
         self.download_dir.mkdir(exist_ok=True)
+        self._rate_lock = asyncio.Lock()
+        self._api_key_lock = asyncio.Lock()
+        self._last_request_time = 0.0
+        self.min_interval_seconds = 5.0  # Throttle requests to stay under quota
+        self._search_cache: "OrderedDict[str, tuple[float, List[Dict[str, Any]]]]" = OrderedDict()
+        self._search_cache_ttl_seconds = 60 * 60 * 6
+        self._search_cache_max_entries = 2000
+        self._request_count = 0
+        self._quota_reset_hour = 4
+        now = datetime.now()
+        last_reset = self._get_last_reset_anchor(now)
+        self._request_count_started_at = last_reset.timestamp()
 
         if not self.api_key:
             raise ValueError("YouTube API key not configured")
@@ -72,6 +92,121 @@ class YouTubeClient:
                 'preferredquality': '192',  # 192 kbps
             }],
         }
+
+    async def _throttle(self):
+        """Ensure there's at least `min_interval_seconds` between API requests."""
+        async with self._rate_lock:
+            now = time.monotonic()
+            wait_time = self.min_interval_seconds - (now - self._last_request_time)
+            if wait_time > 0:
+                await asyncio.sleep(wait_time)
+            self._last_request_time = time.monotonic()
+
+    async def _rotate_api_key(self) -> bool:
+        if len(self.api_keys) <= 1:
+            return False
+        async with self._api_key_lock:
+            if len(self.api_keys) <= 1:
+                return False
+            self._api_key_index = (self._api_key_index + 1) % len(self.api_keys)
+            self.api_key = self.api_keys[self._api_key_index]
+            logger.warning("YouTube API quota exceeded; rotated API key")
+            return True
+
+    async def _api_get(self, endpoint: str, params: Dict[str, Any]) -> httpx.Response:
+        attempts = max(1, len(self.api_keys))
+        for attempt in range(attempts):
+            params_with_key = dict(params)
+            params_with_key["key"] = self.api_key
+            async with httpx.AsyncClient() as client:
+                await self._throttle()
+                self._maybe_reset_counter()
+                self._request_count += 1
+                response = await client.get(f"{self.base_url}/{endpoint}", params=params_with_key)
+
+            if response.status_code != 403:
+                return response
+
+            reason = None
+            try:
+                payload = response.json()
+                errors = payload.get("error", {}).get("errors") or []
+                if errors:
+                    reason = errors[0].get("reason")
+            except Exception:
+                reason = None
+
+            if reason not in ("quotaExceeded", "dailyLimitExceeded"):
+                return response
+
+            if attempt >= attempts - 1:
+                return response
+
+            rotated = await self._rotate_api_key()
+            if not rotated:
+                return response
+
+        return response
+
+    def _get_last_reset_anchor(self, now: datetime) -> datetime:
+        anchor = now.replace(
+            hour=self._quota_reset_hour,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        if now < anchor:
+            anchor -= timedelta(days=1)
+        return anchor
+
+    def _maybe_reset_counter(self) -> None:
+        now = datetime.now()
+        last_reset = datetime.fromtimestamp(self._request_count_started_at)
+        next_reset = last_reset + timedelta(days=1)
+        if now < next_reset:
+            return
+        while now >= next_reset:
+            last_reset = next_reset
+            next_reset = last_reset + timedelta(days=1)
+        self._request_count_started_at = last_reset.timestamp()
+        self._request_count = 0
+
+    def get_usage(self) -> Dict[str, Any]:
+        self._maybe_reset_counter()
+        last_reset = datetime.fromtimestamp(self._request_count_started_at)
+        next_reset = last_reset + timedelta(days=1)
+        return {
+            "requests_total": self._request_count,
+            "started_at_unix": int(self._request_count_started_at),
+            "next_reset_at_unix": int(next_reset.timestamp()),
+            "reset_hour_local": self._quota_reset_hour,
+        }
+
+    def _cache_key(self, artist: str, track: str, album: Optional[str], max_results: int) -> str:
+        parts = [
+            artist.strip().lower(),
+            track.strip().lower(),
+            (album or "").strip().lower(),
+            str(max_results),
+        ]
+        return "|".join(parts)
+
+    def _get_cached_search(self, key: str) -> Optional[List[Dict[str, Any]]]:
+        entry = self._search_cache.get(key)
+        if not entry:
+            return None
+        timestamp, results = entry
+        if time.monotonic() - timestamp > self._search_cache_ttl_seconds:
+            self._search_cache.pop(key, None)
+            return None
+        self._search_cache.move_to_end(key)
+        return results
+
+    def _set_cached_search(self, key: str, results: List[Dict[str, Any]]) -> None:
+        self._search_cache[key] = (time.monotonic(), results)
+        self._search_cache.move_to_end(key)
+        if len(self._search_cache) > self._search_cache_max_entries:
+            self._search_cache.popitem(last=False)
     
     async def search_videos(
         self, 
@@ -96,31 +231,29 @@ class YouTubeClient:
             'type': 'video',
             'videoCategoryId': video_category_id,
             'maxResults': min(max_results, 50),
-            'key': self.api_key,
             'order': 'relevance'
         }
         
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(f"{self.base_url}/search", params=params)
-                response.raise_for_status()
-                data = response.json()
-                
-                return [
-                    {
-                        'video_id': item['id']['videoId'],
-                        'title': item['snippet']['title'],
-                        'description': item['snippet']['description'],
-                        'channel_title': item['snippet']['channelTitle'],
-                        'published_at': item['snippet']['publishedAt'],
-                        'thumbnails': item['snippet']['thumbnails'],
-                        'url': f"https://www.youtube.com/watch?v={item['id']['videoId']}"
-                    }
-                    for item in data.get('items', [])
-                ]
-            except httpx.HTTPStatusError as e:
-                raise HTTPException(status_code=e.response.status_code, 
-                                  detail=f"YouTube API error: {str(e)}")
+        try:
+            response = await self._api_get("search", params)
+            response.raise_for_status()
+            data = response.json()
+
+            return [
+                {
+                    'video_id': item['id']['videoId'],
+                    'title': item['snippet']['title'],
+                    'description': item['snippet']['description'],
+                    'channel_title': item['snippet']['channelTitle'],
+                    'published_at': item['snippet']['publishedAt'],
+                    'thumbnails': item['snippet']['thumbnails'],
+                    'url': f"https://www.youtube.com/watch?v={item['id']['videoId']}"
+                }
+                for item in data.get('items', [])
+            ]
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code,
+                              detail=f"YouTube API error: {str(e)}")
     
     async def get_video_details(self, video_id: str) -> Dict[str, Any]:
         """
@@ -135,36 +268,34 @@ class YouTubeClient:
         params = {
             'part': 'snippet,statistics,contentDetails',
             'id': video_id,
-            'key': self.api_key
         }
         
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(f"{self.base_url}/videos", params=params)
-                response.raise_for_status()
-                data = response.json()
-                
-                if not data.get('items'):
-                    raise HTTPException(status_code=404, detail="Video not found")
-                
-                item = data['items'][0]
-                
-                return {
-                    'video_id': item['id'],
-                    'title': item['snippet']['title'],
-                    'description': item['snippet']['description'],
-                    'channel_title': item['snippet']['channelTitle'],
-                    'published_at': item['snippet']['publishedAt'],
-                    'thumbnails': item['snippet']['thumbnails'],
-                    'statistics': item.get('statistics', {}),
-                    'duration': item['contentDetails']['duration'],
-                    'definition': item['contentDetails']['definition'],
-                    'caption': item['contentDetails']['caption'],
-                    'url': f"https://www.youtube.com/watch?v={item['id']}"
-                }
-            except httpx.HTTPStatusError as e:
-                raise HTTPException(status_code=e.response.status_code, 
-                                  detail=f"YouTube API error: {str(e)}")
+        try:
+            response = await self._api_get("videos", params)
+            response.raise_for_status()
+            data = response.json()
+
+            if not data.get('items'):
+                raise HTTPException(status_code=404, detail="Video not found")
+
+            item = data['items'][0]
+
+            return {
+                'video_id': item['id'],
+                'title': item['snippet']['title'],
+                'description': item['snippet']['description'],
+                'channel_title': item['snippet']['channelTitle'],
+                'published_at': item['snippet']['publishedAt'],
+                'thumbnails': item['snippet']['thumbnails'],
+                'statistics': item.get('statistics', {}),
+                'duration': item['contentDetails']['duration'],
+                'definition': item['contentDetails']['definition'],
+                'caption': item['contentDetails']['caption'],
+                'url': f"https://www.youtube.com/watch?v={item['id']}"
+            }
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code,
+                              detail=f"YouTube API error: {str(e)}")
     
     async def search_music_videos(
         self, 
@@ -185,23 +316,27 @@ class YouTubeClient:
         Returns:
             List of matching music videos
         """
-        # Try different search query patterns for better results
-        queries = [
-            f"{artist} {track} official video",
-            f"{artist} {track} music video",
-            f"{artist} {track}",
-            f"{track} {artist}"
-        ]
-        
+        cache_key = self._cache_key(artist, track, album, max_results)
+        cached = self._get_cached_search(cache_key)
+        if cached is not None:
+            return cached
+
+        # Minimize calls: prefer a single high-signal query, fall back once for lists.
+        queries = []
         if album:
-            queries.insert(0, f"{artist} {track} {album} official video")
-        
+            queries.append(f"{artist} {track} {album} official video")
+        queries.append(f"{artist} {track} official video")
+        if max_results > 1:
+            queries.append(f"{artist} {track}")
+
         for query in queries:
             videos = await self.search_videos(query, max_results)
             if videos:
-                # Filter out non-music videos and return best matches
-                return self._filter_music_videos(videos, artist, track)
-        
+                filtered = self._filter_music_videos(videos, artist, track)
+                self._set_cached_search(cache_key, filtered)
+                return filtered
+
+        self._set_cached_search(cache_key, [])
         return []
     
     def _filter_music_videos(
@@ -333,10 +468,8 @@ class YouTubeClient:
             Dictionary with download status and file info
         """
         try:
-            # Get video details first
-            video_details = await self.get_video_details(video_id)
-            if not video_details:
-                raise HTTPException(status_code=404, detail="Video not found")
+            # Best-effort metadata; do not fail download on quota errors.
+            video_details = await self._safe_get_video_details(video_id)
 
             output_path = self.get_download_path(video_id, output_format)
 
@@ -348,8 +481,8 @@ class YouTubeClient:
                     'video_id': video_id,
                     'file_path': str(output_path),
                     'file_size': file_size,
-                    'title': video_details['title'],
-                    'duration': video_details['duration']
+                    'title': video_details['title'] if video_details else video_id,
+                    'duration': video_details['duration'] if video_details else None
                 }
 
             # Configure yt-dlp options
@@ -382,8 +515,8 @@ class YouTubeClient:
                 'video_id': video_id,
                 'file_path': str(output_path),
                 'file_size': file_size,
-                'title': video_details['title'],
-                'duration': video_details['duration'],
+                'title': video_details['title'] if video_details else video_id,
+                'duration': video_details['duration'] if video_details else None,
                 'format': output_format
             }
 
@@ -414,10 +547,8 @@ class YouTubeClient:
             Dictionary with download status and file info
         """
         try:
-            # Get video details first
-            video_details = await self.get_video_details(video_id)
-            if not video_details:
-                raise HTTPException(status_code=404, detail="Video not found")
+            # Best-effort metadata; do not fail download on quota errors.
+            video_details = await self._safe_get_video_details(video_id)
 
             # Create clean filename: "Artist - Track"
             filename = f"{artist_name} - {track_name}"
@@ -431,8 +562,8 @@ class YouTubeClient:
                     'video_id': video_id,
                     'file_path': str(output_path),
                     'file_size': file_size,
-                    'title': video_details['title'],
-                    'duration': video_details['duration'],
+                    'title': video_details['title'] if video_details else f"{artist_name} - {track_name}",
+                    'duration': video_details['duration'] if video_details else None,
                     'artist': artist_name,
                     'track': track_name
                 }
@@ -467,8 +598,8 @@ class YouTubeClient:
                 'video_id': video_id,
                 'file_path': str(output_path),
                 'file_size': file_size,
-                'title': video_details['title'],
-                'duration': video_details['duration'],
+                'title': video_details['title'] if video_details else f"{artist_name} - {track_name}",
+                'duration': video_details['duration'] if video_details else None,
                 'artist': artist_name,
                 'track': track_name,
                 'format': output_format
@@ -491,10 +622,8 @@ class YouTubeClient:
         Download audio to organized folder structure: downloads/Artist/Artist - Track.mp3
         """
         try:
-            # Get video details first
-            video_details = await self.get_video_details(video_id)
-            if not video_details:
-                raise HTTPException(status_code=404, detail="Video not found")
+            # Best-effort metadata; do not fail download on quota errors.
+            video_details = await self._safe_get_video_details(video_id)
 
             # Use organized path: downloads/Artist/Artist - Track.mp3
             output_path = self.get_artist_download_path(artist_name, track_name, output_format)
@@ -507,8 +636,8 @@ class YouTubeClient:
                     'video_id': video_id,
                     'file_path': str(output_path),
                     'file_size': file_size,
-                    'title': video_details['title'],
-                    'duration': video_details['duration'],
+                    'title': video_details['title'] if video_details else f"{artist_name} - {track_name}",
+                    'duration': video_details['duration'] if video_details else None,
                     'artist': artist_name,
                     'track': track_name,
                     'organized': True
@@ -544,8 +673,8 @@ class YouTubeClient:
                 'video_id': video_id,
                 'file_path': str(output_path),
                 'file_size': file_size,
-                'title': video_details['title'],
-                'duration': video_details['duration'],
+                'title': video_details['title'] if video_details else f"{artist_name} - {track_name}",
+                'duration': video_details['duration'] if video_details else None,
                 'artist': artist_name,
                 'track': track_name,
                 'format': output_format,
@@ -649,10 +778,8 @@ class YouTubeClient:
             Dictionary with stream information
         """
         try:
-            # Get video details first
-            video_details = await self.get_video_details(video_id)
-            if not video_details:
-                raise HTTPException(status_code=404, detail="Video not found")
+            # Best-effort metadata; do not fail on quota errors.
+            video_details = await self._safe_get_video_details(video_id)
 
             # Generate a temporary filename for this session
             import uuid
@@ -661,18 +788,28 @@ class YouTubeClient:
             return {
                 'status': 'ready_to_stream',
                 'video_id': video_id,
-                'title': video_details['title'],
-                'duration': video_details['duration'],
+                'title': video_details['title'] if video_details else video_id,
+                'duration': video_details['duration'] if video_details else None,
                 'format': output_format,
                 'quality': format_quality,
                 'temp_filename': temp_filename,
-                'estimated_size_mb': f"~{(video_details['duration'] * 0.0125):.1f} MB" if video_details['duration'] else "Unknown"
+                'estimated_size_mb': f"~{(video_details['duration'] * 0.0125):.1f} MB" if video_details and video_details.get('duration') else "Unknown"
             }
 
         except HTTPException:
             raise
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to prepare stream: {str(e)}")
+
+    async def _safe_get_video_details(self, video_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            return await self.get_video_details(video_id)
+        except HTTPException as exc:
+            logger.warning("YouTube metadata lookup failed for %s: %s", video_id, exc.detail)
+            return None
+        except Exception as exc:
+            logger.warning("YouTube metadata lookup failed for %s: %s", video_id, exc)
+            return None
 
 
 # Global YouTube client instance

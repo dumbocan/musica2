@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { API_BASE_URL, audio2Api } from '@/lib/api';
 import { useApiStore } from '@/store/useApiStore';
 import type { Artist } from '@/types/api';
-import { Music, Loader2, Heart, Trash2 } from 'lucide-react';
+import { Loader2, Heart, Trash2 } from 'lucide-react';
 import { usePaginatedArtists } from '@/hooks/usePaginatedArtists';
 
 const parseStoredJsonArray = (raw?: string | null) => {
@@ -218,6 +218,25 @@ export function ArtistsPage() {
                 </span>
               </div>
             </div>
+            <div style={{ marginTop: 16, width: '100%' }}>
+              <label className="filter-label uppercase tracking-wide text-white block mb-1">
+                Search
+              </label>
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Buscar artista..."
+                style={{
+                  width: '100%',
+                  border: '1px solid rgba(255,255,255,0.15)',
+                  borderRadius: 999,
+                  padding: '10px 14px',
+                  background: 'rgba(0,0,0,0.2)',
+                  color: '#fff'
+                }}
+              />
+            </div>
           </div>
           <div style={{ flexBasis: 'calc(33.33% - 1rem)', flexGrow: 0, flexShrink: 0 }}>
             <div className="filter-control rounded-full border border-white/10 bg-[#151823] px-4 py-2">
@@ -357,6 +376,14 @@ export function ArtistsPage() {
                     <p className="text-sm font-semibold truncate">{artist.name}</p>
                     {artist.popularity > 0 && (
                       <p className="text-xs text-white/60">Popularity {artist.popularity}</p>
+                    )}
+                    {genres.length > 0 && (
+                      <p
+                        className="truncate"
+                        style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)', marginTop: 4 }}
+                      >
+                        {genres.slice(0, 3).join(', ')}
+                      </p>
                     )}
                   </div>
                   <div

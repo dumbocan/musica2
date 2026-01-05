@@ -3,12 +3,120 @@ YouTube API endpoints for music video integration.
 Provides search functionality and video metadata retrieval.
 """
 
-from typing import List, Optional
-from fastapi import APIRouter, Query, HTTPException, Depends
+import asyncio
+import logging
+from typing import Dict, List, Optional
+
+from fastapi import APIRouter, Query, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
+from sqlmodel import select
+
 from app.core.youtube import youtube_client
+from app.core.spotify import spotify_client
+from app.core.db import get_session
+from app.crud import save_youtube_download
+from app.models.base import Album, Artist, Track, YouTubeDownload
 
 router = APIRouter(prefix="/youtube", tags=["youtube"])
+logger = logging.getLogger(__name__)
+prefetch_tasks: Dict[str, asyncio.Task] = {}
+
+
+class YoutubeLinkBatchRequest(BaseModel):
+    spotify_track_ids: List[str]
+
+
+class YoutubeTrackRefreshRequest(BaseModel):
+    artist: Optional[str] = None
+    track: Optional[str] = None
+    album: Optional[str] = None
+
+
+async def _prefetch_album_links(spotify_album_id: str):
+    """Background coroutine that fetches YouTube links for every track in an album."""
+    try:
+        album_info = await spotify_client.get_album(spotify_album_id)
+        album_name = album_info.get("name")
+        tracks = await spotify_client.get_album_tracks(spotify_album_id)
+        default_artist = (album_info.get("artists") or [{}])[0]
+        default_artist_name = default_artist.get("name", "")
+        default_artist_id = default_artist.get("id")
+
+        existing_downloads = {}
+        track_ids = [track.get("id") for track in tracks if track.get("id")]
+        if track_ids:
+            with get_session() as session:
+                rows = session.exec(
+                    select(YouTubeDownload).where(YouTubeDownload.spotify_track_id.in_(track_ids))
+                ).all()
+            existing_downloads = {row.spotify_track_id: row for row in rows}
+
+        for index, track in enumerate(tracks):
+            artist_info = (track.get("artists") or [{}])[0]
+            artist_name = artist_info.get("name") or default_artist_name
+            artist_id = artist_info.get("id") or default_artist_id
+            spotify_track_id = track.get("id")
+
+            if not spotify_track_id or not artist_name:
+                continue
+
+            existing = existing_downloads.get(spotify_track_id)
+            if existing:
+                continue
+
+            try:
+                videos = await youtube_client.search_music_videos(
+                    artist=artist_name,
+                    track=track.get("name"),
+                    album=album_name,
+                    max_results=1
+                )
+                if videos:
+                    best = videos[0]
+                    save_youtube_download({
+                        "spotify_track_id": spotify_track_id,
+                        "spotify_artist_id": artist_id,
+                        "youtube_video_id": best["video_id"],
+                        "download_path": "",
+                        "download_status": "link_found",
+                        "error_message": None
+                    })
+                else:
+                    save_youtube_download({
+                        "spotify_track_id": spotify_track_id,
+                        "spotify_artist_id": artist_id,
+                        "youtube_video_id": "",
+                        "download_path": "",
+                        "download_status": "video_not_found",
+                        "error_message": "Video not found"
+                    })
+            except HTTPException as exc:
+                save_youtube_download({
+                    "spotify_track_id": spotify_track_id,
+                    "spotify_artist_id": artist_id,
+                    "youtube_video_id": "",
+                    "download_path": "",
+                    "download_status": "error",
+                    "error_message": exc.detail
+                })
+                if exc.status_code in (403, 429):
+                    logger.warning("Stopping YouTube prefetch for %s due to API error %s", spotify_album_id, exc.status_code)
+                    break
+            except Exception as err:
+                logger.warning("Failed to cache YouTube link for %s: %s", spotify_track_id, err)
+                save_youtube_download({
+                    "spotify_track_id": spotify_track_id,
+                    "spotify_artist_id": artist_id,
+                    "youtube_video_id": "",
+                    "download_path": "",
+                    "download_status": "error",
+                    "error_message": str(err)
+                })
+
+            await asyncio.sleep(youtube_client.min_interval_seconds)
+    finally:
+        prefetch_tasks.pop(spotify_album_id, None)
 
 
 @router.get("/search")
@@ -35,6 +143,8 @@ async def search_videos(
             "total_results": len(videos),
             "videos": videos
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error searching videos: {str(e)}")
 
@@ -70,8 +180,209 @@ async def search_music_videos(
             "total_results": len(videos),
             "videos": videos
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error searching music videos: {str(e)}")
+
+
+@router.post("/album/{spotify_id}/prefetch")
+async def prefetch_album_youtube_links(spotify_id: str):
+    """
+    Schedule a background job to fetch YouTube links for every track in an album.
+    """
+    with get_session() as session:
+        album = session.exec(
+            select(Album).where(Album.spotify_id == spotify_id)
+        ).first()
+        if album:
+            existing = session.exec(
+                select(YouTubeDownload.spotify_track_id)
+                .join(Track, Track.spotify_id == YouTubeDownload.spotify_track_id)
+                .where(Track.album_id == album.id)
+                .limit(1)
+            ).first()
+            if existing:
+                return {"status": "cached", "message": "Links already cached for this album"}
+
+    if spotify_id in prefetch_tasks and not prefetch_tasks[spotify_id].done():
+        return {"status": "running", "message": "Prefetch already in progress"}
+
+    task = asyncio.create_task(_prefetch_album_links(spotify_id))
+    prefetch_tasks[spotify_id] = task
+    return {"status": "scheduled"}
+
+
+@router.get("/track/{spotify_track_id}/link")
+def get_track_youtube_link(spotify_track_id: str):
+    """
+    Retrieve cached YouTube link info for a Spotify track.
+    """
+    with get_session() as session:
+        record = session.exec(
+            select(YouTubeDownload).where(YouTubeDownload.spotify_track_id == spotify_track_id)
+        ).first()
+
+        if not record:
+            raise HTTPException(status_code=404, detail="Link not ready")
+
+        if record.download_status in ("error", "video_not_found") and not record.youtube_video_id:
+            record.download_status = "missing"
+            session.add(record)
+            session.commit()
+
+        status = record.download_status
+        if record.youtube_video_id and status in ("missing", "error", "video_not_found"):
+            status = "link_found"
+
+        return {
+            "spotify_track_id": record.spotify_track_id,
+            "status": status,
+            "youtube_video_id": record.youtube_video_id,
+            "youtube_url": f"https://www.youtube.com/watch?v={record.youtube_video_id}" if record.youtube_video_id else None,
+            "error_message": record.error_message,
+            "updated_at": record.updated_at.isoformat() if record.updated_at else None
+        }
+
+
+@router.post("/links")
+def get_track_youtube_links(payload: YoutubeLinkBatchRequest):
+    track_ids = [track_id for track_id in payload.spotify_track_ids if track_id]
+    if not track_ids:
+        return {"items": []}
+
+    with get_session() as session:
+        records = session.exec(
+            select(YouTubeDownload).where(YouTubeDownload.spotify_track_id.in_(track_ids))
+        ).all()
+        to_update = []
+        for record in records:
+            if record.download_status in ("error", "video_not_found") and not record.youtube_video_id:
+                record.download_status = "missing"
+                to_update.append(record)
+        if to_update:
+            session.add_all(to_update)
+            session.commit()
+
+    records_by_id = {record.spotify_track_id: record for record in records}
+    items = []
+    for track_id in track_ids:
+        record = records_by_id.get(track_id)
+        if not record:
+            items.append({
+                "spotify_track_id": track_id,
+                "status": "missing",
+                "youtube_video_id": None,
+                "youtube_url": None,
+                "error_message": None,
+                "updated_at": None
+            })
+            continue
+
+        status = record.download_status
+        if record.youtube_video_id and status in ("missing", "error", "video_not_found"):
+            status = "link_found"
+
+        items.append({
+            "spotify_track_id": record.spotify_track_id,
+            "status": status,
+            "youtube_video_id": record.youtube_video_id,
+            "youtube_url": f"https://www.youtube.com/watch?v={record.youtube_video_id}" if record.youtube_video_id else None,
+            "error_message": record.error_message,
+            "updated_at": record.updated_at.isoformat() if record.updated_at else None
+        })
+
+    return {"items": items}
+
+
+@router.post("/track/{spotify_track_id}/refresh")
+async def refresh_track_youtube_link(
+    spotify_track_id: str,
+    payload: YoutubeTrackRefreshRequest
+):
+    """
+    Search YouTube for a track and persist the link. Intended for user-triggered play.
+    """
+    artist_name = payload.artist
+    track_name = payload.track
+    album_name = payload.album
+    spotify_artist_id = None
+
+    with get_session() as session:
+        row = session.exec(
+            select(Track, Artist, Album)
+            .join(Artist, Artist.id == Track.artist_id)
+            .outerjoin(Album, Album.id == Track.album_id)
+            .where(Track.spotify_id == spotify_track_id)
+        ).first()
+
+        if row:
+            track, artist, album = row
+            artist_name = artist.name or artist_name
+            track_name = track.name or track_name
+            album_name = album.name if album else album_name
+            spotify_artist_id = artist.spotify_id
+
+    if not artist_name or not track_name:
+        raise HTTPException(status_code=400, detail="Artist and track are required to search YouTube")
+
+    try:
+        videos = await youtube_client.search_music_videos(
+            artist=artist_name,
+            track=track_name,
+            album=album_name,
+            max_results=1
+        )
+        if videos:
+            best = videos[0]
+            save_youtube_download({
+                "spotify_track_id": spotify_track_id,
+                "spotify_artist_id": spotify_artist_id,
+                "youtube_video_id": best["video_id"],
+                "download_path": "",
+                "download_status": "link_found",
+                "error_message": None
+            })
+            return {
+                "spotify_track_id": spotify_track_id,
+                "status": "link_found",
+                "youtube_video_id": best["video_id"],
+                "youtube_url": best["url"],
+                "error_message": None
+            }
+        save_youtube_download({
+            "spotify_track_id": spotify_track_id,
+            "spotify_artist_id": spotify_artist_id,
+            "youtube_video_id": "",
+            "download_path": "",
+            "download_status": "missing",
+            "error_message": "Video not found"
+        })
+        return {
+            "spotify_track_id": spotify_track_id,
+            "status": "missing",
+            "youtube_video_id": None,
+            "youtube_url": None,
+            "error_message": "Video not found"
+        }
+    except HTTPException as exc:
+        save_youtube_download({
+            "spotify_track_id": spotify_track_id,
+            "spotify_artist_id": spotify_artist_id,
+            "youtube_video_id": "",
+            "download_path": "",
+            "download_status": "missing",
+            "error_message": str(exc.detail) if hasattr(exc, "detail") else str(exc)
+        })
+        raise
+
+
+@router.get("/usage")
+async def youtube_usage():
+    """
+    Return in-memory count of YouTube API requests since server start.
+    """
+    return youtube_client.get_usage()
 
 
 @router.get("/video/{video_id}")

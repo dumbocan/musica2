@@ -261,3 +261,20 @@ export interface DownloadStatus {
   updated_at: string;
   error_message: string | null;
 }
+
+export interface TrackOverview {
+  track_id: number;
+  track_name: string;
+  spotify_track_id?: string | null;
+  artist_name?: string | null;
+  artist_spotify_id?: string | null;
+  album_name?: string | null;
+  album_spotify_id?: string | null;
+  duration_ms?: number | null;
+  popularity?: number | null;
+  youtube_video_id?: string | null;
+  youtube_status?: string | null;
+  youtube_url?: string | null;
+  local_file_path?: string | null;
+  local_file_exists: boolean;
+}

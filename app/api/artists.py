@@ -22,7 +22,7 @@ from ..crud import (
     list_hidden_artists
 )
 from ..core.db import get_session
-from ..models.base import Artist
+from ..models.base import Artist, Album, Track, YouTubeDownload
 from ..core.lastfm import lastfm_client
 from ..core.auto_download import auto_download_service
 from ..core.data_freshness import data_freshness_manager
@@ -48,6 +48,8 @@ async def search_artists_auto_download(
     q: str = Query(..., description="Artist name to search"),
     user_id: int = Query(1, description="User ID for personalized recommendations"),
     expand_library: bool = Query(True, description="Auto-expand with similar artists"),
+    include_youtube_links: bool = Query(False, description="Buscar links de YouTube durante la expansión"),
+    auto_download_top_tracks: bool = Query(False, description="Descargar top tracks automáticamente (YouTube)"),
     background_tasks: BackgroundTasks = None
 ) -> dict:
     """
@@ -82,17 +84,18 @@ async def search_artists_auto_download(
                     main_artist_spotify_id=artist_spotify_id,
                     similar_count=8,  # 8 similar artists
                     tracks_per_artist=8,  # Will save ALL tracks from ALL albums
-                    include_youtube_links=True,  # Find YouTube links for all tracks
+                    include_youtube_links=include_youtube_links,  # Find YouTube links for all tracks
                     include_full_albums=True  # Save complete discography with artwork
                 )
 
-            # Now trigger REAL downloads for the main artist (testing)
-            await auto_download_service.auto_download_artist_top_tracks(
-                artist_name=artist_name,
-                artist_spotify_id=artist_spotify_id,
-                limit=3,  # Download top 3 tracks for testing
-                background_tasks=background_tasks
-            )
+            # Optional: trigger downloads for the main artist
+            if auto_download_top_tracks:
+                await auto_download_service.auto_download_artist_top_tracks(
+                    artist_name=artist_name,
+                    artist_spotify_id=artist_spotify_id,
+                    limit=3,  # Download top 3 tracks for testing
+                    background_tasks=background_tasks
+                )
 
             # Return enhanced response with expansion results
             return {
@@ -121,6 +124,83 @@ async def search_artists_auto_download(
 async def get_artist_albums(spotify_id: str = Path(..., description="Spotify artist ID")) -> List[dict]:
     """Get all albums for an artist via Spotify API."""
     albums = await spotify_client.get_artist_albums(spotify_id)
+    album_ids = [album.get("id") for album in albums if album.get("id")]
+
+    counts: dict[str, int] = {}
+    local_tracks: dict[str, set[str]] = {}
+    downloaded_tracks: set[str] = set()
+
+    if album_ids:
+        with get_session() as session:
+            rows = session.exec(
+                select(
+                    Album.spotify_id,
+                    func.count(func.distinct(YouTubeDownload.spotify_track_id)).label("link_count"),
+                )
+                .join(Track, Track.album_id == Album.id)
+                .join(YouTubeDownload, YouTubeDownload.spotify_track_id == Track.spotify_id)
+                .where(
+                    Album.spotify_id.in_(album_ids),
+                    YouTubeDownload.youtube_video_id.is_not(None),
+                    YouTubeDownload.youtube_video_id != "",
+                    YouTubeDownload.download_status.in_(("link_found", "completed")),
+                )
+                .group_by(Album.spotify_id)
+            ).all()
+            counts = {album_spotify_id: int(count) for album_spotify_id, count in rows}
+
+            local_rows = session.exec(
+                select(Album.spotify_id, Track.spotify_id)
+                .join(Track, Track.album_id == Album.id)
+                .where(
+                    Album.spotify_id.in_(album_ids),
+                    Track.spotify_id.is_not(None),
+                )
+            ).all()
+            for album_spotify_id, track_spotify_id in local_rows:
+                if track_spotify_id:
+                    local_tracks.setdefault(album_spotify_id, set()).add(track_spotify_id)
+
+            download_rows = session.exec(
+                select(YouTubeDownload.spotify_track_id)
+                .where(
+                    YouTubeDownload.spotify_artist_id == spotify_id,
+                    YouTubeDownload.youtube_video_id.is_not(None),
+                    YouTubeDownload.youtube_video_id != "",
+                    YouTubeDownload.download_status.in_(("link_found", "completed")),
+                )
+            ).all()
+            downloaded_tracks = {row[0] for row in download_rows if row[0]}
+
+    for album in albums:
+        album_id = album.get("id")
+        if not album_id:
+            continue
+
+        current_count = counts.get(album_id, 0)
+
+        if downloaded_tracks and current_count < len(downloaded_tracks):
+            track_ids = local_tracks.get(album_id)
+            if track_ids is None:
+                track_ids = set()
+                try:
+                    album_tracks = await spotify_client.get_album_tracks(album_id)
+                    for track in album_tracks:
+                        tid = track.get("id")
+                        if tid:
+                            track_ids.add(tid)
+                except Exception as exc:
+                    logger.warning("Failed to fetch tracks for album %s: %s", album_id, exc)
+                local_tracks[album_id] = track_ids
+
+            if track_ids:
+                matched = sum(1 for tid in track_ids if tid in downloaded_tracks)
+                if matched > current_count:
+                    current_count = matched
+                    counts[album_id] = matched
+
+        album["youtube_links_available"] = current_count
+
     return albums
 
 

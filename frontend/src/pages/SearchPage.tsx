@@ -161,7 +161,6 @@ export function SearchPage() {
     if (searchMode !== 'tag') return;
     const target = loadMoreRef.current;
     if (!target) return;
-    const totalList = (lastfmEnriched.length ? lastfmEnriched : lastfmArtists).length;
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {

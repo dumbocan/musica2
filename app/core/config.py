@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     LASTFM_API_KEY: Optional[str] = None
     MUSIXMATCH_API_KEY: Optional[str] = None
     YOUTUBE_API_KEY: Optional[str] = None
+    YOUTUBE_API_KEY_2: Optional[str] = None
 
     # Security
     JWT_SECRET_KEY: str = "changeme-in-.env"

@@ -45,6 +45,21 @@ A **complete REST API backend** for personal music streaming, featuring **comple
 - **Resistencia a borrados**: `delete_artist`/`delete_album`/`delete_track` rechazan la operación si hay favoritos. Nuevos helpers en `crud` + endpoints `DELETE /albums/id/{id}` ya protegidos.
 - **Dependencias**: añadido `Pillow` para el resize; `discogs-client` fijado a `2.3.0`.
 
+## 🎧 YouTube streaming, caché y descargas
+
+- **Job en background** (`app/core/youtube_prefetch.py`): al arrancar `uvicorn app.main:app --reload` se ejecuta `youtube_prefetch_loop()` que inspecciona la tabla `track` y va rellenando `YouTubeDownload` uno a uno. Usa `youtube_client.min_interval_seconds = 5` para no quemar cuota y, si recibe un `403/429`, entra en enfriamiento de 15 min. Vigila los avances con `tail -f uvicorn.log | grep youtube_prefetch`.
+- **Prefetch bajo demanda**: `POST /youtube/album/{spotify_id}/prefetch` dispara un job que recorre los tracks del álbum usando Spotify, guarda el mejor `youtube_video_id` y respeta la misma pausa de 5 s. El frontend lo llama automáticamente cuando visitas un álbum, pero también lo puedes usar vía `curl` con un token válido.
+- **Pistas & dataset demo**: el directorio `downloads/` almacena los MP3 organizados por artista (por ejemplo `downloads/Dr.-Dre/Dr.-Dre - Still D.R.E..mp3`). El dataset de demo incluye 41 pistas ya descargadas para 15 artistas (50 Cent, Eminem, Radiohead, Gorillaz, etc.) y puedes consultarlas vía `GET /tracks/overview`.
+- **Contadores híbridos en álbumes**: `GET /artists/{spotify_id}/albums` ahora suma tanto los links guardados en la BD como los MP3 descargados que coincidan con los track IDs de Spotify. Eso evita mostrar `0` aunque todavía no se haya guardado el álbum localmente.
+- **Logs y depuración**: los prefetches registran líneas `[youtube_prefetch] Cached ARTIST - TRACK` en la consola. Si ves `Stopping YouTube prefetch ... 403`, espera 15 min o baja la cadencia de peticiones antes de reintentar.
+- **Credenciales obligatorias**: sin `YOUTUBE_API_KEY` en `.env` los endpoints `/youtube/...` devuelven `401/500` y la UI marca error. Asegúrate de tener la clave incluida antes de visitar las páginas de álbumes o la vista global de tracks.
+
+## 🎛️ Tracks dashboard + endpoint de estado
+
+- **Endpoint nuevo**: `GET /tracks/overview` devuelve cada track con artista, álbum, duración y estado de YouTube/archivo local (`youtube_status`, `youtube_url`, `local_file_exists`). Es la base para la pestaña “Tracks” del frontend.
+- **Frontend renovado**: `frontend/src/pages/TracksPage.tsx` muestra métricas globales (cuántas pistas tienen link o MP3), buscador, filtros y accesos directos para abrir YouTube o descargar el MP3 desde `/youtube/download/{video_id}/file`.
+- **Uso recomendado**: abre `http://localhost:5173/tracks` para saber qué canciones ya están listas para streaming/descarga sin entrar álbum por álbum.
+
 ## 🏗️ **Tech Stack**
 
 | Component | Technology | Details |
@@ -58,7 +73,7 @@ A **complete REST API backend** for personal music streaming, featuring **comple
 ## 🚀 **Quick Start**
 ### Prerequisites
 - Python 3.8+
-- PostgreSQL (installed and running)
+- SQLite (built in) for local/dev usage; install PostgreSQL if you want to mirror production
 - Git
 
 ### Installation
@@ -83,6 +98,7 @@ cp .env.example .env
 # Edit .env with your database and API credentials
 # The backend now defaults to SQLite (audio2.db) so you can run without Postgres.
 # Add Spotify/Last.fm/Youtube keys only if you will hit those endpoints.
+# IMPORTANT: set YOUTUBE_API_KEY before visiting album/track pages; otherwise the UI will warn about missing streaming links.
 ```
 
 4. **Start the server:**
@@ -97,6 +113,29 @@ uvicorn app.main:app --reload
 curl http://localhost:8000/health
 # Expected: {"status": "ok"}
 ```
+
+## 🗄️ Database Setup (SQLite vs PostgreSQL)
+
+- **Project requirement**: This repo is configured to use **PostgreSQL only**. Keep `DATABASE_URL` set to a Postgres connection string.
+- **Local/dev = SQLite**: por defecto `DATABASE_URL` apunta a `sqlite:///./audio2.db`. No requiere servidor externo y permite correr pruebas o `uvicorn` al instante.
+- **Producción/staging = PostgreSQL**: el roadmap exige estandarizar Postgres en despliegues reales para soportar concurrencia, roles y extensiones. Configura `DATABASE_URL=postgresql+psycopg2://user:pass@host:5432/dbname` y ejecuta `create_db_and_tables()` para migrar los modelos.
+- **Diferencias clave**: SQLite vive en un archivo único (sin usuarios ni conexiones múltiples); Postgres es un servicio completo con ACID sólido, replicación y rendimiento en paralelo — por eso SQLite queda para desarrollo y Postgres será obligatorio en producción.
+- **Stack ORM explicado**:
+  - `SQLModel 0.0.27` define clases únicas que sirven como modelos de Pydantic y tablas SQL (ver `app/models/base.py`).
+  - `SQLAlchemy 2.0.44` ejecuta las consultas/relaciones reales sobre cualquier motor soportado.
+  - `psycopg2-binary 2.9.11` es el driver Postgres que SQLAlchemy usa cuando la URL apunta a `postgresql+psycopg2://`.
+
+```bash
+# Cambiar a Postgres para desarrollo o producción
+createdb audio2
+export DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/audio2
+python - <<'PY'
+from app.core.db import create_db_and_tables
+create_db_and_tables()
+PY
+```
+
+> Nota: si vuelves a SQLite, solo elimina/renombra `audio2.db` y FastAPI la recreará en el próximo arranque.
 
 ## 📚 **API Endpoints**
 
@@ -125,6 +164,7 @@ curl http://localhost:8000/health
 |----------|--------|-------------|
 | `/tracks/enrich/{track_id}` | POST | Add Last.fm data |
 | `/tracks/{track_id}/rate?rating=5` | POST | Rate track 1-5 |
+| `/tracks/overview` | GET | Track list with YouTube/cache status |
 
 ### � **Playlists & Smart Playlists**
 | Endpoint | Method | Description |
@@ -156,6 +196,8 @@ curl http://localhost:8000/health
 |----------|--------|-------------|
 | `/youtube/download/{track_id}` | POST | Download YouTube audio |
 | `/youtube/status/{track_id}` | GET | Get download status |
+| `/youtube/album/{spotify_id}/prefetch` | POST | Cache links for every track in an album |
+| `/youtube/track/{spotify_track_id}/link` | GET | Read cached link info (status/url) |
 
 ## 🎯 **Key Features in Action**
 

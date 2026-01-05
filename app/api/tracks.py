@@ -3,11 +3,12 @@ Track endpoints: list, etc.
 """
 
 from typing import List
+from pathlib import Path
 
 from fastapi import APIRouter, Path, HTTPException
 
 from ..core.db import get_session
-from ..models.base import Track, Artist
+from ..models.base import Track, Artist, Album, YouTubeDownload
 from ..crud import update_track_lastfm, update_track_spotify_data
 from ..core.lastfm import lastfm_client
 from ..core.spotify import spotify_client
@@ -22,6 +23,49 @@ def get_tracks() -> List[Track]:
     with get_session() as session:
         tracks = session.exec(select(Track)).all()
     return tracks
+
+
+@router.get("/overview")
+def get_tracks_overview() -> dict:
+    """
+    Return tracks with artist, album, cached YouTube link/status and local file info.
+    Useful for the frontend "Tracks" page so users can see what is ready for streaming/downloading.
+    """
+    with get_session() as session:
+        rows = session.exec(
+            select(Track, Artist, Album, YouTubeDownload)
+            .join(Artist, Artist.id == Track.artist_id)
+            .outerjoin(Album, Album.id == Track.album_id)
+            .outerjoin(YouTubeDownload, YouTubeDownload.spotify_track_id == Track.spotify_id)
+            .order_by(Artist.name.asc(), Track.name.asc())
+        ).all()
+
+    items = []
+    for track, artist, album, download in rows:
+        youtube_video_id = download.youtube_video_id if download else None
+        youtube_status = download.download_status if download else None
+        youtube_url = f"https://www.youtube.com/watch?v={youtube_video_id}" if youtube_video_id else None
+        file_path = download.download_path if download else None
+        file_exists = bool(file_path and Path(file_path).exists())
+
+        items.append({
+            "track_id": track.id,
+            "track_name": track.name,
+            "spotify_track_id": track.spotify_id,
+            "artist_name": artist.name if artist else None,
+            "artist_spotify_id": artist.spotify_id if artist else None,
+            "album_name": album.name if album else None,
+            "album_spotify_id": album.spotify_id if album else None,
+            "duration_ms": track.duration_ms,
+            "popularity": track.popularity,
+            "youtube_video_id": youtube_video_id,
+            "youtube_status": youtube_status,
+            "youtube_url": youtube_url,
+            "local_file_path": file_path,
+            "local_file_exists": file_exists,
+        })
+
+    return {"items": items, "total": len(items)}
 
 
 @router.get("/id/{track_id}")

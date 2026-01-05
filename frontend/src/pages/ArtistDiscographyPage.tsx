@@ -4,7 +4,14 @@ import { audio2Api, API_BASE_URL } from '@/lib/api';
 import type { Artist as LocalArtist } from '@/types/api';
 
 type AlbumImage = { url: string };
-type Album = { id: string; name: string; release_date?: string; images?: AlbumImage[] };
+type Album = {
+  id: string;
+  name: string;
+  release_date?: string;
+  total_tracks?: number;
+  images?: AlbumImage[];
+  youtube_links_available?: number;
+};
 type ArtistInfo = {
   spotify?: {
     id?: string;
@@ -198,6 +205,12 @@ export function ArtistDiscographyPage() {
             <div style={{ color: 'var(--muted)', fontSize: 12 }}>
               {album.release_date || 'Fecha desconocida'}
             </div>
+            {album.youtube_links_available !== undefined && (
+              <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 6 }}>
+                Links YouTube listos: {album.youtube_links_available}
+                {typeof album.total_tracks === 'number' ? ` / ${album.total_tracks}` : ''}
+              </div>
+            )}
           </div>
         ))}
       </div>

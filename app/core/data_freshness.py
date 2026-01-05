@@ -308,7 +308,7 @@ class DataFreshnessManager:
         main_artist_spotify_id: str,
         similar_count: int = 8,
         tracks_per_artist: int = 8,
-        include_youtube_links: bool = True,
+        include_youtube_links: bool = False,
         include_full_albums: bool = True
     ) -> Dict[str, any]:
 
@@ -324,7 +324,10 @@ class DataFreshnessManager:
         from ..core.youtube import youtube_client
 
         logger.info(f"🚀 Starting COMPLETE library expansion for {main_artist_name}")
-        logger.info(f"📚 Will get: full discography, YouTube links, biographies, artwork")
+        if include_youtube_links:
+            logger.info("📚 Will get: full discography, YouTube links, biographies, artwork")
+        else:
+            logger.info("📚 Will get: full discography, biographies, artwork (no YouTube links)")
 
         total_artists_processed = 1  # Main artist + similar
         total_albums_processed = 0
@@ -369,14 +372,17 @@ class DataFreshnessManager:
                                 ).first()
 
                                 if not existing_track:
-                                    # Save track and search YouTube link
-                                    await self.save_track_with_youtube_link(
-                                        track_data,
-                                        saved_album.id,
-                                        saved_album.artist_id
-                                    )
+                                    if include_youtube_links:
+                                        # Save track and search YouTube link
+                                        await self.save_track_with_youtube_link(
+                                            track_data,
+                                            saved_album.id,
+                                            saved_album.artist_id
+                                        )
+                                        total_youtube_links_found += 1  # Assume we find most
+                                    else:
+                                        save_track(track_data, saved_album.id, saved_album.artist_id)
                                     total_tracks_processed += 1
-                                    total_youtube_links_found += 1  # Assume we find most
                                 else:
                                     logger.info(f"⏭️  Track {track_data['name']} already exists")
 
@@ -508,16 +514,16 @@ class DataFreshnessManager:
             "total_artists_processed": total_artists_processed,
             "total_albums_processed": total_albums_processed,
             "total_tracks_processed": total_tracks_processed,
-            "total_youtube_links_searched": total_tracks_processed,  # Approximation
+            "total_youtube_links_searched": total_tracks_processed if include_youtube_links else 0,
             "full_discography_expansion": True,
             "includes_biographies": True,
             "includes_album_artwork": True,
-            "includes_youtube_links": True,
+            "includes_youtube_links": include_youtube_links,
             "expansion_details": {
                 "main_artist": main_artist_name,
                 "albums_found": total_albums_processed,
                 "tracks_found": total_tracks_processed,
-                "youtube_links_estimated": total_youtube_links_found
+                "youtube_links_estimated": total_youtube_links_found if include_youtube_links else 0
             }
         }
 
@@ -537,6 +543,18 @@ class DataFreshnessManager:
         # Save the track first
         track = save_track(track_data, album_id, artist_id)
         logger.info(f"💾 Saved track: {track_data['name']} by artist #{artist_id}")
+
+        # Skip search if we already have a cached link for this track
+        session = get_session()
+        try:
+            existing_download = session.exec(
+                select(YouTubeDownload).where(YouTubeDownload.spotify_track_id == track_data['id'])
+            ).first()
+        finally:
+            session.close()
+
+        if existing_download and existing_download.youtube_video_id and existing_download.download_status in ("link_found", "completed"):
+            return
 
         # Search for YouTube video
         try:

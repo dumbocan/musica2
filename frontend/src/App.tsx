@@ -1,6 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
 import { Sidebar } from '@/components/layout/Sidebar';
-import { NetworkDebugger } from '@/components/NetworkDebugger';
+import { YoutubeRequestCounter } from '@/components/YoutubeRequestCounter';
 import { useApiStore } from '@/store/useApiStore';
 import { LogOut, User, ChevronDown, Search } from 'lucide-react';
 import { useRef, useState } from 'react';
@@ -172,8 +172,7 @@ function AppShell() {
         </main>
       </div>
 
-      {/* Network Debugger - API Monitor */}
-      <NetworkDebugger />
+      <YoutubeRequestCounter />
     </div>
   );
 }
