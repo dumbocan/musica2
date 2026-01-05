@@ -49,7 +49,14 @@ export function AlbumDetailPage() {
   const [youtubeAvailability, setYoutubeAvailability] = useState<Record<string, YoutubeAvailability>>({});
   const [downloadState, setDownloadState] = useState<Record<string, DownloadUiState>>({});
   const [streamState, setStreamState] = useState<Record<string, StreamUiState>>({});
-  const [nowPlaying, setNowPlaying] = useState<{ title: string; artist?: string; videoId: string; embedUrl: string } | null>(null);
+  const [nowPlaying, setNowPlaying] = useState<{ title: string; artist?: string; videoId: string; spotifyTrackId: string } | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [volume, setVolume] = useState(70);
+  const [ytReady, setYtReady] = useState(false);
+  const playerContainerRef = useRef<HTMLDivElement | null>(null);
+  const playerRef = useRef<any>(null);
   const isMountedRef = useRef(true);
   const userId = useApiStore((s) => s.userId);
 
@@ -59,6 +66,30 @@ export function AlbumDetailPage() {
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if ((window as any).YT?.Player) {
+      setYtReady(true);
+      return;
+    }
+    const existing = document.getElementById('yt-iframe-api');
+    if (!existing) {
+      const script = document.createElement('script');
+      script.id = 'yt-iframe-api';
+      script.src = 'https://www.youtube.com/iframe_api';
+      document.body.appendChild(script);
+    }
+    const interval = window.setInterval(() => {
+      if ((window as any).YT?.Player) {
+        setYtReady(true);
+        window.clearInterval(interval);
+      }
+    }, 200);
+    return () => {
+      window.clearInterval(interval);
     };
   }, []);
 
@@ -226,8 +257,91 @@ export function AlbumDetailPage() {
     [album, resolveTrackId]
   );
 
-  const buildEmbedUrl = (videoId: string) =>
-    `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0`;
+  useEffect(() => {
+    if (!ytReady || !nowPlaying || !playerContainerRef.current) return;
+    const YT = (window as any).YT;
+    if (!playerRef.current) {
+      playerRef.current = new YT.Player(playerContainerRef.current, {
+        videoId: nowPlaying.videoId,
+        playerVars: {
+          autoplay: 1,
+          controls: 0,
+          disablekb: 1,
+          fs: 0,
+          iv_load_policy: 3,
+          modestbranding: 1,
+          rel: 0,
+          playsinline: 1,
+          vq: 'small',
+          origin: typeof window !== 'undefined' ? window.location.origin : undefined,
+        },
+        events: {
+          onReady: (event: any) => {
+            setDuration(event.target.getDuration() || 0);
+            event.target.setVolume?.(volume);
+            event.target.setPlaybackQuality?.('tiny');
+            event.target.playVideo();
+          },
+          onStateChange: (event: any) => {
+            const state = event.data;
+            if (state === YT.PlayerState.PLAYING) {
+              setIsPlaying(true);
+              event.target.setPlaybackQuality?.('tiny');
+            } else if (state === YT.PlayerState.PAUSED) {
+              setIsPlaying(false);
+            } else if (state === YT.PlayerState.ENDED) {
+              setIsPlaying(false);
+            }
+          },
+        },
+      });
+      return;
+    }
+    playerRef.current.loadVideoById(nowPlaying.videoId);
+  }, [nowPlaying, ytReady]);
+
+  useEffect(() => {
+    if (!nowPlaying && playerRef.current) {
+      playerRef.current.stopVideo();
+      setIsPlaying(false);
+      setCurrentTime(0);
+      setDuration(0);
+    }
+  }, [nowPlaying]);
+
+  useEffect(() => {
+    if (!nowPlaying || !playerRef.current) return;
+    const interval = window.setInterval(() => {
+      try {
+        const current = playerRef.current?.getCurrentTime?.();
+        const total = playerRef.current?.getDuration?.();
+        if (Number.isFinite(current)) {
+          setCurrentTime(current);
+        }
+        if (Number.isFinite(total) && total > 0) {
+          setDuration(total);
+        }
+      } catch {
+        // ignore player polling errors
+      }
+    }, 1000);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [nowPlaying]);
+
+  useEffect(() => {
+    if (!playerRef.current) return;
+    playerRef.current.setVolume?.(volume);
+  }, [volume]);
+
+  const formatTime = (value: number) => {
+    if (!Number.isFinite(value) || value <= 0) return '0:00';
+    const mins = Math.floor(value / 60);
+    const secs = Math.floor(value % 60);
+    return `${mins}:${String(secs).padStart(2, '0')}`;
+  };
+  const progressPercent = duration > 0 ? Math.min((currentTime / duration) * 100, 100) : 0;
 
   const handleStreamTrack = async (track: Track, stateKey: string) => {
     const setStream = (state: StreamUiState) =>
@@ -254,7 +368,7 @@ export function AlbumDetailPage() {
         title: track.name,
         artist: artistName,
         videoId: info.videoId,
-        embedUrl: buildEmbedUrl(info.videoId),
+        spotifyTrackId: stateKey,
       });
       setStream({ status: 'idle' });
     } catch (err: any) {
@@ -306,6 +420,18 @@ export function AlbumDetailPage() {
       .filter(Boolean);
   }, [wikiHtml]);
   const wikiToShow = wikiParagraphs.slice(0, 2);
+  const nowPlayingIndex = useMemo(() => {
+    if (!nowPlaying) return -1;
+    return tracks.findIndex((track) => resolveTrackId(track) === nowPlaying.spotifyTrackId);
+  }, [nowPlaying, tracks, resolveTrackId]);
+  const prevTrack = nowPlayingIndex > 0 ? tracks[nowPlayingIndex - 1] : null;
+  const nextTrack = nowPlayingIndex >= 0 && nowPlayingIndex < tracks.length - 1 ? tracks[nowPlayingIndex + 1] : null;
+
+  const handleSeek = (value: number) => {
+    if (!playerRef.current) return;
+    playerRef.current.seekTo(value, true);
+    setCurrentTime(value);
+  };
 
   if (!spotifyId) return <div className="card">Álbum no especificado.</div>;
   if (loading) return <div className="card">Cargando álbum...</div>;
@@ -313,7 +439,7 @@ export function AlbumDetailPage() {
   if (!album) return <div className="card">Sin datos.</div>;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" style={{ paddingBottom: 110 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <button
           onClick={() => navigate(-1)}
@@ -334,13 +460,33 @@ export function AlbumDetailPage() {
       </div>
 
       <div className="card" style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: 16, alignItems: 'flex-start' }}>
-        {album.images?.[0]?.url && (
-          <img
-            src={album.images[0].url}
-            alt={album.name}
-            style={{ width: '100%', borderRadius: 12 }}
+        <div style={{ position: 'relative', width: '100%', paddingTop: '100%', borderRadius: 12, overflow: 'hidden' }}>
+          <div
+            ref={playerContainerRef}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              width: '100%',
+              height: '100%',
+              display: nowPlaying ? 'block' : 'none',
+            }}
           />
-        )}
+          {album.images?.[0]?.url && (
+            <img
+              src={album.images[0].url}
+              alt={album.name}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                opacity: nowPlaying ? 0 : 1,
+                transition: 'opacity 200ms ease',
+              }}
+            />
+          )}
+        </div>
         <div>
           <div style={{ fontSize: 26, fontWeight: 800, marginBottom: 6 }}>{album.name}</div>
           <div style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 10 }}>
@@ -375,46 +521,6 @@ export function AlbumDetailPage() {
             </div>
           )}
         </div>
-      </div>
-
-      <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ fontWeight: 700 }}>Reproductor</div>
-          {nowPlaying && (
-            <button
-              className="btn-ghost"
-              style={{ borderRadius: 8 }}
-              onClick={() => setNowPlaying(null)}
-            >
-              Detener
-            </button>
-          )}
-        </div>
-        <div style={{ color: 'var(--muted)', fontSize: 13 }}>
-          {nowPlaying ? `Reproduciendo: ${nowPlaying.title} · ${nowPlaying.artist || ''}` : 'Selecciona una canción para reproducir'}
-        </div>
-        {nowPlaying ? (
-          <div style={{ position: 'relative', paddingTop: '56.25%' }}>
-            <iframe
-              src={nowPlaying.embedUrl}
-              title={nowPlaying.title}
-              allow="autoplay; encrypted-media"
-              allowFullScreen
-              style={{
-                position: 'absolute',
-                inset: 0,
-                width: '100%',
-                height: '100%',
-                border: 0,
-                borderRadius: 12,
-              }}
-            />
-          </div>
-        ) : (
-          <div style={{ padding: '18px', borderRadius: 12, border: '1px dashed var(--border)', color: 'var(--muted)' }}>
-            Sin reproducción activa.
-          </div>
-        )}
       </div>
 
       <div className="card">
@@ -572,6 +678,119 @@ export function AlbumDetailPage() {
           })}
         </div>
       </div>
+
+      <footer className="album-player">
+        <div className="album-player__left">
+          <button
+            className="album-player__btn"
+            onClick={() => prevTrack && handleStreamTrack(prevTrack, resolveTrackId(prevTrack))}
+            disabled={!prevTrack}
+            title="Anterior"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M19 5L11 12L19 19V5z" />
+              <path d="M13 5L5 12L13 19V5z" />
+            </svg>
+          </button>
+          <button
+            className="album-player__btn album-player__btn--primary"
+            onClick={() => playerRef.current?.playVideo()}
+            disabled={!nowPlaying}
+            title="Reproducir"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 5L19 12L8 19V5z" />
+            </svg>
+          </button>
+          <button
+            className="album-player__btn"
+            onClick={() => playerRef.current?.pauseVideo()}
+            disabled={!nowPlaying}
+            title="Pausar"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 5h4v14H6z" />
+              <path d="M14 5h4v14h-4z" />
+            </svg>
+          </button>
+          <button
+            className="album-player__btn"
+            onClick={() => nextTrack && handleStreamTrack(nextTrack, resolveTrackId(nextTrack))}
+            disabled={!nextTrack}
+            title="Siguiente"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 5L13 12L5 19V5z" />
+              <path d="M11 5L19 12L11 19V5z" />
+            </svg>
+          </button>
+          <button
+            className="album-player__btn"
+            onClick={() => {
+              playerRef.current?.stopVideo();
+              setNowPlaying(null);
+            }}
+            disabled={!nowPlaying}
+            title="Detener"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 6h12v12H6z" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="album-player__timeline">
+          <div className="album-player__track">
+            {nowPlaying ? `Reproduciendo: ${nowPlaying.title} · ${nowPlaying.artist || ''}` : 'Selecciona una canción para reproducir'}
+          </div>
+          <div className="album-player__progress">
+            <span className="album-player__time">{formatTime(currentTime)}</span>
+            <input
+              type="range"
+              min={0}
+              max={duration || 0}
+              step={1}
+              value={duration > 0 ? Math.min(currentTime, duration) : 0}
+              onChange={(e) => handleSeek(Number(e.target.value))}
+              disabled={!nowPlaying || !duration}
+              className="album-player__slider"
+              style={{ ['--progress' as any]: `${progressPercent}%` }}
+              aria-label="Progreso"
+            />
+            <span className="album-player__time">{formatTime(duration)}</span>
+          </div>
+        </div>
+
+        <div className="album-player__right">
+          <div className="album-player__volume">
+            <span>VOL</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={volume}
+              onChange={(e) => setVolume(Number(e.target.value))}
+              className="album-player__slider album-player__slider--volume"
+              style={{ ['--progress' as any]: `${volume}%` }}
+              aria-label="Volumen"
+            />
+          </div>
+          {nowPlaying && (
+            <a
+              className="album-player__link"
+              href={`https://www.youtube.com/watch?v=${nowPlaying.videoId}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Abrir en YouTube
+            </a>
+          )}
+          <span className="album-player__status" style={{ color: isPlaying ? '#4ade80' : 'var(--muted)' }}>
+            {isPlaying ? 'Reproduciendo' : 'Pausado'}
+          </span>
+        </div>
+      </footer>
     </div>
   );
 }
