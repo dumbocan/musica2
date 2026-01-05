@@ -56,6 +56,7 @@ export function AlbumDetailPage() {
   const resolveTrackId = useCallback((track: Track) => track.spotify_id || track.id || '', []);
 
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
     };
