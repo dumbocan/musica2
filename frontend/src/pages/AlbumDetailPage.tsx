@@ -656,12 +656,13 @@ export function AlbumDetailPage() {
   const isAlbumFavorite = !!(localAlbumId && favoriteAlbumIds.has(localAlbumId));
   const hasToken = typeof window !== 'undefined' && !!localStorage.getItem('token');
   const canFavorite = !!(effectiveTrackUserId || effectiveAlbumUserId || hasToken);
-  const coverImageUrl = resolveImageUrl(album.images?.[0]?.url);
 
   if (!spotifyId) return <div className="card">Álbum no especificado.</div>;
   if (loading) return <div className="card">Cargando álbum...</div>;
   if (error) return <div className="card">Error: {error}</div>;
   if (!album) return <div className="card">Sin datos.</div>;
+
+  const coverImageUrl = resolveImageUrl(album?.images?.[0]?.url);
 
   return (
     <div className="space-y-4">
@@ -703,7 +704,9 @@ export function AlbumDetailPage() {
               inset: 0,
               width: '100%',
               height: '100%',
-              display: nowPlaying && playbackMode === 'video' && playerReady ? 'block' : 'none',
+              opacity: nowPlaying && playbackMode === 'video' && playerReady ? 1 : 0,
+              pointerEvents: nowPlaying && playbackMode === 'video' && playerReady ? 'auto' : 'none',
+              transition: 'opacity 200ms ease',
             }}
           />
           {coverImageUrl && (
