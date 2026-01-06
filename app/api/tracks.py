@@ -3,9 +3,10 @@ Track endpoints: list, etc.
 """
 
 from typing import List
-from pathlib import Path
+from pathlib import Path as FsPath
 
-from fastapi import APIRouter, Path, HTTPException
+from fastapi import APIRouter, Path, HTTPException, Query
+from sqlalchemy import func, case, or_, exists, and_
 
 from ..core.db import get_session
 from ..models.base import Track, Artist, Album, YouTubeDownload
@@ -26,27 +27,179 @@ def get_tracks() -> List[Track]:
 
 
 @router.get("/overview")
-def get_tracks_overview() -> dict:
+def get_tracks_overview(
+    verify_files: bool = Query(False, description="Check file existence on disk"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    limit: int = Query(200, ge=1, le=1000, description="Pagination limit"),
+    include_summary: bool = Query(True, description="Include aggregate summary counts"),
+    after_id: int | None = Query(None, ge=0, description="Return tracks after this ID"),
+    filter: str | None = Query(None, description="Filter: withLink, noLink, hasFile, missingFile"),
+    search: str | None = Query(None, description="Search by track, artist, or album"),
+) -> dict:
     """
     Return tracks with artist, album, cached YouTube link/status and local file info.
     Useful for the frontend "Tracks" page so users can see what is ready for streaming/downloading.
     """
+    summary = None
+    filter = filter or None
+    if filter and filter not in {"withLink", "noLink", "hasFile", "missingFile"}:
+        raise HTTPException(status_code=400, detail="Invalid filter value")
+    search_term = search.strip() if search else ""
+    is_filtered_query = bool(filter or search_term)
+    if include_summary:
+        with get_session() as session:
+            total, with_link, with_file = session.exec(
+                select(
+                    func.count(Track.id),
+                    func.count(func.distinct(Track.id)).filter(
+                        and_(
+                            YouTubeDownload.youtube_video_id.is_not(None),
+                            YouTubeDownload.youtube_video_id != ""
+                        )
+                    ),
+                    func.count(func.distinct(Track.id)).filter(
+                        and_(
+                            YouTubeDownload.download_path.is_not(None),
+                            YouTubeDownload.download_path != ""
+                        )
+                    ),
+                )
+                .select_from(Track)
+                .outerjoin(YouTubeDownload, YouTubeDownload.spotify_track_id == Track.spotify_id)
+            ).one()
+        total = int(total or 0)
+        with_link = int(with_link or 0)
+        with_file = int(with_file or 0)
+        summary = {
+            "total": total,
+            "with_link": with_link,
+            "with_file": with_file,
+            "missing_link": max(total - with_link, 0),
+            "missing_file": max(total - with_file, 0),
+        }
+
     with get_session() as session:
-        rows = session.exec(
-            select(Track, Artist, Album, YouTubeDownload)
+        base_query = (
+            select(Track, Artist, Album)
             .join(Artist, Artist.id == Track.artist_id)
             .outerjoin(Album, Album.id == Track.album_id)
-            .outerjoin(YouTubeDownload, YouTubeDownload.spotify_track_id == Track.spotify_id)
-            .order_by(Artist.name.asc(), Track.name.asc())
-        ).all()
+            .order_by(Track.id.asc())
+        )
+
+        if search_term:
+            pattern = f"%{search_term}%"
+            base_query = base_query.where(
+                or_(
+                    Track.name.ilike(pattern),
+                    Artist.name.ilike(pattern),
+                    Album.name.ilike(pattern),
+                )
+            )
+
+        if filter:
+            link_exists = exists(
+                select(1).where(
+                    (YouTubeDownload.spotify_track_id == Track.spotify_id)
+                    & (YouTubeDownload.youtube_video_id.is_not(None))
+                    & (YouTubeDownload.youtube_video_id != "")
+                )
+            )
+            file_exists = exists(
+                select(1).where(
+                    (YouTubeDownload.spotify_track_id == Track.spotify_id)
+                    & (YouTubeDownload.download_path.is_not(None))
+                    & (YouTubeDownload.download_path != "")
+                )
+            )
+            if filter == "withLink":
+                base_query = base_query.where(link_exists)
+            elif filter == "noLink":
+                base_query = base_query.where(~link_exists)
+            elif filter == "hasFile":
+                base_query = base_query.where(file_exists)
+            elif filter == "missingFile":
+                base_query = base_query.where(~file_exists)
+
+        if after_id is not None:
+            base_query = base_query.where(Track.id > after_id)
+        else:
+            base_query = base_query.offset(offset)
+        rows = session.exec(base_query.limit(limit + 1)).all()
+
+        filtered_total = None
+        if is_filtered_query:
+            count_query = select(func.count(Track.id)).join(Artist, Artist.id == Track.artist_id).outerjoin(Album, Album.id == Track.album_id)
+            if search_term:
+                pattern = f"%{search_term}%"
+                count_query = count_query.where(
+                    or_(
+                        Track.name.ilike(pattern),
+                        Artist.name.ilike(pattern),
+                        Album.name.ilike(pattern),
+                    )
+                )
+            if filter:
+                link_exists = exists(
+                    select(1).where(
+                        (YouTubeDownload.spotify_track_id == Track.spotify_id)
+                        & (YouTubeDownload.youtube_video_id.is_not(None))
+                        & (YouTubeDownload.youtube_video_id != "")
+                    )
+                )
+                file_exists = exists(
+                    select(1).where(
+                        (YouTubeDownload.spotify_track_id == Track.spotify_id)
+                        & (YouTubeDownload.download_path.is_not(None))
+                        & (YouTubeDownload.download_path != "")
+                    )
+                )
+                if filter == "withLink":
+                    count_query = count_query.where(link_exists)
+                elif filter == "noLink":
+                    count_query = count_query.where(~link_exists)
+                elif filter == "hasFile":
+                    count_query = count_query.where(file_exists)
+                elif filter == "missingFile":
+                    count_query = count_query.where(~file_exists)
+            filtered_total = session.exec(count_query).one()
+
+    raw_rows = rows
+    has_more = len(raw_rows) > limit
+    track_rows = raw_rows[:limit]
+    spotify_ids = [track.spotify_id for track, _, _ in track_rows if track.spotify_id]
+    downloads = []
+    if spotify_ids:
+        with get_session() as session:
+            downloads = session.exec(
+                select(YouTubeDownload).where(YouTubeDownload.spotify_track_id.in_(spotify_ids))
+            ).all()
+
+    download_map: dict[str, YouTubeDownload] = {}
+    for download in downloads:
+        existing = download_map.get(download.spotify_track_id)
+        if not existing:
+            download_map[download.spotify_track_id] = download
+            continue
+        existing_has_video = bool(existing.youtube_video_id)
+        new_has_video = bool(download.youtube_video_id)
+        if new_has_video and not existing_has_video:
+            download_map[download.spotify_track_id] = download
+            continue
+        if new_has_video == existing_has_video:
+            if download.updated_at and existing.updated_at and download.updated_at > existing.updated_at:
+                download_map[download.spotify_track_id] = download
 
     items = []
-    for track, artist, album, download in rows:
-        youtube_video_id = download.youtube_video_id if download else None
+    for track, artist, album in track_rows:
+        download = download_map.get(track.spotify_id) if track.spotify_id else None
+        youtube_video_id = (download.youtube_video_id or None) if download else None
         youtube_status = download.download_status if download else None
         youtube_url = f"https://www.youtube.com/watch?v={youtube_video_id}" if youtube_video_id else None
         file_path = download.download_path if download else None
-        file_exists = bool(file_path and Path(file_path).exists())
+        if file_path:
+            file_exists = FsPath(file_path).exists() if verify_files else True
+        else:
+            file_exists = False
 
         items.append({
             "track_id": track.id,
@@ -65,7 +218,19 @@ def get_tracks_overview() -> dict:
             "local_file_exists": file_exists,
         })
 
-    return {"items": items, "total": len(items)}
+    next_after = track_rows[-1][0].id if track_rows else after_id
+    response = {
+        "items": items,
+        "offset": offset,
+        "limit": limit,
+        "has_more": has_more,
+        "next_after": next_after if has_more else None,
+    }
+    if summary:
+        response["summary"] = summary
+    if filtered_total is not None:
+        response["filtered_total"] = int(filtered_total or 0)
+    return response
 
 
 @router.get("/id/{track_id}")

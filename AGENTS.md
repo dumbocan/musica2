@@ -41,3 +41,6 @@ Secrets stay in `.env`; never hard-code tokens or client secrets. Honor the auth
 - Streaming uses `/youtube/stream` (no seek, duration may be 0 until metadata); downloads must honor the actual file format from `/youtube/download/.../status`.
 - Keep `youtube_video_id` real (11 chars) or hide YouTube-only UI; local-only files should not pretend to be YouTube IDs.
 - Use `scripts/organize_downloads_by_album.py --resolve-unknown --resolve-spotify --spotify-create` to align existing downloads to `downloads/<Artist>/<Album>/<Track>.<ext>`.
+ - Tracks totals can be wrong if `youtube_video_id` is empty; treat empty strings as missing and prefer the row with a valid video ID when multiple `YouTubeDownload` rows exist for one track.
+ - For performance, filter in `/tracks/overview` (`filter`, `search`) and use `filtered_total` rather than loading the entire library in the frontend.
+ - Track pagination should use `after_id` keyset with `limit` and prefetch when ~100 rows remain to minimize network churn.

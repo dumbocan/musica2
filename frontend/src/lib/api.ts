@@ -29,10 +29,12 @@ api.interceptors.response.use(
   (error) => {
     const status = error.response?.status;
     const store = useApiStore.getState();
-    if (status === 401 || error.code === 'ERR_NETWORK') {
+    if (status === 401) {
       if (store.isAuthenticated) {
         store.logout();
       }
+    } else if (error.code === 'ERR_NETWORK') {
+      console.warn('Network error:', error.config?.url || error.message);
     } else if (status === 500) {
       console.error('Server Error:', error.response.data);
     }
@@ -89,7 +91,16 @@ export const audio2Api = {
 
   // Tracks
   getAllTracks: () => api.get('/tracks/'),
-  getTracksOverview: () => api.get('/tracks/overview'),
+  getTracksOverview: (params?: {
+    verify_files?: boolean;
+    offset?: number;
+    limit?: number;
+    include_summary?: boolean;
+    after_id?: number | null;
+    filter?: 'all' | 'withLink' | 'noLink' | 'hasFile' | 'missingFile';
+    search?: string;
+  }) =>
+    api.get('/tracks/overview', { params, timeout: 60000 }),
 
   // Playlists
   getAllPlaylists: () => api.get('/playlists/'),

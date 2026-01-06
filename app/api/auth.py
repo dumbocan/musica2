@@ -3,16 +3,15 @@ Authentication API endpoints for user registration, login, and management.
 """
 
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import SessionDep
 from app.core.simple_security import (
-    get_password_hash, 
-    verify_password, 
+    get_password_hash,
+    verify_password,
     create_user_token,
-    get_current_user_id
 )
 from app.models.base import User
 from app.schemas.auth import (
@@ -28,6 +27,9 @@ from app.schemas.auth import (
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 security = HTTPBearer()
+
+def require_user_id(request: Request) -> int:
+    return request.state.user_id
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register_user(
@@ -104,7 +106,7 @@ async def login_user(
 
 @router.get("/me", response_model=UserResponse)
 async def get_current_user(
-    current_user_id: int = Depends(get_current_user_id),
+    current_user_id: int = Depends(require_user_id),
     session: AsyncSession = Depends(SessionDep)
 ):
     """
@@ -128,7 +130,7 @@ async def get_current_user(
 @router.put("/me", response_model=UserResponse)
 async def update_current_user(
     user_data: UserUpdate,
-    current_user_id: int = Depends(get_current_user_id),
+    current_user_id: int = Depends(require_user_id),
     session: AsyncSession = Depends(SessionDep)
 ):
     """
@@ -178,7 +180,7 @@ async def update_current_user(
 @router.post("/change-password", response_model=MessageResponse)
 async def change_password(
     password_data: PasswordChange,
-    current_user_id: int = Depends(get_current_user_id),
+    current_user_id: int = Depends(require_user_id),
     session: AsyncSession = Depends(SessionDep)
 ):
     """
@@ -211,7 +213,7 @@ async def change_password(
 
 
 @router.get("/verify-token", response_model=MessageResponse)
-async def verify_auth_token(current_user_id: int = Depends(get_current_user_id)):
+async def verify_auth_token(current_user_id: int = Depends(require_user_id)):
     """
     Verify that the provided JWT token is valid.
     """
@@ -220,7 +222,7 @@ async def verify_auth_token(current_user_id: int = Depends(get_current_user_id))
 
 @router.delete("/me", response_model=MessageResponse)
 async def delete_current_user(
-    current_user_id: int = Depends(get_current_user_id),
+    current_user_id: int = Depends(require_user_id),
     session: AsyncSession = Depends(SessionDep)
 ):
     """

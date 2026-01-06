@@ -60,6 +60,13 @@ A **complete REST API backend** for personal music streaming, featuring **comple
 - **Frontend renovado**: `frontend/src/pages/TracksPage.tsx` muestra métricas globales (cuántas pistas tienen link o MP3), buscador, filtros y accesos directos para abrir YouTube o descargar el MP3 desde `/youtube/download/{video_id}/file`.
 - **Uso recomendado**: abre `http://localhost:5173/tracks` para saber qué canciones ya están listas para streaming/descarga sin entrar álbum por álbum.
 
+## ✅ Tracks: problemas reales y soluciones aplicadas
+
+- **Desajuste “Con link YouTube”**: el total salía 106 pero solo aparecían 95. La causa fue `youtube_video_id` vacío en `YouTubeDownload`. Se filtró `youtube_video_id != ""` en `/tracks/overview`, y se prioriza el registro con video real cuando hay múltiples filas por track.
+- **Filtro lento por `youtube`**: antes se cargaba todo y el frontend filtraba. Ahora `/tracks/overview` acepta `filter` y `search` para que la BD devuelva solo lo necesario, y responde `filtered_total` para mostrar el progreso real.
+- **Paginado y rendimiento**: paginado por `after_id` (keyset) + `limit` en backend; en frontend se precarga cuando quedan ~100 filas y sigue cargando 200 en 200 sin saturar la red.
+- **Consistencia UI**: filtros + búsqueda + progreso quedan sticky y la tabla virtualizada mantiene un solo scroll.
+
 ## ⚠️ Troubleshooting reciente (YouTube + reproducción)
 
 - **Cuota YouTube 403/429**: los prefetches se paran 15 min tras un 403/429. Evita loops extra y llama a YouTube solo cuando entras a un álbum o cuando el usuario pulsa play. Mantén `YOUTUBE_API_KEY` (y opcionalmente `YOUTUBE_API_KEY_2`) en `.env`.
