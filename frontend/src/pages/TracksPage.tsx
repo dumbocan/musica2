@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { audio2Api, API_BASE_URL } from '@/lib/api';
+import { audio2Api } from '@/lib/api';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import type { TrackOverview } from '@/types/api';
 
 type FilterTab = 'all' | 'withLink' | 'noLink' | 'hasFile' | 'missingFile';
+type LinkUiState = { status: 'idle' | 'loading' | 'error'; message?: string };
+type DownloadUiState = { status: 'idle' | 'loading' | 'done' | 'error'; message?: string };
 
 const filterLabels: Record<FilterTab, string> = {
   all: 'Todos',
@@ -30,6 +32,8 @@ export function TracksPage() {
   const [filteredTotal, setFilteredTotal] = useState<number | null>(null);
   const [nextAfter, setNextAfter] = useState<number | null>(null);
   const [hasMore, setHasMore] = useState<boolean>(false);
+  const [linkState, setLinkState] = useState<Record<string, LinkUiState>>({});
+  const [downloadState, setDownloadState] = useState<Record<string, DownloadUiState>>({});
   const limit = 200;
   const listRef = useRef<HTMLDivElement | null>(null);
   const loadingMoreRef = useRef(false);
@@ -52,6 +56,8 @@ export function TracksPage() {
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z0-9]+/g, ' ')
       .trim();
+  const resolveTrackKey = (track: TrackOverview) =>
+    track.spotify_track_id || String(track.track_id);
   const dedupeTracks = (items: TrackOverview[]) => {
     const seen = new Set<number>();
     return items.filter((track) => {
@@ -167,18 +173,97 @@ export function TracksPage() {
       return passesSearch && passesFilter;
     });
   }, [tracks, search, filter]);
-  const playableQueue = useMemo(() => {
-    return filteredTracks
-      .filter((track) => !!track.youtube_video_id)
-      .map((track) => ({
-        spotifyTrackId: track.spotify_track_id || String(track.track_id),
-        title: track.track_name || '—',
-        artist: track.artist_name || undefined,
-        durationMs: track.duration_ms || undefined,
-        videoId: track.youtube_video_id || undefined,
-        rawTrack: track,
+  const buildQueueItems = useCallback(
+    (override?: { trackKey: string; videoId: string }) =>
+      filteredTracks
+        .map((track) => {
+          const trackKey = resolveTrackKey(track);
+          const videoId =
+            track.youtube_video_id ||
+            (override && override.trackKey === trackKey ? override.videoId : undefined);
+          if (!videoId) return null;
+          return {
+            spotifyTrackId: trackKey,
+            title: track.track_name || '—',
+            artist: track.artist_name || undefined,
+            durationMs: track.duration_ms || undefined,
+            videoId,
+            rawTrack: track,
+          };
+        })
+        .filter(Boolean) as Array<{
+        spotifyTrackId: string;
+        title: string;
+        artist?: string;
+        durationMs?: number;
+        videoId?: string;
+        rawTrack?: TrackOverview;
+      }>,
+    [filteredTracks, resolveTrackKey]
+  );
+
+  const ensureYoutubeLink = useCallback(
+    async (track: TrackOverview) => {
+      const trackKey = resolveTrackKey(track);
+      if (!trackKey) return null;
+      if (track.youtube_video_id) {
+        return { videoId: track.youtube_video_id, url: track.youtube_url || undefined };
+      }
+      if (!track.spotify_track_id) {
+        setStatusMessage('Sin enlace de YouTube');
+        return null;
+      }
+      if (linkState[trackKey]?.status === 'loading') {
+        return null;
+      }
+      setLinkState((prev) => ({
+        ...prev,
+        [trackKey]: { status: 'loading' },
       }));
-  }, [filteredTracks]);
+      try {
+        const response = await audio2Api.refreshYoutubeTrackLink(track.spotify_track_id, {
+          artist: track.artist_name || undefined,
+          track: track.track_name,
+          album: track.album_name || undefined,
+        });
+        const linkData = response.data;
+        if (linkData?.youtube_video_id) {
+          setTracks((prev) =>
+            prev.map((item) =>
+              resolveTrackKey(item) === trackKey
+                ? {
+                    ...item,
+                    youtube_video_id: linkData.youtube_video_id,
+                    youtube_url: linkData.youtube_url || item.youtube_url,
+                    youtube_status: linkData.status || item.youtube_status,
+                  }
+                : item
+            )
+          );
+          setLinkState((prev) => ({
+            ...prev,
+            [trackKey]: { status: 'idle' },
+          }));
+          return { videoId: linkData.youtube_video_id, url: linkData.youtube_url || undefined };
+        }
+        setLinkState((prev) => ({
+          ...prev,
+          [trackKey]: { status: 'error', message: 'No se encontró YouTube' },
+        }));
+        setStatusMessage('No se encontró YouTube para esta canción');
+        return null;
+      } catch (err: any) {
+        const message = err?.response?.data?.detail || err?.message || 'Error buscando en YouTube';
+        setLinkState((prev) => ({
+          ...prev,
+          [trackKey]: { status: 'error', message },
+        }));
+        setStatusMessage(message);
+        return null;
+      }
+    },
+    [linkState, resolveTrackKey, setStatusMessage]
+  );
 
   const totalRows = filteredTracks.length;
   const visibleCount = useMemo(
@@ -306,39 +391,99 @@ export function TracksPage() {
 
   const handlePlayTrack = useCallback(
     async (track: TrackOverview) => {
-      if (!track.youtube_video_id) {
+      const trackKey = resolveTrackKey(track);
+      const linkInfo = await ensureYoutubeLink(track);
+      const videoId = linkInfo?.videoId || track.youtube_video_id;
+      if (!videoId) {
         setStatusMessage('Sin enlace de YouTube');
         return;
       }
-      const queueItems = playableQueue;
-      const trackKey = track.spotify_track_id || String(track.track_id);
+      const queueItems = buildQueueItems({ trackKey, videoId });
       const index = queueItems.findIndex((item) => item.spotifyTrackId === trackKey);
-      if (queueItems.length > 0) {
-        setQueue(queueItems, index >= 0 ? index : 0);
-        setOnPlayTrack((item) => {
-          if (!item.videoId) {
-            setStatusMessage('Sin enlace de YouTube');
-            return;
-          }
-          void playByVideoId({
-            spotifyTrackId: item.spotifyTrackId,
-            title: item.title,
-            artist: item.artist,
-            videoId: item.videoId,
-            durationSec: item.durationMs ? Math.round(item.durationMs / 1000) : undefined,
-          });
+      setQueue(queueItems, index >= 0 ? index : 0);
+      setOnPlayTrack((item) => {
+        if (!item.videoId) {
+          setStatusMessage('Sin enlace de YouTube');
+          return;
+        }
+        void playByVideoId({
+          spotifyTrackId: item.spotifyTrackId,
+          title: item.title,
+          artist: item.artist,
+          videoId: item.videoId,
+          durationSec: item.durationMs ? Math.round(item.durationMs / 1000) : undefined,
         });
-      }
+      });
       setPlaybackMode('audio');
       await playByVideoId({
         spotifyTrackId: trackKey,
         title: track.track_name || '—',
         artist: track.artist_name || undefined,
-        videoId: track.youtube_video_id,
+        videoId,
         durationSec: track.duration_ms ? Math.round(track.duration_ms / 1000) : undefined,
       });
     },
-    [playByVideoId, playableQueue, setOnPlayTrack, setPlaybackMode, setQueue, setStatusMessage]
+    [
+      buildQueueItems,
+      ensureYoutubeLink,
+      playByVideoId,
+      resolveTrackKey,
+      setOnPlayTrack,
+      setPlaybackMode,
+      setQueue,
+      setStatusMessage,
+    ]
+  );
+
+  const handleDownloadTrack = useCallback(
+    async (track: TrackOverview) => {
+      const trackKey = resolveTrackKey(track);
+      if (!trackKey) return;
+      if (downloadState[trackKey]?.status === 'loading') return;
+
+      setDownloadState((prev) => ({
+        ...prev,
+        [trackKey]: { status: 'loading', message: 'Descargando...' },
+      }));
+      const linkInfo = await ensureYoutubeLink(track);
+      const videoId = linkInfo?.videoId || track.youtube_video_id;
+      if (!videoId) {
+        setDownloadState((prev) => ({
+          ...prev,
+          [trackKey]: { status: 'error', message: 'Sin enlace de YouTube' },
+        }));
+        return;
+      }
+      try {
+        await audio2Api.downloadYoutubeAudio(videoId);
+        setDownloadState((prev) => ({
+          ...prev,
+          [trackKey]: { status: 'done', message: 'Descargado' },
+        }));
+        setTracks((prev) =>
+          prev.map((item) =>
+            resolveTrackKey(item) === trackKey
+              ? { ...item, local_file_exists: true }
+              : item
+          )
+        );
+        setSummary((prev) => {
+          if (!prev || track.local_file_exists) return prev;
+          return {
+            ...prev,
+            with_file: prev.with_file + 1,
+            missing_file: Math.max(prev.missing_file - 1, 0),
+          };
+        });
+      } catch (err: any) {
+        const message = err?.response?.data?.detail || err?.message || 'Error al descargar';
+        setDownloadState((prev) => ({
+          ...prev,
+          [trackKey]: { status: 'error', message },
+        }));
+      }
+    },
+    [downloadState, ensureYoutubeLink, resolveTrackKey]
   );
 
   if (loading && !hasLoadedOnce && tracks.length === 0) {
@@ -486,12 +631,43 @@ export function TracksPage() {
                 </tr>
               )}
               {visibleTracks.map((track, index) => (
-                <tr
-                  key={`${track.track_id}-${track.spotify_track_id || track.track_name}`}
-                  style={{ height: rowHeight }}
-                >
-                  <td style={{ ...cellStyle, width: 44, color: 'var(--muted)' }}>{startIndex + index + 1}</td>
-                  <td style={{ ...cellStyle, fontWeight: 600 }}>{track.track_name}</td>
+                (() => {
+                  const trackKey = resolveTrackKey(track);
+                  const linkLoading = linkState[trackKey]?.status === 'loading';
+                  const canPlay = !linkLoading && (!!track.youtube_video_id || !!track.spotify_track_id);
+                  const downloadInfo = downloadState[trackKey];
+                  const canDownload = !linkLoading && (!!track.youtube_video_id || !!track.spotify_track_id);
+
+                  return (
+                    <tr
+                      key={`${track.track_id}-${track.spotify_track_id || track.track_name}`}
+                      style={{ height: rowHeight }}
+                    >
+                      <td style={{ ...cellStyle, width: 44, color: 'var(--muted)' }}>{startIndex + index + 1}</td>
+                      <td style={{ ...cellStyle, fontWeight: 600 }}>
+                        <button
+                          type="button"
+                          onClick={() => void handlePlayTrack(track)}
+                          disabled={!canPlay}
+                          style={{
+                            display: 'block',
+                            width: '100%',
+                            textAlign: 'left',
+                            background: 'none',
+                            border: 'none',
+                            padding: 0,
+                            margin: 0,
+                            font: 'inherit',
+                            color: canPlay ? 'var(--accent)' : 'inherit',
+                            cursor: canPlay ? 'pointer' : 'default',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                          }}
+                        >
+                          {track.track_name}
+                        </button>
+                      </td>
                   <td style={cellStyle}>{track.artist_name || '—'}</td>
                   <td style={cellStyle}>{track.album_name || '—'}</td>
                   <td style={cellStyle}>{formatDuration(track.duration_ms)}</td>
@@ -522,19 +698,22 @@ export function TracksPage() {
                           ▶ Abrir YouTube
                         </a>
                       )}
-                      {track.local_file_exists && track.youtube_video_id && (
+                      {!track.local_file_exists && (
                         <button
                           type="button"
-                          onClick={() => void handlePlayTrack(track)}
+                          onClick={() => void handleDownloadTrack(track)}
                           className="badge"
                           style={{ textDecoration: 'none', cursor: 'pointer', border: 'none' }}
+                          disabled={!canDownload || downloadInfo?.status === 'loading'}
                         >
-                          ▶ Reproducir
+                          {downloadInfo?.status === 'loading' ? '⏳' : '⬇ Descargar'}
                         </button>
                       )}
                     </div>
                   </td>
-                </tr>
+                    </tr>
+                  );
+                })()
               ))}
               {filteredTracks.length === 0 && (
                 <tr>

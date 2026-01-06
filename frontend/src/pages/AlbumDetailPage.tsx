@@ -798,8 +798,29 @@ export function AlbumDetailPage() {
                 }}
               >
                 <div style={{ color: 'var(--muted)', fontSize: 12 }}>#{idx + 1}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span>{t.name}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                  <button
+                    type="button"
+                    onClick={() => spotifyTrackId && handleStreamTrack(t, spotifyTrackId)}
+                    disabled={streamDisabled}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      textAlign: 'left',
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                      margin: 0,
+                      font: 'inherit',
+                      color: streamDisabled ? 'inherit' : 'var(--accent)',
+                      cursor: streamDisabled ? 'default' : 'pointer',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {t.name}
+                  </button>
                   {youtubeInfo?.status === 'available' && (
                     <span
                       title={youtubeInfo.title || 'Disponible para streaming en YouTube'}
@@ -835,46 +856,6 @@ export function AlbumDetailPage() {
                     {downloadInfo?.status === 'loading' ? '⏳' : '⬇️'}
                   </button>
                   <button className="btn-ghost" style={{ borderRadius: 8, fontSize: 18 }}>🏷️</button>
-                  <button
-                    className="btn-ghost"
-                    style={{
-                      borderRadius: 8,
-                      padding: '6px 12px',
-                      background: 'var(--panel-2)',
-                      border: 'none',
-                      opacity: streamDisabled ? 0.6 : 1,
-                      transition: 'transform 120ms ease, background 120ms ease',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.transform = 'scale(1.08)';
-                      e.currentTarget.style.background = 'rgba(255,255,255,0.08)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.transform = 'scale(1)';
-                      e.currentTarget.style.background = 'var(--panel-2)';
-                    }}
-                    onClick={() => spotifyTrackId && handleStreamTrack(t, spotifyTrackId)}
-                    disabled={streamDisabled}
-                    title={youtubeInfo?.status === 'available' ? 'Escuchar en streaming (YouTube)' : 'Buscar en YouTube y reproducir'}
-                    aria-label="Escuchar vía streaming"
-                  >
-                    {streamDisabled ? (
-                      <span style={{ fontSize: 14 }}>⏳</span>
-                    ) : (
-                      <svg
-                        width="32"
-                        height="32"
-                        viewBox="0 0 32 32"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2.5"
-                        strokeLinejoin="round"
-                        style={{ color: 'var(--accent)' }}
-                      >
-                        <path d="M10 8 L24 16 L10 24 Z" />
-                      </svg>
-                    )}
-                  </button>
                   {downloadMessage && (
                     <span style={{ fontSize: 11, minWidth: 90, textAlign: 'left', color: downloadMessageColor }}>
                       {downloadMessage}
