@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { audio2Api, API_BASE_URL } from '@/lib/api';
+import { usePlayerStore } from '@/store/usePlayerStore';
 import type { TrackOverview } from '@/types/api';
 
 type FilterTab = 'all' | 'withLink' | 'noLink' | 'hasFile' | 'missingFile';
@@ -35,8 +36,22 @@ export function TracksPage() {
   const [scrollTop, setScrollTop] = useState(0);
   const [containerHeight, setContainerHeight] = useState(600);
   const [listTop, setListTop] = useState(0);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  const playByVideoId = usePlayerStore((s) => s.playByVideoId);
+  const setQueue = usePlayerStore((s) => s.setQueue);
+  const setOnPlayTrack = usePlayerStore((s) => s.setOnPlayTrack);
+  const setPlaybackMode = usePlayerStore((s) => s.setPlaybackMode);
+  const setStatusMessage = usePlayerStore((s) => s.setStatusMessage);
   const rowHeight = 64;
   const overscan = 8;
+  const stickyTop = 84;
+  const normalizeSearchText = (value: string) =>
+    value
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
   const dedupeTracks = (items: TrackOverview[]) => {
     const seen = new Set<number>();
     return items.filter((track) => {
@@ -60,7 +75,7 @@ export function TracksPage() {
           offset: 0,
           limit,
           include_summary: !isFiltered,
-          filter: isFiltered ? filter : undefined,
+          filter: isFiltered && filter !== 'all' ? filter : undefined,
           search: isFiltered ? activeSearch : undefined,
         });
         setTracks(dedupeTracks(response.data.items || []));
@@ -74,6 +89,7 @@ export function TracksPage() {
         setError(err?.response?.data?.detail || err?.message || 'No se pudo cargar el listado de pistas');
       } finally {
         setLoading(false);
+        setHasLoadedOnce(true);
       }
     };
     const timeout = setTimeout(load, activeSearch.length > 0 ? 250 : 0);
@@ -92,7 +108,7 @@ export function TracksPage() {
         limit,
         include_summary: false,
         after_id: nextAfter ?? (tracks.length > 0 ? tracks[tracks.length - 1].track_id : null),
-        filter: isFiltered ? filter : undefined,
+        filter: isFiltered && filter !== 'all' ? filter : undefined,
         search: isFiltered ? activeSearch : undefined,
       });
       const nextItems = response.data.items || [];
@@ -133,9 +149,10 @@ export function TracksPage() {
   }, [tracks, summary]);
 
   const filteredTracks = useMemo(() => {
+    const normalizedQuery = normalizeSearchText(search);
     return tracks.filter((track) => {
-      const text = `${track.track_name || ''} ${track.artist_name || ''} ${track.album_name || ''}`.toLowerCase();
-      const passesSearch = text.includes(search.toLowerCase());
+      const text = normalizeSearchText(`${track.track_name || ''} ${track.artist_name || ''} ${track.album_name || ''}`);
+      const passesSearch = normalizedQuery.length === 0 || text.includes(normalizedQuery);
 
       const hasLink = !!track.youtube_video_id;
       const hasFile = track.local_file_exists;
@@ -150,6 +167,18 @@ export function TracksPage() {
       return passesSearch && passesFilter;
     });
   }, [tracks, search, filter]);
+  const playableQueue = useMemo(() => {
+    return filteredTracks
+      .filter((track) => !!track.youtube_video_id)
+      .map((track) => ({
+        spotifyTrackId: track.spotify_track_id || String(track.track_id),
+        title: track.track_name || '—',
+        artist: track.artist_name || undefined,
+        durationMs: track.duration_ms || undefined,
+        videoId: track.youtube_video_id || undefined,
+        rawTrack: track,
+      }));
+  }, [filteredTracks]);
 
   const totalRows = filteredTracks.length;
   const visibleCount = useMemo(
@@ -269,12 +298,54 @@ export function TracksPage() {
     overflow: 'hidden' as const,
     textOverflow: 'ellipsis' as const,
   };
+  const mp3CellStyle = { ...cellStyle, paddingRight: 4 };
+  const actionsCellStyle = { ...cellStyle, paddingLeft: 4 };
+  const headerCellStyle = {
+    background: 'var(--panel)',
+  };
 
-  if (loading) {
+  const handlePlayTrack = useCallback(
+    async (track: TrackOverview) => {
+      if (!track.youtube_video_id) {
+        setStatusMessage('Sin enlace de YouTube');
+        return;
+      }
+      const queueItems = playableQueue;
+      const trackKey = track.spotify_track_id || String(track.track_id);
+      const index = queueItems.findIndex((item) => item.spotifyTrackId === trackKey);
+      if (queueItems.length > 0) {
+        setQueue(queueItems, index >= 0 ? index : 0);
+        setOnPlayTrack((item) => {
+          if (!item.videoId) {
+            setStatusMessage('Sin enlace de YouTube');
+            return;
+          }
+          void playByVideoId({
+            spotifyTrackId: item.spotifyTrackId,
+            title: item.title,
+            artist: item.artist,
+            videoId: item.videoId,
+            durationSec: item.durationMs ? Math.round(item.durationMs / 1000) : undefined,
+          });
+        });
+      }
+      setPlaybackMode('audio');
+      await playByVideoId({
+        spotifyTrackId: trackKey,
+        title: track.track_name || '—',
+        artist: track.artist_name || undefined,
+        videoId: track.youtube_video_id,
+        durationSec: track.duration_ms ? Math.round(track.duration_ms / 1000) : undefined,
+      });
+    },
+    [playByVideoId, playableQueue, setOnPlayTrack, setPlaybackMode, setQueue, setStatusMessage]
+  );
+
+  if (loading && !hasLoadedOnce && tracks.length === 0) {
     return <div className="card">Cargando pistas...</div>;
   }
 
-  if (error) {
+  if (error && tracks.length === 0) {
     return <div className="card">Error: {error}</div>;
   }
 
@@ -304,7 +375,7 @@ export function TracksPage() {
             flexDirection: 'column',
             gap: 12,
             position: 'sticky',
-            top: 84,
+            top: stickyTop,
             zIndex: 9,
             background: 'var(--panel)',
             paddingTop: 8,
@@ -374,6 +445,22 @@ export function TracksPage() {
               </span>
             </div>
           </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+              <thead>
+                <tr style={{ textAlign: 'left', color: 'var(--muted)', fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.6, borderBottom: '1px solid var(--border)' }}>
+                  <th style={{ ...headerCellStyle, padding: '8px 6px', width: 44 }}>#</th>
+                  <th style={{ ...headerCellStyle, padding: '8px 6px', minWidth: 220 }}>Track</th>
+                  <th style={{ ...headerCellStyle, padding: '8px 6px', minWidth: 140 }}>Artista</th>
+                  <th style={{ ...headerCellStyle, padding: '8px 6px', minWidth: 160 }}>Álbum</th>
+                  <th style={{ ...headerCellStyle, padding: '8px 6px', width: 72 }}>Duración</th>
+                  <th style={{ ...headerCellStyle, padding: '8px 6px', width: 140 }}>Link YouTube</th>
+                  <th style={{ ...headerCellStyle, padding: '8px 6px', width: 90 }}>MP3 local</th>
+                  <th style={{ ...headerCellStyle, padding: '8px 6px', width: 150 }}>Acciones</th>
+                </tr>
+              </thead>
+            </table>
+          </div>
         </div>
 
         <div
@@ -381,19 +468,17 @@ export function TracksPage() {
           ref={listRef}
           style={{ overflowX: 'auto' }}
         >
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720, tableLayout: 'fixed' }}>
-            <thead>
-              <tr style={{ textAlign: 'left', color: 'var(--muted)', fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.6 }}>
-                <th style={{ padding: '8px 6px', width: 44 }}>#</th>
-                <th style={{ padding: '8px 6px' }}>Track</th>
-                <th style={{ padding: '8px 6px' }}>Artista</th>
-                <th style={{ padding: '8px 6px' }}>Álbum</th>
-                <th style={{ padding: '8px 6px' }}>Duración</th>
-                <th style={{ padding: '8px 6px' }}>Link YouTube</th>
-                <th style={{ padding: '8px 6px' }}>MP3 local</th>
-                <th style={{ padding: '8px 6px' }}>Acciones</th>
-              </tr>
-            </thead>
+          {(loading || loadingMore) && (
+            <div className="badge" style={{ marginBottom: 8 }}>
+              Cargando resultados...
+            </div>
+          )}
+          {error && (
+            <div className="badge" style={{ marginBottom: 8, borderColor: '#ef4444', color: '#fecaca' }}>
+              Error: {error}
+            </div>
+          )}
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
             <tbody>
               {topSpacer > 0 && (
                 <tr>
@@ -417,14 +502,14 @@ export function TracksPage() {
                       <span style={{ color: 'var(--muted)' }}>Pendiente</span>
                     )}
                   </td>
-                  <td style={cellStyle}>
+                  <td style={mp3CellStyle}>
                     {track.local_file_exists ? (
                       <span style={{ color: '#34d399', fontWeight: 600 }}>Guardado</span>
                     ) : (
                       <span style={{ color: 'var(--muted)' }}>No</span>
                     )}
                   </td>
-                  <td style={cellStyle}>
+                  <td style={actionsCellStyle}>
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'nowrap', overflow: 'hidden' }}>
                       {track.youtube_url && (
                         <a
@@ -438,15 +523,14 @@ export function TracksPage() {
                         </a>
                       )}
                       {track.local_file_exists && track.youtube_video_id && (
-                        <a
-                          href={`${API_BASE_URL}/youtube/download/${track.youtube_video_id}/file?format=mp3`}
-                          target="_blank"
-                          rel="noreferrer"
+                        <button
+                          type="button"
+                          onClick={() => void handlePlayTrack(track)}
                           className="badge"
-                          style={{ textDecoration: 'none' }}
+                          style={{ textDecoration: 'none', cursor: 'pointer', border: 'none' }}
                         >
-                          ⬇ Descargar MP3
-                        </a>
+                          ▶ Reproducir
+                        </button>
                       )}
                     </div>
                   </td>

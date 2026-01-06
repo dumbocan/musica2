@@ -3,6 +3,7 @@ Track endpoints: list, etc.
 """
 
 from typing import List
+import re
 from pathlib import Path as FsPath
 
 from fastapi import APIRouter, Path, HTTPException, Query
@@ -40,11 +41,19 @@ def get_tracks_overview(
     Return tracks with artist, album, cached YouTube link/status and local file info.
     Useful for the frontend "Tracks" page so users can see what is ready for streaming/downloading.
     """
+    def normalize_search(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+
+    def normalized_column(column):
+        return func.regexp_replace(func.lower(column), "[^a-z0-9]+", " ", "g")
+
     summary = None
+    if filter == "all":
+        filter = None
     filter = filter or None
     if filter and filter not in {"withLink", "noLink", "hasFile", "missingFile"}:
         raise HTTPException(status_code=400, detail="Invalid filter value")
-    search_term = search.strip() if search else ""
+    search_term = normalize_search(search) if search else ""
     is_filtered_query = bool(filter or search_term)
     if include_summary:
         with get_session() as session:
@@ -90,9 +99,9 @@ def get_tracks_overview(
             pattern = f"%{search_term}%"
             base_query = base_query.where(
                 or_(
-                    Track.name.ilike(pattern),
-                    Artist.name.ilike(pattern),
-                    Album.name.ilike(pattern),
+                    normalized_column(Track.name).ilike(pattern),
+                    normalized_column(Artist.name).ilike(pattern),
+                    normalized_column(Album.name).ilike(pattern),
                 )
             )
 
@@ -133,9 +142,9 @@ def get_tracks_overview(
                 pattern = f"%{search_term}%"
                 count_query = count_query.where(
                     or_(
-                        Track.name.ilike(pattern),
-                        Artist.name.ilike(pattern),
-                        Album.name.ilike(pattern),
+                        normalized_column(Track.name).ilike(pattern),
+                        normalized_column(Artist.name).ilike(pattern),
+                        normalized_column(Album.name).ilike(pattern),
                     )
                 )
             if filter:
