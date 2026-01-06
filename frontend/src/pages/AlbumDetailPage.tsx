@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { audio2Api } from '@/lib/api';
+import { audio2Api, API_BASE_URL } from '@/lib/api';
 import { useApiStore } from '@/store/useApiStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import { useFavorites } from '@/hooks/useFavorites';
@@ -37,7 +37,16 @@ type Album = {
   };
 };
 
+const resolveImageUrl = (url?: string) => {
+  if (!url) return undefined;
+  return url.startsWith('/') ? `${API_BASE_URL}${url}` : url;
+};
+
 export function AlbumDetailPage() {
+  const resolveImageUrl = (url?: string) => {
+    if (!url) return undefined;
+    return url.startsWith('/') ? `${API_BASE_URL}${url}` : url;
+  };
   const { spotifyId } = useParams<{ spotifyId: string }>();
   const navigate = useNavigate();
   const [album, setAlbum] = useState<Album | null>(null);
@@ -647,6 +656,7 @@ export function AlbumDetailPage() {
   const isAlbumFavorite = !!(localAlbumId && favoriteAlbumIds.has(localAlbumId));
   const hasToken = typeof window !== 'undefined' && !!localStorage.getItem('token');
   const canFavorite = !!(effectiveTrackUserId || effectiveAlbumUserId || hasToken);
+  const coverImageUrl = resolveImageUrl(album.images?.[0]?.url);
 
   if (!spotifyId) return <div className="card">Álbum no especificado.</div>;
   if (loading) return <div className="card">Cargando álbum...</div>;
@@ -696,9 +706,9 @@ export function AlbumDetailPage() {
               display: nowPlaying && playbackMode === 'video' && playerReady ? 'block' : 'none',
             }}
           />
-          {album.images?.[0]?.url && (
+          {coverImageUrl && (
             <img
-              src={album.images[0].url}
+              src={coverImageUrl}
               alt={album.name}
               style={{
                 position: 'absolute',
