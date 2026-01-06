@@ -209,6 +209,10 @@ def get_tracks_overview(
             file_exists = FsPath(file_path).exists() if verify_files else True
         else:
             file_exists = False
+        if file_exists:
+            youtube_status = "completed"
+        elif youtube_video_id and not youtube_status:
+            youtube_status = "link_found"
 
         items.append({
             "track_id": track.id,

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { audio2Api } from '@/lib/api';
+import { useApiStore } from '@/store/useApiStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import type { TrackOverview } from '@/types/api';
 
 type FilterTab = 'all' | 'withLink' | 'noLink' | 'hasFile' | 'missingFile';
 type LinkUiState = { status: 'idle' | 'loading' | 'error'; message?: string };
-type DownloadUiState = { status: 'idle' | 'loading' | 'done' | 'error'; message?: string };
 
 const filterLabels: Record<FilterTab, string> = {
   all: 'Todos',
@@ -22,6 +22,7 @@ export function TracksPage() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<FilterTab>('all');
+  const [favoriteTrackIds, setFavoriteTrackIds] = useState<Set<number>>(new Set());
   const [summary, setSummary] = useState<{
     total: number;
     with_link: number;
@@ -33,8 +34,8 @@ export function TracksPage() {
   const [nextAfter, setNextAfter] = useState<number | null>(null);
   const [hasMore, setHasMore] = useState<boolean>(false);
   const [linkState, setLinkState] = useState<Record<string, LinkUiState>>({});
-  const [downloadState, setDownloadState] = useState<Record<string, DownloadUiState>>({});
   const limit = 200;
+  const { userId } = useApiStore();
   const listRef = useRef<HTMLDivElement | null>(null);
   const loadingMoreRef = useRef(false);
   const [scrollTop, setScrollTop] = useState(0);
@@ -46,10 +47,19 @@ export function TracksPage() {
   const setOnPlayTrack = usePlayerStore((s) => s.setOnPlayTrack);
   const setPlaybackMode = usePlayerStore((s) => s.setPlaybackMode);
   const setStatusMessage = usePlayerStore((s) => s.setStatusMessage);
-  const isMountedRef = useRef(true);
   const rowHeight = 64;
   const overscan = 8;
   const stickyTop = 84;
+  const columnWidths = {
+    index: 44,
+    track: 391,
+    artist: 130,
+    album: 192,
+    duration: 72,
+    youtube: 140,
+    mp3: 90,
+    actions: 150,
+  };
   const normalizeSearchText = (value: string) =>
     value
       .toLowerCase()
@@ -69,10 +79,31 @@ export function TracksPage() {
   };
 
   useEffect(() => {
-    return () => {
-      isMountedRef.current = false;
+    let cancelled = false;
+    const loadFavorites = async () => {
+      if (!userId) {
+        setFavoriteTrackIds(new Set());
+        return;
+      }
+      try {
+        const res = await audio2Api.listFavorites({ user_id: userId, target_type: 'track' });
+        if (cancelled) return;
+        const next = new Set<number>();
+        (res.data || []).forEach((fav: any) => {
+          if (typeof fav?.track_id === 'number') {
+            next.add(fav.track_id);
+          }
+        });
+        setFavoriteTrackIds(next);
+      } catch (err) {
+        console.error('Failed to load track favorites', err);
+      }
     };
-  }, []);
+    loadFavorites();
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
 
   useEffect(() => {
     const activeSearch = search.trim();
@@ -272,18 +303,6 @@ export function TracksPage() {
     [linkState, resolveTrackKey, setStatusMessage]
   );
 
-  const waitForDownload = useCallback(async (videoId: string) => {
-    const maxAttempts = 30;
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      const status = await audio2Api.getYoutubeDownloadStatus(videoId).catch(() => null);
-      if (status?.data?.exists) {
-        return true;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-    }
-    return false;
-  }, []);
-
   const totalRows = filteredTracks.length;
   const visibleCount = useMemo(
     () => Math.ceil(containerHeight / rowHeight) + overscan * 2,
@@ -402,11 +421,29 @@ export function TracksPage() {
     overflow: 'hidden' as const,
     textOverflow: 'ellipsis' as const,
   };
+  const nameCellStyle = {
+    padding: '10px 6px',
+    whiteSpace: 'nowrap' as const,
+    overflow: 'hidden' as const,
+    textOverflow: 'ellipsis' as const,
+  };
   const mp3CellStyle = { ...cellStyle, paddingRight: 4 };
   const actionsCellStyle = { ...cellStyle, paddingLeft: 4 };
   const headerCellStyle = {
     background: 'var(--panel)',
   };
+  const renderColGroup = () => (
+    <colgroup>
+      <col style={{ width: columnWidths.index }} />
+      <col style={{ width: columnWidths.track }} />
+      <col style={{ width: columnWidths.artist }} />
+      <col style={{ width: columnWidths.album }} />
+      <col style={{ width: columnWidths.duration }} />
+      <col style={{ width: columnWidths.youtube }} />
+      <col style={{ width: columnWidths.mp3 }} />
+      <col style={{ width: columnWidths.actions }} />
+    </colgroup>
+  );
 
   const handlePlayTrack = useCallback(
     async (track: TrackOverview) => {
@@ -454,64 +491,30 @@ export function TracksPage() {
     ]
   );
 
-  const handleDownloadTrack = useCallback(
-    async (track: TrackOverview) => {
-      const trackKey = resolveTrackKey(track);
-      if (!trackKey) return;
-      if (downloadState[trackKey]?.status === 'loading') return;
-
-      setDownloadState((prev) => ({
-        ...prev,
-        [trackKey]: { status: 'loading', message: 'Descargando...' },
-      }));
-      const linkInfo = await ensureYoutubeLink(track);
-      const videoId = linkInfo?.videoId || track.youtube_video_id;
-      if (!videoId) {
-        setDownloadState((prev) => ({
-          ...prev,
-          [trackKey]: { status: 'error', message: 'Sin enlace de YouTube' },
-        }));
-        return;
-      }
+  const toggleTrackFavorite = useCallback(
+    async (trackId: number) => {
+      if (!userId) return;
       try {
-        await audio2Api.downloadYoutubeAudio(videoId);
-        const exists = await waitForDownload(videoId);
-        if (!isMountedRef.current) return;
-        if (exists) {
-          setDownloadState((prev) => ({
-            ...prev,
-            [trackKey]: { status: 'done', message: 'Guardado' },
-          }));
-          setTracks((prev) =>
-            prev.map((item) =>
-              resolveTrackKey(item) === trackKey
-                ? { ...item, local_file_exists: true }
-                : item
-            )
-          );
-          setSummary((prev) => {
-            if (!prev || track.local_file_exists) return prev;
-            return {
-              ...prev,
-              with_file: prev.with_file + 1,
-              missing_file: Math.max(prev.missing_file - 1, 0),
-            };
+        if (favoriteTrackIds.has(trackId)) {
+          await audio2Api.removeFavorite('track', trackId, userId);
+          setFavoriteTrackIds((prev) => {
+            const next = new Set(prev);
+            next.delete(trackId);
+            return next;
           });
         } else {
-          setDownloadState((prev) => ({
-            ...prev,
-            [trackKey]: { status: 'done', message: 'Descarga iniciada' },
-          }));
+          await audio2Api.addFavorite('track', trackId, userId);
+          setFavoriteTrackIds((prev) => {
+            const next = new Set(prev);
+            next.add(trackId);
+            return next;
+          });
         }
-      } catch (err: any) {
-        const message = err?.response?.data?.detail || err?.message || 'Error al descargar';
-        setDownloadState((prev) => ({
-          ...prev,
-          [trackKey]: { status: 'error', message },
-        }));
+      } catch (err) {
+        console.error('Failed to toggle track favorite', err);
       }
     },
-    [downloadState, ensureYoutubeLink, resolveTrackKey, waitForDownload]
+    [favoriteTrackIds, userId]
   );
 
   if (loading && !hasLoadedOnce && tracks.length === 0) {
@@ -619,17 +622,18 @@ export function TracksPage() {
             </div>
           </div>
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720, tableLayout: 'fixed' }}>
+              {renderColGroup()}
               <thead>
                 <tr style={{ textAlign: 'left', color: 'var(--muted)', fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.6, borderBottom: '1px solid var(--border)' }}>
-                  <th style={{ ...headerCellStyle, padding: '8px 6px', width: 44 }}>#</th>
-                  <th style={{ ...headerCellStyle, padding: '8px 6px', minWidth: 220 }}>Track</th>
-                  <th style={{ ...headerCellStyle, padding: '8px 6px', minWidth: 140 }}>Artista</th>
-                  <th style={{ ...headerCellStyle, padding: '8px 6px', minWidth: 160 }}>Álbum</th>
-                  <th style={{ ...headerCellStyle, padding: '8px 6px', width: 72 }}>Duración</th>
-                  <th style={{ ...headerCellStyle, padding: '8px 6px', width: 140 }}>Link YouTube</th>
-                  <th style={{ ...headerCellStyle, padding: '8px 6px', width: 90 }}>MP3 local</th>
-                  <th style={{ ...headerCellStyle, padding: '8px 6px', width: 150 }}>Acciones</th>
+                  <th style={{ ...headerCellStyle, padding: '8px 6px' }}>#</th>
+                  <th style={{ ...headerCellStyle, padding: '8px 6px' }}>Track</th>
+                  <th style={{ ...headerCellStyle, padding: '8px 6px' }}>Artista</th>
+                  <th style={{ ...headerCellStyle, padding: '8px 6px' }}>Álbum</th>
+                  <th style={{ ...headerCellStyle, padding: '8px 6px' }}>Duración</th>
+                  <th style={{ ...headerCellStyle, padding: '8px 6px' }}>Link YouTube</th>
+                  <th style={{ ...headerCellStyle, padding: '8px 6px' }}>MP3 local</th>
+                  <th style={{ ...headerCellStyle, padding: '8px 6px' }}>Acciones</th>
                 </tr>
               </thead>
             </table>
@@ -651,7 +655,8 @@ export function TracksPage() {
               Error: {error}
             </div>
           )}
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720, tableLayout: 'fixed' }}>
+            {renderColGroup()}
             <tbody>
               {topSpacer > 0 && (
                 <tr>
@@ -663,8 +668,7 @@ export function TracksPage() {
                   const trackKey = resolveTrackKey(track);
                   const linkLoading = linkState[trackKey]?.status === 'loading';
                   const canPlay = !linkLoading && (!!track.youtube_video_id || !!track.spotify_track_id);
-                  const downloadInfo = downloadState[trackKey];
-                  const canDownload = !linkLoading && (!!track.youtube_video_id || !!track.spotify_track_id);
+                  const isFavorite = favoriteTrackIds.has(track.track_id);
 
                   return (
                     <tr
@@ -672,7 +676,7 @@ export function TracksPage() {
                       style={{ height: rowHeight }}
                     >
                       <td style={{ ...cellStyle, width: 44, color: 'var(--muted)' }}>{startIndex + index + 1}</td>
-                      <td style={{ ...cellStyle, fontWeight: 600 }}>
+                      <td style={{ ...nameCellStyle, fontWeight: 600, fontSize: 15 }}>
                         <button
                           type="button"
                           onClick={() => void handlePlayTrack(track)}
@@ -688,55 +692,88 @@ export function TracksPage() {
                             font: 'inherit',
                             color: canPlay ? 'var(--accent)' : 'inherit',
                             cursor: canPlay ? 'pointer' : 'default',
-                            whiteSpace: 'nowrap',
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
                           }}
                         >
                           {track.track_name}
                         </button>
                       </td>
-                  <td style={cellStyle}>{track.artist_name || '—'}</td>
-                  <td style={cellStyle}>{track.album_name || '—'}</td>
-                  <td style={cellStyle}>{formatDuration(track.duration_ms)}</td>
-                  <td style={cellStyle}>
-                    {track.youtube_video_id ? (
-                      <span style={{ color: 'var(--accent)', fontWeight: 600 }}>Disponible ({track.youtube_status || 'link'})</span>
-                    ) : (
-                      <span style={{ color: 'var(--muted)' }}>Pendiente</span>
-                    )}
+                  <td style={{ ...cellStyle, fontSize: 14 }}>{track.artist_name || '—'}</td>
+                  <td style={{ ...nameCellStyle, fontSize: 14 }}>
+                    {track.album_name || '—'}
                   </td>
-                  <td style={mp3CellStyle}>
+                  <td style={cellStyle}>{formatDuration(track.duration_ms)}</td>
+                  <td style={{ ...cellStyle, textAlign: 'center' }}>
+                    {track.youtube_video_id ? (
+                      <span
+                        title={`Disponible (${track.youtube_status || 'link'})`}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          width: 24,
+                          height: 24,
+                          borderRadius: '50%',
+                          border: '2px solid rgba(110, 193, 164, 0.7)',
+                          color: 'var(--accent)',
+                          fontWeight: 900,
+                          fontSize: 16,
+                        }}
+                      >
+                        ✓
+                      </span>
+                    ) : null}
+                  </td>
+                  <td style={{ ...mp3CellStyle, textAlign: 'center' }}>
                     {track.local_file_exists ? (
-                      <span style={{ color: '#34d399', fontWeight: 600 }}>Guardado</span>
-                    ) : (
-                      <span style={{ color: 'var(--muted)' }}>No</span>
-                    )}
+                      <span
+                        title="Guardado"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          width: 24,
+                          height: 24,
+                          borderRadius: '50%',
+                          border: '2px solid rgba(52, 211, 153, 0.7)',
+                          color: '#34d399',
+                          fontWeight: 900,
+                          fontSize: 16,
+                        }}
+                      >
+                        ✓
+                      </span>
+                    ) : null}
                   </td>
                   <td style={actionsCellStyle}>
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'nowrap', overflow: 'hidden' }}>
-                      {track.youtube_url && (
-                        <a
-                          href={track.youtube_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="badge"
-                          style={{ textDecoration: 'none' }}
-                        >
-                          ▶ Abrir YouTube
-                        </a>
-                      )}
-                      {!track.local_file_exists && (
-                        <button
-                          type="button"
-                          onClick={() => void handleDownloadTrack(track)}
-                          className="badge"
-                          style={{ textDecoration: 'none', cursor: 'pointer', border: 'none' }}
-                          disabled={!canDownload || downloadInfo?.status === 'loading'}
-                        >
-                          {downloadInfo?.status === 'loading' ? '⏳' : '⬇ Descargar'}
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => toggleTrackFavorite(track.track_id)}
+                        className="badge"
+                        style={{
+                          textDecoration: 'none',
+                          cursor: userId ? 'pointer' : 'not-allowed',
+                          border: 'none',
+                          background: isFavorite ? 'rgba(63, 255, 208, 0.18)' : 'transparent',
+                          color: isFavorite ? 'var(--accent)' : 'inherit',
+                        }}
+                        disabled={!userId}
+                        title={isFavorite ? 'Quitar de favoritos' : 'Agregar a favoritos'}
+                      >
+                        {isFavorite ? '❤️' : '🤍'}
+                      </button>
+                      <button
+                        type="button"
+                        className="badge"
+                        style={{ textDecoration: 'none', cursor: 'not-allowed', border: 'none', opacity: 0.6 }}
+                        disabled
+                        title="Próximamente: añadir a lista"
+                      >
+                        ＋ Lista
+                      </button>
                     </div>
                   </td>
                     </tr>
