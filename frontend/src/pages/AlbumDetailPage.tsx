@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { audio2Api } from '@/lib/api';
 import { useApiStore } from '@/store/useApiStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
+import { useFavorites } from '@/hooks/useFavorites';
 
 type Track = {
   id: string;
@@ -21,7 +22,6 @@ type YoutubeAvailability =
   | { status: 'available'; videoId: string; videoUrl: string; title?: string }
   | { status: 'not_found' }
   | { status: 'error'; message?: string };
-type DownloadUiState = { status: 'idle' | 'loading' | 'done' | 'error'; message?: string };
 type StreamUiState = { status: 'idle' | 'loading' | 'error'; message?: string };
 type Album = {
   id: string;
@@ -44,11 +44,11 @@ export function AlbumDetailPage() {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isFavorite, setIsFavorite] = useState(false);
   const [favoriteLoading, setFavoriteLoading] = useState(false);
   const [localAlbumId, setLocalAlbumId] = useState<number | null>(null);
+  const [trackLocalIds, setTrackLocalIds] = useState<Record<string, number>>({});
+  const [trackFavoriteLoading, setTrackFavoriteLoading] = useState<Record<string, boolean>>({});
   const [youtubeAvailability, setYoutubeAvailability] = useState<Record<string, YoutubeAvailability>>({});
-  const [downloadState, setDownloadState] = useState<Record<string, DownloadUiState>>({});
   const [streamState, setStreamState] = useState<Record<string, StreamUiState>>({});
   const nowPlaying = usePlayerStore((s) => s.nowPlaying);
   const playbackMode = usePlayerStore((s) => s.playbackMode);
@@ -69,6 +69,16 @@ export function AlbumDetailPage() {
   const playerRef = useRef<any>(null);
   const isMountedRef = useRef(true);
   const userId = useApiStore((s) => s.userId);
+  const {
+    favoriteIds: favoriteAlbumIds,
+    toggleFavorite: toggleAlbumFavorite,
+    effectiveUserId: effectiveAlbumUserId
+  } = useFavorites('album', userId);
+  const {
+    favoriteIds: favoriteTrackIds,
+    toggleFavorite: toggleTrackFavorite,
+    effectiveUserId: effectiveTrackUserId
+  } = useFavorites('track', userId);
 
   const resolveTrackId = useCallback((track: Track) => track.spotify_id || track.id || '', []);
 
@@ -113,11 +123,6 @@ export function AlbumDetailPage() {
     return () => setVideoControls(null);
   }, [setVideoControls]);
 
-  useEffect(() => {
-    setYoutubeAvailability({});
-    setDownloadState({});
-    setStreamState({});
-  }, [spotifyId]);
 
   const getRowKey = useCallback(
     (track: Track, idx?: number) =>
@@ -187,6 +192,73 @@ export function AlbumDetailPage() {
   }, [tracks, resolveTrackId]);
 
   useEffect(() => {
+    if (tracks.length === 0) {
+      setTrackLocalIds({});
+      return;
+    }
+    const spotifyTrackIds = tracks.map(resolveTrackId).filter(Boolean);
+    if (spotifyTrackIds.length === 0) {
+      setTrackLocalIds({});
+      return;
+    }
+    let cancelled = false;
+    const loadTrackIds = async () => {
+      try {
+        const res = await audio2Api.resolveTracks(spotifyTrackIds);
+        if (cancelled) return;
+        const next: Record<string, number> = {};
+        (res.data?.items || []).forEach((item: any) => {
+          if (item?.spotify_track_id && typeof item?.track_id === 'number') {
+            next[item.spotify_track_id] = item.track_id;
+          }
+        });
+        setTrackLocalIds(next);
+      } catch {
+        if (!cancelled) {
+          setTrackLocalIds({});
+        }
+      }
+    };
+    loadTrackIds();
+    return () => {
+      cancelled = true;
+    };
+  }, [resolveTrackId, tracks, localAlbumId]);
+
+  const ensureTrackLocalId = useCallback(
+    async (spotifyTrackId: string): Promise<number | null> => {
+      const existing = trackLocalIds[spotifyTrackId];
+      if (existing) return existing;
+      try {
+        const res = await audio2Api.resolveTracks([spotifyTrackId]);
+        const items = res.data?.items || [];
+        const match = items.find((item: any) => item.spotify_track_id === spotifyTrackId);
+        if (match?.track_id) {
+          setTrackLocalIds((prev) => ({ ...prev, [spotifyTrackId]: match.track_id }));
+          return match.track_id as number;
+        }
+      } catch {
+        // best effort
+      }
+      if (!spotifyId) return null;
+      try {
+        await audio2Api.saveAlbumToDb(spotifyId);
+        const res = await audio2Api.resolveTracks([spotifyTrackId]);
+        const items = res.data?.items || [];
+        const match = items.find((item: any) => item.spotify_track_id === spotifyTrackId);
+        if (match?.track_id) {
+          setTrackLocalIds((prev) => ({ ...prev, [spotifyTrackId]: match.track_id }));
+          return match.track_id as number;
+        }
+      } catch {
+        // ignore
+      }
+      return null;
+    },
+    [spotifyId, trackLocalIds]
+  );
+
+  useEffect(() => {
     if (!spotifyId) return;
     let isMounted = true;
     const load = async () => {
@@ -231,21 +303,6 @@ export function AlbumDetailPage() {
     };
   }, [spotifyId]);
 
-  // Check favorite status once we have local album id
-  useEffect(() => {
-    const checkFavorite = async () => {
-      if (!userId || !localAlbumId) return;
-      try {
-        const res = await audio2Api.listFavorites({ user_id: userId, target_type: 'album' });
-        const favs = Array.isArray(res.data) ? res.data : [];
-        const found = favs.some((f: any) => f.album_id === localAlbumId);
-        setIsFavorite(found);
-      } catch (e) {
-        // ignore
-      }
-    };
-    checkFavorite();
-  }, [userId, localAlbumId]);
 
   const fetchYoutubeForTrack = useCallback(
     async (track: Track, stateKey: string): Promise<YoutubeAvailability | null> => {
@@ -344,6 +401,11 @@ export function AlbumDetailPage() {
     },
     [album, resolveTrackId]
   );
+
+  useEffect(() => {
+    setYoutubeAvailability({});
+    setStreamState({});
+  }, [spotifyId]);
 
   useEffect(() => {
     if (playbackMode !== 'video') return;
@@ -498,11 +560,7 @@ export function AlbumDetailPage() {
           setStream({ status: 'error', message: 'Pulsa play otra vez para iniciar el audio' });
           return;
         }
-        if (result.mode === 'stream') {
-          setStream({ status: 'loading', message: 'Streaming...' });
-        } else {
-          setStream({ status: 'idle' });
-        }
+        setStream({ status: 'idle' });
       } else {
         setStream({ status: 'idle' });
       }
@@ -537,11 +595,7 @@ export function AlbumDetailPage() {
         setStream({ status: 'error', message: 'Pulsa play otra vez para iniciar el audio' });
         return;
       }
-      if (result.mode === 'stream') {
-        setStream({ status: 'loading', message: 'Streaming...' });
-      } else {
-        setStream({ status: 'idle' });
-      }
+      setStream({ status: 'idle' });
     } else {
       setStream({ status: 'idle' });
     }
@@ -576,35 +630,6 @@ export function AlbumDetailPage() {
     return () => setOnPlayTrack(null);
   }, [album?.artists, handleStreamTrack, resolveTrackId, setOnPlayTrack, setQueue, tracks]);
 
-  const handleDownloadTrack = async (track: Track, key: string) => {
-    const updateState = (state: DownloadUiState) =>
-      setDownloadState((prev) => ({
-        ...prev,
-        [key]: state,
-      }));
-
-    const info = await fetchYoutubeForTrack(track, key);
-    if (!info || info.status !== 'available') {
-      let message = 'Sin enlace de YouTube';
-      if (info?.status === 'not_found') {
-        message = 'No se encontró YouTube para esta canción';
-      } else if (info?.status === 'error' && info.message) {
-        message = info.message;
-      }
-      updateState({ status: 'error', message });
-      return;
-    }
-
-    updateState({ status: 'loading', message: 'Descargando...' });
-    try {
-      await audio2Api.downloadYoutubeAudio(info.videoId);
-      updateState({ status: 'done', message: 'Descarga iniciada' });
-    } catch (err: any) {
-      const message = err?.response?.data?.detail || err?.message || 'Error al descargar';
-      updateState({ status: 'error', message });
-    }
-  };
-
   const wiki = album?.lastfm?.wiki || {};
   const wikiHtml = wiki.content || wiki.summary || '';
   const wikiParagraphs = useMemo(() => {
@@ -619,6 +644,9 @@ export function AlbumDetailPage() {
       .filter(Boolean);
   }, [wikiHtml]);
   const wikiToShow = wikiParagraphs.slice(0, 2);
+  const isAlbumFavorite = !!(localAlbumId && favoriteAlbumIds.has(localAlbumId));
+  const hasToken = typeof window !== 'undefined' && !!localStorage.getItem('token');
+  const canFavorite = !!(effectiveTrackUserId || effectiveAlbumUserId || hasToken);
 
   if (!spotifyId) return <div className="card">Álbum no especificado.</div>;
   if (loading) return <div className="card">Cargando álbum...</div>;
@@ -709,7 +737,7 @@ export function AlbumDetailPage() {
           <div style={{ color: 'var(--muted)', fontSize: 14, lineHeight: 1.5 }}>
             {album.name} — {tracks.length} canciones.{" "}
             {(album.artists || []).map((a) => a.name).join(', ') || 'Este álbum'} salió en {album.release_date || 'fecha no disponible'}.
-            Explora los temas, márcalos como favoritos, añade tags o descárgalos.
+            Explora los temas, márcalos como favoritos o añádelos a una lista.
           </div>
           {wikiToShow.length > 0 && (
             <div
@@ -742,29 +770,23 @@ export function AlbumDetailPage() {
           <button
             className="btn-ghost"
             style={{ borderRadius: 8, fontSize: 18, opacity: favoriteLoading ? 0.6 : 1 }}
-            disabled={favoriteLoading || !userId || !localAlbumId}
+            disabled={favoriteLoading || !canFavorite || !localAlbumId}
             onClick={async () => {
-              if (!userId || !localAlbumId) return;
+              if (!canFavorite || !localAlbumId) return;
               setFavoriteLoading(true);
               try {
-                if (!isFavorite) {
-                  await audio2Api.addFavorite('album', localAlbumId, userId);
-                  setIsFavorite(true);
-                } else {
-                  await audio2Api.removeFavorite('album', localAlbumId, userId);
-                  setIsFavorite(false);
-                }
+                await toggleAlbumFavorite(localAlbumId);
               } catch (e) {
                 // ignore error for now
               } finally {
                 setFavoriteLoading(false);
               }
             }}
-            aria-pressed={isFavorite}
-            aria-label={isFavorite ? 'Quitar de favoritos' : 'Agregar a favoritos'}
-            title={isFavorite ? 'Quitar de favoritos' : 'Agregar a favoritos'}
+            aria-pressed={isAlbumFavorite}
+            aria-label={isAlbumFavorite ? 'Quitar de favoritos' : 'Agregar a favoritos'}
+            title={isAlbumFavorite ? 'Quitar de favoritos' : 'Agregar a favoritos'}
           >
-            {isFavorite ? '❤️' : '🤍'}
+            {isAlbumFavorite ? '❤️' : '🤍'}
           </button>
         </div>
         <div className="space-y-2">
@@ -772,18 +794,12 @@ export function AlbumDetailPage() {
             const rowKey = getRowKey(t, idx);
             const spotifyTrackId = resolveTrackId(t);
             const youtubeInfo = spotifyTrackId ? youtubeAvailability[spotifyTrackId] : undefined;
-            const downloadInfo = spotifyTrackId ? downloadState[spotifyTrackId] : undefined;
             const streamInfo = spotifyTrackId ? streamState[spotifyTrackId] : undefined;
+            const trackLocalId = spotifyTrackId ? trackLocalIds[spotifyTrackId] : undefined;
+            const isTrackFavorite = !!(trackLocalId && favoriteTrackIds.has(trackLocalId));
+            const isTrackFavoriteLoading = !!(spotifyTrackId && trackFavoriteLoading[spotifyTrackId]);
             const streamDisabled = !spotifyTrackId || youtubeInfo?.status === 'pending' || streamInfo?.status === 'loading';
-            const downloadDisabled = !spotifyTrackId || downloadInfo?.status === 'loading';
-            const downloadMessage = downloadInfo?.message;
             const streamMessage = streamInfo?.message;
-            const downloadMessageColor =
-              downloadInfo?.status === 'error'
-                ? '#f87171'
-                : downloadInfo?.status === 'done'
-                ? '#4ade80'
-                : 'var(--muted)';
             const streamMessageColor = streamInfo?.status === 'error' ? '#f87171' : 'var(--muted)';
 
             return (
@@ -825,16 +841,20 @@ export function AlbumDetailPage() {
                     <span
                       title={youtubeInfo.title || 'Disponible para streaming en YouTube'}
                       style={{
-                        fontSize: 11,
-                        padding: '2px 6px',
-                        borderRadius: 999,
-                        background: 'rgba(255,0,0,0.15)',
-                        color: '#ff6666',
-                        fontWeight: 600,
-                        letterSpacing: 0.5
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        width: 24,
+                        height: 24,
+                        borderRadius: '50%',
+                        border: '2px solid rgba(110, 193, 164, 0.7)',
+                        color: 'var(--accent)',
+                        fontWeight: 900,
+                        fontSize: 16,
+                        letterSpacing: 0.5,
                       }}
                     >
-                      ▶ YT
+                      ✓
                     </span>
                   )}
                 </div>
@@ -844,24 +864,35 @@ export function AlbumDetailPage() {
                   {t.explicit ? ' · Explicit' : ''}
                 </div>
                 <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
-                  <button className="btn-ghost" style={{ borderRadius: 8, fontSize: 18 }}>❤️</button>
                   <button
                     className="btn-ghost"
-                    style={{ borderRadius: 8, fontSize: 18, opacity: downloadDisabled ? 0.6 : 1 }}
-                    disabled={downloadDisabled}
-                    onClick={() => spotifyTrackId && handleDownloadTrack(t, spotifyTrackId)}
-                    title="Descargar desde YouTube"
-                    aria-label="Descargar desde YouTube"
+                    style={{ borderRadius: 8, fontSize: 18, opacity: !userId ? 0.4 : 1 }}
+                    disabled={!canFavorite || isTrackFavoriteLoading}
+                    onClick={async () => {
+                      if (!canFavorite || !spotifyTrackId) return;
+                      setTrackFavoriteLoading((prev) => ({ ...prev, [spotifyTrackId]: true }));
+                      try {
+                        const resolvedId = trackLocalId || (await ensureTrackLocalId(spotifyTrackId));
+                        if (!resolvedId) return;
+                        await toggleTrackFavorite(resolvedId);
+                      } finally {
+                        setTrackFavoriteLoading((prev) => ({ ...prev, [spotifyTrackId]: false }));
+                      }
+                    }}
+                    aria-label={isTrackFavorite ? 'Quitar de favoritos' : 'Agregar a favoritos'}
+                    title={isTrackFavorite ? 'Quitar de favoritos' : 'Agregar a favoritos'}
                   >
-                    {downloadInfo?.status === 'loading' ? '⏳' : '⬇️'}
+                    {isTrackFavorite ? '❤️' : '🤍'}
                   </button>
-                  <button className="btn-ghost" style={{ borderRadius: 8, fontSize: 18 }}>🏷️</button>
-                  {downloadMessage && (
-                    <span style={{ fontSize: 11, minWidth: 90, textAlign: 'left', color: downloadMessageColor }}>
-                      {downloadMessage}
-                    </span>
-                  )}
-                  {streamMessage && !downloadMessage && (
+                  <button
+                    className="btn-ghost"
+                    style={{ borderRadius: 8, fontSize: 12, padding: '6px 10px', opacity: 0.6 }}
+                    disabled
+                    title="Próximamente: añadir a lista"
+                  >
+                    ＋ Lista
+                  </button>
+                  {streamMessage && (
                     <span style={{ fontSize: 11, minWidth: 90, textAlign: 'left', color: streamMessageColor }}>
                       {streamMessage}
                     </span>

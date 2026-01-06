@@ -23,10 +23,12 @@ export function PlayerFooter() {
   const setPlaybackMode = usePlayerStore((s) => s.setPlaybackMode);
   const setStatusMessage = usePlayerStore((s) => s.setStatusMessage);
   const playByVideoId = usePlayerStore((s) => s.playByVideoId);
+  const tryUpgradeToFile = usePlayerStore((s) => s.tryUpgradeToFile);
   const resumeAudio = usePlayerStore((s) => s.resumeAudio);
   const pauseAudio = usePlayerStore((s) => s.pauseAudio);
   const stopAudio = usePlayerStore((s) => s.stopAudio);
   const seekAudio = usePlayerStore((s) => s.seekAudio);
+  const upgradeInFlightRef = useRef(false);
 
   const prevItem = currentIndex > 0 ? queue[currentIndex - 1] : null;
   const nextItem = currentIndex >= 0 && currentIndex < queue.length - 1 ? queue[currentIndex + 1] : null;
@@ -103,6 +105,22 @@ export function PlayerFooter() {
     raf = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(raf);
   }, [duration, playbackMode, setCurrentTime, setDuration]);
+
+  useEffect(() => {
+    if (playbackMode !== 'audio') return;
+    if (!nowPlaying || audioSourceMode !== 'stream') return;
+    let interval = 0;
+    interval = window.setInterval(async () => {
+      if (upgradeInFlightRef.current) return;
+      upgradeInFlightRef.current = true;
+      try {
+        await tryUpgradeToFile();
+      } finally {
+        upgradeInFlightRef.current = false;
+      }
+    }, 2500);
+    return () => window.clearInterval(interval);
+  }, [audioSourceMode, nowPlaying?.videoId, playbackMode, tryUpgradeToFile]);
 
   const formatTime = (value: number) => {
     if (!Number.isFinite(value) || value <= 0) return '0:00';

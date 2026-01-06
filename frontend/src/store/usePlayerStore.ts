@@ -56,6 +56,7 @@ type PlayerStore = {
   setOnPlayTrack: (handler: ((item: PlayerQueueItem) => void) | null) => void;
   setVideoControls: (controls: VideoControls | null) => void;
   playByVideoId: (payload: PlayerTrack) => Promise<{ ok: boolean; mode?: AudioSourceMode }>;
+  tryUpgradeToFile: () => Promise<boolean>;
   resumeAudio: () => void;
   pauseAudio: () => void;
   stopAudio: () => void;
@@ -136,6 +137,35 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
       set({ statusMessage: 'No se pudo reproducir el audio' });
       return { ok: false };
     }
+  },
+  tryUpgradeToFile: async () => {
+    const { nowPlaying, audioSourceMode, audioEl } = get();
+    if (!nowPlaying || audioSourceMode !== 'stream' || !audioEl) return false;
+    const { fileFormat } = getFormats(audioEl);
+    const status = await audio2Api
+      .getYoutubeDownloadStatus(nowPlaying.videoId, { format: fileFormat })
+      .catch(() => null);
+    if (!status?.data?.exists) return false;
+    const resumeTime = Number.isFinite(audioEl.currentTime) ? audioEl.currentTime : 0;
+    const wasPlaying = !audioEl.paused;
+    set({ audioSourceMode: 'file', statusMessage: '' });
+    audioEl.src = `${API_BASE_URL}/youtube/download/${nowPlaying.videoId}/file?format=${fileFormat}`;
+    const handleLoaded = () => {
+      audioEl.removeEventListener('loadedmetadata', handleLoaded);
+      if (resumeTime > 0) {
+        try {
+          audioEl.currentTime = resumeTime;
+        } catch {
+          // ignore seek errors on load
+        }
+      }
+      if (wasPlaying) {
+        void audioEl.play();
+      }
+    };
+    audioEl.addEventListener('loadedmetadata', handleLoaded);
+    audioEl.load();
+    return true;
   },
   resumeAudio: () => {
     const audio = get().audioEl;
