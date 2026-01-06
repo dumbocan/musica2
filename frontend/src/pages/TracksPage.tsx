@@ -46,6 +46,7 @@ export function TracksPage() {
   const setOnPlayTrack = usePlayerStore((s) => s.setOnPlayTrack);
   const setPlaybackMode = usePlayerStore((s) => s.setPlaybackMode);
   const setStatusMessage = usePlayerStore((s) => s.setStatusMessage);
+  const isMountedRef = useRef(true);
   const rowHeight = 64;
   const overscan = 8;
   const stickyTop = 84;
@@ -66,6 +67,12 @@ export function TracksPage() {
       return true;
     });
   };
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     const activeSearch = search.trim();
@@ -265,6 +272,18 @@ export function TracksPage() {
     [linkState, resolveTrackKey, setStatusMessage]
   );
 
+  const waitForDownload = useCallback(async (videoId: string) => {
+    const maxAttempts = 30;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const status = await audio2Api.getYoutubeDownloadStatus(videoId).catch(() => null);
+      if (status?.data?.exists) {
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+    return false;
+  }, []);
+
   const totalRows = filteredTracks.length;
   const visibleCount = useMemo(
     () => Math.ceil(containerHeight / rowHeight) + overscan * 2,
@@ -456,25 +475,34 @@ export function TracksPage() {
       }
       try {
         await audio2Api.downloadYoutubeAudio(videoId);
-        setDownloadState((prev) => ({
-          ...prev,
-          [trackKey]: { status: 'done', message: 'Descargado' },
-        }));
-        setTracks((prev) =>
-          prev.map((item) =>
-            resolveTrackKey(item) === trackKey
-              ? { ...item, local_file_exists: true }
-              : item
-          )
-        );
-        setSummary((prev) => {
-          if (!prev || track.local_file_exists) return prev;
-          return {
+        const exists = await waitForDownload(videoId);
+        if (!isMountedRef.current) return;
+        if (exists) {
+          setDownloadState((prev) => ({
             ...prev,
-            with_file: prev.with_file + 1,
-            missing_file: Math.max(prev.missing_file - 1, 0),
-          };
-        });
+            [trackKey]: { status: 'done', message: 'Guardado' },
+          }));
+          setTracks((prev) =>
+            prev.map((item) =>
+              resolveTrackKey(item) === trackKey
+                ? { ...item, local_file_exists: true }
+                : item
+            )
+          );
+          setSummary((prev) => {
+            if (!prev || track.local_file_exists) return prev;
+            return {
+              ...prev,
+              with_file: prev.with_file + 1,
+              missing_file: Math.max(prev.missing_file - 1, 0),
+            };
+          });
+        } else {
+          setDownloadState((prev) => ({
+            ...prev,
+            [trackKey]: { status: 'done', message: 'Descarga iniciada' },
+          }));
+        }
       } catch (err: any) {
         const message = err?.response?.data?.detail || err?.message || 'Error al descargar';
         setDownloadState((prev) => ({
@@ -483,7 +511,7 @@ export function TracksPage() {
         }));
       }
     },
-    [downloadState, ensureYoutubeLink, resolveTrackKey]
+    [downloadState, ensureYoutubeLink, resolveTrackKey, waitForDownload]
   );
 
   if (loading && !hasLoadedOnce && tracks.length === 0) {
