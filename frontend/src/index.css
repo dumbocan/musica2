@@ -191,6 +191,37 @@ a {
   white-space: nowrap;
 }
 
+.album-player__mode {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 999px;
+  border: 1px solid rgba(63, 255, 208, 0.2);
+  background: rgba(16, 20, 28, 0.6);
+}
+
+.album-player__mode-btn {
+  border: none;
+  background: transparent;
+  color: rgba(159, 255, 220, 0.7);
+  font-size: 11px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.album-player__mode-btn.is-active {
+  background: rgba(63, 255, 208, 0.18);
+  color: #9fffdc;
+  box-shadow: inset 0 0 8px rgba(63, 255, 208, 0.25);
+}
+
+.album-player__mode-btn:hover {
+  color: #c9fff0;
+}
+
 .album-player__volume {
   display: flex;
   align-items: center;
@@ -302,6 +333,7 @@ a {
 
 .page-content {
   padding: 24px;
+  padding-bottom: 120px;
 }
 
 .card {

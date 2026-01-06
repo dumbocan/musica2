@@ -67,6 +67,12 @@ PUBLIC_PATHS = {
     "/auth/create-first-user",
     "/images/proxy",
 }
+PUBLIC_PREFIXES = (
+    "/static",
+    "/favicon",
+    "/youtube/stream",  # Audio streaming uses <audio> without auth headers.
+    "/youtube/download",  # <audio> fetches file URLs without auth headers.
+)
 
 
 @app.middleware("http")
@@ -74,7 +80,7 @@ async def require_authenticated_user(request: Request, call_next):
     path = request.url.path
     if request.method == "OPTIONS":
         return await call_next(request)
-    if path in PUBLIC_PATHS or any(path.startswith(p) for p in ("/static", "/favicon")):
+    if path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
         return await call_next(request)
 
     # If no users exist, force registration first

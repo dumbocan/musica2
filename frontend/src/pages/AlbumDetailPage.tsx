@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { audio2Api } from '@/lib/api';
 import { useApiStore } from '@/store/useApiStore';
+import { usePlayerStore } from '@/store/usePlayerStore';
 
 type Track = {
   id: string;
@@ -49,12 +50,21 @@ export function AlbumDetailPage() {
   const [youtubeAvailability, setYoutubeAvailability] = useState<Record<string, YoutubeAvailability>>({});
   const [downloadState, setDownloadState] = useState<Record<string, DownloadUiState>>({});
   const [streamState, setStreamState] = useState<Record<string, StreamUiState>>({});
-  const [nowPlaying, setNowPlaying] = useState<{ title: string; artist?: string; videoId: string; spotifyTrackId: string } | null>(null);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [volume, setVolume] = useState(70);
+  const nowPlaying = usePlayerStore((s) => s.nowPlaying);
+  const playbackMode = usePlayerStore((s) => s.playbackMode);
+  const volume = usePlayerStore((s) => s.volume);
+  const setNowPlaying = usePlayerStore((s) => s.setNowPlaying);
+  const playByVideoId = usePlayerStore((s) => s.playByVideoId);
+  const setQueue = usePlayerStore((s) => s.setQueue);
+  const setCurrentIndex = usePlayerStore((s) => s.setCurrentIndex);
+  const setOnPlayTrack = usePlayerStore((s) => s.setOnPlayTrack);
+  const setVideoControls = usePlayerStore((s) => s.setVideoControls);
+  const setIsPlaying = usePlayerStore((s) => s.setIsPlaying);
+  const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
+  const setDuration = usePlayerStore((s) => s.setDuration);
   const [ytReady, setYtReady] = useState(false);
+  const [playerReady, setPlayerReady] = useState(false);
+  const autoSearchOnPlay = true;
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
   const playerRef = useRef<any>(null);
   const isMountedRef = useRef(true);
@@ -94,10 +104,19 @@ export function AlbumDetailPage() {
   }, []);
 
   useEffect(() => {
+    setVideoControls({
+      play: () => playerRef.current?.playVideo?.(),
+      pause: () => playerRef.current?.pauseVideo?.(),
+      stop: () => playerRef.current?.stopVideo?.(),
+      seek: (value) => playerRef.current?.seekTo?.(value, true),
+    });
+    return () => setVideoControls(null);
+  }, [setVideoControls]);
+
+  useEffect(() => {
     setYoutubeAvailability({});
     setDownloadState({});
     setStreamState({});
-    setNowPlaying(null);
   }, [spotifyId]);
 
   const getRowKey = useCallback(
@@ -107,6 +126,65 @@ export function AlbumDetailPage() {
       `${track.name}-${album?.id || spotifyId || 'album'}-${idx ?? ''}`,
     [album?.id, spotifyId, resolveTrackId]
   );
+
+  useEffect(() => {
+    if (tracks.length === 0) return;
+    const trackIds = tracks.map(resolveTrackId).filter(Boolean);
+    if (trackIds.length === 0) return;
+    let cancelled = false;
+    const trackLookup = new Map(tracks.map((track) => [resolveTrackId(track), track]));
+    const loadLinks = async () => {
+      try {
+        const response = await audio2Api.getYoutubeTrackLinks(trackIds);
+        if (cancelled) return;
+        const items = response.data?.items || [];
+        const nextAvailability: Record<string, YoutubeAvailability> = {};
+        const nextStreamState: Record<string, StreamUiState> = {};
+        items.forEach((item: any) => {
+          const trackId = item.spotify_track_id;
+          if (!trackId) return;
+          const track = trackLookup.get(trackId);
+          if (item.youtube_video_id) {
+            nextAvailability[trackId] = {
+              status: 'available',
+              videoId: item.youtube_video_id,
+              videoUrl: item.youtube_url,
+              title: track?.name,
+            };
+          } else if (item.status) {
+            nextAvailability[trackId] = {
+              status: item.status === 'error' ? 'error' : 'missing',
+              message: item.error_message || undefined,
+              title: track?.name,
+            };
+          }
+          nextStreamState[trackId] = { status: 'idle' };
+        });
+        if (Object.keys(nextAvailability).length > 0) {
+          setYoutubeAvailability((prev) => ({ ...prev, ...nextAvailability }));
+        }
+        if (Object.keys(nextStreamState).length > 0) {
+          setStreamState((prev) => {
+            let changed = false;
+            const merged = { ...prev };
+            Object.entries(nextStreamState).forEach(([trackId, state]) => {
+              if (!(trackId in merged)) {
+                merged[trackId] = state;
+                changed = true;
+              }
+            });
+            return changed ? merged : prev;
+          });
+        }
+      } catch {
+        // best effort
+      }
+    };
+    loadLinks();
+    return () => {
+      cancelled = true;
+    };
+  }, [tracks, resolveTrackId]);
 
   useEffect(() => {
     if (!spotifyId) return;
@@ -238,6 +316,11 @@ export function AlbumDetailPage() {
           return setAvailable(linkData.youtube_video_id, linkData.youtube_url);
         }
         if (linkData?.status === 'missing' || linkData?.status === 'error' || linkData?.status === 'video_not_found') {
+          if (!autoSearchOnPlay) {
+            const next: YoutubeAvailability = { status: 'missing' };
+            setYoutubeAvailability((prev) => ({ ...prev, [stateKey]: next }));
+            return next;
+          }
           return refreshFromYoutube();
         }
       } catch (err: any) {
@@ -246,6 +329,11 @@ export function AlbumDetailPage() {
         }
         const statusCode = err?.response?.status;
         if (statusCode === 404) {
+          if (!autoSearchOnPlay) {
+            const next: YoutubeAvailability = { status: 'missing' };
+            setYoutubeAvailability((prev) => ({ ...prev, [stateKey]: next }));
+            return next;
+          }
           return refreshFromYoutube();
         }
         const detail = err?.response?.data?.detail || err?.message || 'Error consultando YouTube';
@@ -258,8 +346,19 @@ export function AlbumDetailPage() {
   );
 
   useEffect(() => {
+    if (playbackMode !== 'video') return;
     if (!ytReady || !nowPlaying || !playerContainerRef.current) return;
     const YT = (window as any).YT;
+    const hasPlayerMethods =
+      playerRef.current &&
+      typeof playerRef.current.loadVideoById === 'function' &&
+      typeof playerRef.current.playVideo === 'function';
+    if (!hasPlayerMethods) {
+      if (playerRef.current?.destroy) {
+        playerRef.current.destroy();
+      }
+      playerRef.current = null;
+    }
     if (!playerRef.current) {
       playerRef.current = new YT.Player(playerContainerRef.current, {
         videoId: nowPlaying.videoId,
@@ -281,14 +380,19 @@ export function AlbumDetailPage() {
             event.target.setVolume?.(volume);
             event.target.setPlaybackQuality?.('tiny');
             event.target.playVideo();
+            setPlayerReady(true);
           },
           onStateChange: (event: any) => {
             const state = event.data;
             if (state === YT.PlayerState.PLAYING) {
               setIsPlaying(true);
               event.target.setPlaybackQuality?.('tiny');
+              setPlayerReady(true);
             } else if (state === YT.PlayerState.PAUSED) {
               setIsPlaying(false);
+              setPlayerReady(true);
+            } else if (state === YT.PlayerState.BUFFERING) {
+              setPlayerReady(true);
             } else if (state === YT.PlayerState.ENDED) {
               setIsPlaying(false);
             }
@@ -297,8 +401,10 @@ export function AlbumDetailPage() {
       });
       return;
     }
-    playerRef.current.loadVideoById(nowPlaying.videoId);
-  }, [nowPlaying, ytReady]);
+    if (typeof playerRef.current.loadVideoById === 'function') {
+      playerRef.current.loadVideoById(nowPlaying.videoId);
+    }
+  }, [nowPlaying, ytReady, playbackMode]);
 
   useEffect(() => {
     if (!nowPlaying && playerRef.current) {
@@ -310,6 +416,26 @@ export function AlbumDetailPage() {
   }, [nowPlaying]);
 
   useEffect(() => {
+    setPlayerReady(false);
+  }, [nowPlaying?.videoId, playbackMode]);
+
+  useEffect(() => {
+    if (playbackMode === 'audio') {
+      playerRef.current?.stopVideo?.();
+      setIsPlaying(false);
+    }
+  }, [playbackMode]);
+
+  useEffect(() => {
+    if (playbackMode !== 'audio') return;
+    if (playerRef.current?.destroy) {
+      playerRef.current.destroy();
+    }
+    playerRef.current = null;
+  }, [playbackMode]);
+
+  useEffect(() => {
+    if (playbackMode !== 'video') return;
     if (!nowPlaying || !playerRef.current) return;
     const interval = window.setInterval(() => {
       try {
@@ -328,20 +454,13 @@ export function AlbumDetailPage() {
     return () => {
       window.clearInterval(interval);
     };
-  }, [nowPlaying]);
+  }, [nowPlaying, playbackMode]);
 
   useEffect(() => {
-    if (!playerRef.current) return;
-    playerRef.current.setVolume?.(volume);
-  }, [volume]);
-
-  const formatTime = (value: number) => {
-    if (!Number.isFinite(value) || value <= 0) return '0:00';
-    const mins = Math.floor(value / 60);
-    const secs = Math.floor(value % 60);
-    return `${mins}:${String(secs).padStart(2, '0')}`;
-  };
-  const progressPercent = duration > 0 ? Math.min((currentTime / duration) * 100, 100) : 0;
+    if (playbackMode === 'video') {
+      playerRef.current?.setVolume?.(volume);
+    }
+  }, [volume, playbackMode]);
 
   const handleStreamTrack = async (track: Track, stateKey: string) => {
     const setStream = (state: StreamUiState) =>
@@ -356,26 +475,106 @@ export function AlbumDetailPage() {
       return;
     }
 
-    const info = await fetchYoutubeForTrack(track, stateKey);
-    if (!info || info.status !== 'available') {
-      setStream({ status: 'error', message: 'Sin enlace de YouTube' });
+    const cached = youtubeAvailability[stateKey];
+    if (cached?.status === 'available' && cached.videoId) {
+      setStream({ status: 'loading', message: playbackMode === 'audio' ? 'Abriendo audio...' : 'Abriendo YouTube...' });
+      const nextNowPlaying = {
+        title: track.name,
+        artist: artistName,
+        videoId: cached.videoId,
+        spotifyTrackId: stateKey,
+      };
+      setNowPlaying(nextNowPlaying);
+      const idx = tracks.findIndex((t) => resolveTrackId(t) === stateKey);
+      if (idx >= 0) {
+        setCurrentIndex(idx);
+      }
+      if (playbackMode === 'audio') {
+        const result = await playByVideoId({
+          ...nextNowPlaying,
+          durationSec: track.duration_ms ? track.duration_ms / 1000 : undefined,
+        });
+        if (!result.ok) {
+          setStream({ status: 'error', message: 'Pulsa play otra vez para iniciar el audio' });
+          return;
+        }
+        if (result.mode === 'stream') {
+          setStream({ status: 'loading', message: 'Streaming...' });
+        } else {
+          setStream({ status: 'idle' });
+        }
+      } else {
+        setStream({ status: 'idle' });
+      }
       return;
     }
 
-    setStream({ status: 'loading', message: 'Abriendo YouTube...' });
-    try {
-      setNowPlaying({
-        title: track.name,
-        artist: artistName,
-        videoId: info.videoId,
-        spotifyTrackId: stateKey,
+    const info = await fetchYoutubeForTrack(track, stateKey);
+    if (!info || info.status !== 'available') {
+      const msg = autoSearchOnPlay ? 'Sin enlace de YouTube' : 'Sin enlace de YouTube (sin buscar)';
+      setStream({ status: 'error', message: msg });
+      return;
+    }
+
+    setStream({ status: 'loading', message: playbackMode === 'audio' ? 'Abriendo audio...' : 'Abriendo YouTube...' });
+    const nextNowPlaying = {
+      title: track.name,
+      artist: artistName,
+      videoId: info.videoId,
+      spotifyTrackId: stateKey,
+    };
+    setNowPlaying(nextNowPlaying);
+    const idx = tracks.findIndex((t) => resolveTrackId(t) === stateKey);
+    if (idx >= 0) {
+      setCurrentIndex(idx);
+    }
+    if (playbackMode === 'audio') {
+      const result = await playByVideoId({
+        ...nextNowPlaying,
+        durationSec: track.duration_ms ? track.duration_ms / 1000 : undefined,
       });
+      if (!result.ok) {
+        setStream({ status: 'error', message: 'Pulsa play otra vez para iniciar el audio' });
+        return;
+      }
+      if (result.mode === 'stream') {
+        setStream({ status: 'loading', message: 'Streaming...' });
+      } else {
+        setStream({ status: 'idle' });
+      }
+    } else {
       setStream({ status: 'idle' });
-    } catch (err: any) {
-      const message = err?.response?.data?.detail || err?.message || 'Error al reproducir';
-      setStream({ status: 'error', message });
     }
   };
+
+  useEffect(() => {
+    if (tracks.length === 0) return;
+    const queueItems = tracks
+      .map((track) => {
+        const spotifyTrackId = resolveTrackId(track);
+        if (!spotifyTrackId) return null;
+        return {
+          spotifyTrackId,
+          title: track.name,
+          artist: track.artists?.[0]?.name || album?.artists?.[0]?.name,
+          durationMs: track.duration_ms,
+          rawTrack: track,
+        };
+      })
+      .filter(Boolean) as Array<{
+        spotifyTrackId: string;
+        title: string;
+        artist?: string;
+        durationMs?: number;
+        rawTrack: Track;
+      }>;
+    setQueue(queueItems);
+    setOnPlayTrack((item) => {
+      if (!item.rawTrack) return;
+      void handleStreamTrack(item.rawTrack, item.spotifyTrackId);
+    });
+    return () => setOnPlayTrack(null);
+  }, [album?.artists, handleStreamTrack, resolveTrackId, setOnPlayTrack, setQueue, tracks]);
 
   const handleDownloadTrack = async (track: Track, key: string) => {
     const updateState = (state: DownloadUiState) =>
@@ -420,18 +619,6 @@ export function AlbumDetailPage() {
       .filter(Boolean);
   }, [wikiHtml]);
   const wikiToShow = wikiParagraphs.slice(0, 2);
-  const nowPlayingIndex = useMemo(() => {
-    if (!nowPlaying) return -1;
-    return tracks.findIndex((track) => resolveTrackId(track) === nowPlaying.spotifyTrackId);
-  }, [nowPlaying, tracks, resolveTrackId]);
-  const prevTrack = nowPlayingIndex > 0 ? tracks[nowPlayingIndex - 1] : null;
-  const nextTrack = nowPlayingIndex >= 0 && nowPlayingIndex < tracks.length - 1 ? tracks[nowPlayingIndex + 1] : null;
-
-  const handleSeek = (value: number) => {
-    if (!playerRef.current) return;
-    playerRef.current.seekTo(value, true);
-    setCurrentTime(value);
-  };
 
   if (!spotifyId) return <div className="card">Álbum no especificado.</div>;
   if (loading) return <div className="card">Cargando álbum...</div>;
@@ -439,7 +626,7 @@ export function AlbumDetailPage() {
   if (!album) return <div className="card">Sin datos.</div>;
 
   return (
-    <div className="space-y-4" style={{ paddingBottom: 110 }}>
+    <div className="space-y-4">
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <button
           onClick={() => navigate(-1)}
@@ -461,6 +648,16 @@ export function AlbumDetailPage() {
 
       <div className="card" style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: 16, alignItems: 'flex-start' }}>
         <div style={{ position: 'relative', width: '100%', paddingTop: '100%', borderRadius: 12, overflow: 'hidden' }}>
+          {playerReady && nowPlaying && playbackMode === 'video' && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                borderRadius: 12,
+                boxShadow: '0 0 24px rgba(63, 255, 208, 0.15)',
+              }}
+            />
+          )}
           <div
             ref={playerContainerRef}
             style={{
@@ -468,7 +665,7 @@ export function AlbumDetailPage() {
               inset: 0,
               width: '100%',
               height: '100%',
-              display: nowPlaying ? 'block' : 'none',
+              display: nowPlaying && playbackMode === 'video' && playerReady ? 'block' : 'none',
             }}
           />
           {album.images?.[0]?.url && (
@@ -481,10 +678,26 @@ export function AlbumDetailPage() {
                 width: '100%',
                 height: '100%',
                 objectFit: 'cover',
-                opacity: nowPlaying ? 0 : 1,
+                opacity: nowPlaying && playbackMode === 'video' && playerReady ? 0 : 1,
                 transition: 'opacity 200ms ease',
               }}
             />
+          )}
+          {nowPlaying && playbackMode === 'video' && !playerReady && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--muted)',
+                fontSize: 12,
+                background: 'rgba(10, 14, 20, 0.35)',
+              }}
+            >
+              Cargando video...
+            </div>
           )}
         </div>
         <div>
@@ -679,118 +892,6 @@ export function AlbumDetailPage() {
         </div>
       </div>
 
-      <footer className="album-player">
-        <div className="album-player__left">
-          <button
-            className="album-player__btn"
-            onClick={() => prevTrack && handleStreamTrack(prevTrack, resolveTrackId(prevTrack))}
-            disabled={!prevTrack}
-            title="Anterior"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M19 5L11 12L19 19V5z" />
-              <path d="M13 5L5 12L13 19V5z" />
-            </svg>
-          </button>
-          <button
-            className="album-player__btn album-player__btn--primary"
-            onClick={() => playerRef.current?.playVideo()}
-            disabled={!nowPlaying}
-            title="Reproducir"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M8 5L19 12L8 19V5z" />
-            </svg>
-          </button>
-          <button
-            className="album-player__btn"
-            onClick={() => playerRef.current?.pauseVideo()}
-            disabled={!nowPlaying}
-            title="Pausar"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M6 5h4v14H6z" />
-              <path d="M14 5h4v14h-4z" />
-            </svg>
-          </button>
-          <button
-            className="album-player__btn"
-            onClick={() => nextTrack && handleStreamTrack(nextTrack, resolveTrackId(nextTrack))}
-            disabled={!nextTrack}
-            title="Siguiente"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M5 5L13 12L5 19V5z" />
-              <path d="M11 5L19 12L11 19V5z" />
-            </svg>
-          </button>
-          <button
-            className="album-player__btn"
-            onClick={() => {
-              playerRef.current?.stopVideo();
-              setNowPlaying(null);
-            }}
-            disabled={!nowPlaying}
-            title="Detener"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M6 6h12v12H6z" />
-            </svg>
-          </button>
-        </div>
-
-        <div className="album-player__timeline">
-          <div className="album-player__track">
-            {nowPlaying ? `Reproduciendo: ${nowPlaying.title} · ${nowPlaying.artist || ''}` : 'Selecciona una canción para reproducir'}
-          </div>
-          <div className="album-player__progress">
-            <span className="album-player__time">{formatTime(currentTime)}</span>
-            <input
-              type="range"
-              min={0}
-              max={duration || 0}
-              step={1}
-              value={duration > 0 ? Math.min(currentTime, duration) : 0}
-              onChange={(e) => handleSeek(Number(e.target.value))}
-              disabled={!nowPlaying || !duration}
-              className="album-player__slider"
-              style={{ ['--progress' as any]: `${progressPercent}%` }}
-              aria-label="Progreso"
-            />
-            <span className="album-player__time">{formatTime(duration)}</span>
-          </div>
-        </div>
-
-        <div className="album-player__right">
-          <div className="album-player__volume">
-            <span>VOL</span>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={1}
-              value={volume}
-              onChange={(e) => setVolume(Number(e.target.value))}
-              className="album-player__slider album-player__slider--volume"
-              style={{ ['--progress' as any]: `${volume}%` }}
-              aria-label="Volumen"
-            />
-          </div>
-          {nowPlaying && (
-            <a
-              className="album-player__link"
-              href={`https://www.youtube.com/watch?v=${nowPlaying.videoId}`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Abrir en YouTube
-            </a>
-          )}
-          <span className="album-player__status" style={{ color: isPlaying ? '#4ade80' : 'var(--muted)' }}>
-            {isPlaying ? 'Reproduciendo' : 'Pausado'}
-          </span>
-        </div>
-      </footer>
     </div>
   );
 }

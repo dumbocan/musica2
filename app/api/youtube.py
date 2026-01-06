@@ -5,10 +5,11 @@ Provides search functionality and video metadata retrieval.
 
 import asyncio
 import logging
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Query, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import select
 
@@ -31,6 +32,21 @@ class YoutubeTrackRefreshRequest(BaseModel):
     artist: Optional[str] = None
     track: Optional[str] = None
     album: Optional[str] = None
+
+
+def _resolve_track_metadata(video_id: str) -> Tuple[Optional[YouTubeDownload], Optional[Track], Optional[Album], Optional[Artist]]:
+    with get_session() as session:
+        row = session.exec(
+            select(YouTubeDownload, Track, Album, Artist)
+            .join(Track, Track.spotify_id == YouTubeDownload.spotify_track_id)
+            .join(Artist, Artist.id == Track.artist_id)
+            .outerjoin(Album, Album.id == Track.album_id)
+            .where(YouTubeDownload.youtube_video_id == video_id)
+        ).first()
+        if not row:
+            return None, None, None, None
+        download, track, album, artist = row
+        return download, track, album, artist
 
 
 async def _prefetch_album_links(spotify_album_id: str):
@@ -606,11 +622,41 @@ async def download_audio(
             )
         else:
             # Store in backend for caching/recovery
-            result = await youtube_client.download_audio(
-                video_id=video_id,
-                output_format=format,
-                format_quality=quality
-            )
+            download, track, album, artist = _resolve_track_metadata(video_id)
+            if track and artist and album:
+                result = await youtube_client.download_audio_for_album_track(
+                    video_id=video_id,
+                    artist_name=artist.name,
+                    album_name=album.name,
+                    track_name=track.name,
+                    output_format=format,
+                    format_quality=quality
+                )
+            elif track and artist:
+                result = await youtube_client.download_audio_for_organized_track(
+                    video_id=video_id,
+                    artist_name=artist.name,
+                    track_name=track.name,
+                    output_format=format,
+                    format_quality=quality
+                )
+            else:
+                result = await youtube_client.download_audio(
+                    video_id=video_id,
+                    output_format=format,
+                    format_quality=quality
+                )
+
+            if download and result.get("file_path"):
+                status = result.get("status") or "completed"
+                save_youtube_download({
+                    "spotify_track_id": download.spotify_track_id,
+                    "spotify_artist_id": download.spotify_artist_id,
+                    "youtube_video_id": video_id,
+                    "download_path": result.get("file_path"),
+                    "file_size": result.get("file_size"),
+                    "download_status": "completed" if status in ("completed", "already_exists") else status
+                })
             return result
     except HTTPException:
         raise
@@ -630,6 +676,17 @@ async def check_download_status(
     - **format**: Audio format
     """
     try:
+        download, _, _, _ = _resolve_track_metadata(video_id)
+        if download and download.download_path:
+            path = Path(download.download_path)
+            if path.exists():
+                return {
+                    "exists": True,
+                    "video_id": video_id,
+                    "file_path": str(path),
+                    "file_size": path.stat().st_size,
+                    "format": path.suffix[1:]
+                }
         status = await youtube_client.get_download_status(video_id, format)
         return status
     except Exception as e:
@@ -648,31 +705,110 @@ async def get_downloaded_file(
     - **format**: Audio format
     """
     try:
-        status = await youtube_client.get_download_status(video_id, format)
+        download, track, _, _ = _resolve_track_metadata(video_id)
+        if download and download.download_path:
+            path = Path(download.download_path)
+            if path.exists():
+                ext = path.suffix[1:]
+                filename = path.name
+                if track:
+                    filename = f"{track.name}.{ext}"
+                media_type = "audio/mp4" if ext in ("m4a", "mp4") else "audio/mpeg"
+                return FileResponse(
+                    path=path,
+                    media_type=media_type,
+                    filename=filename,
+                    content_disposition_type="inline"
+                )
 
+        status = await youtube_client.get_download_status(video_id, format)
         if not status['exists']:
             raise HTTPException(status_code=404, detail="Audio file not found for this video")
 
         file_path = status['file_path']
-
-        # Get video details for filename
         try:
             video_details = await youtube_client.get_video_details(video_id)
             filename = f"{video_details['title']}.{format}"
         except:
             filename = f"{video_id}.{format}"
 
-        # Return file as streaming response
+        media_type = "audio/mp4" if format in ("m4a", "mp4") else "audio/mpeg"
         return FileResponse(
             path=file_path,
-            media_type=f"audio/{format}",
-            filename=filename
+            media_type=media_type,
+            filename=filename,
+            content_disposition_type="inline"
         )
 
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error serving file: {str(e)}")
+
+
+@router.get("/stream/{video_id}")
+async def stream_audio(
+    video_id: str,
+    format: str = Query("m4a", description="Stream format (m4a, webm)"),
+    cache: bool = Query(True, description="Cache streamed audio in downloads")
+):
+    """
+    Stream audio directly while downloading it from YouTube.
+
+    - **video_id**: YouTube video ID
+    - **format**: Stream format (m4a, webm)
+    - **cache**: Cache the stream to disk for later playback
+    """
+    try:
+        output_path = None
+        download, track, album, artist = _resolve_track_metadata(video_id)
+        if track and artist and album:
+            output_path = youtube_client.get_album_download_path(
+                artist.name,
+                album.name,
+                track.name,
+                format
+            )
+        elif track and artist:
+            output_path = youtube_client.get_artist_download_path(
+                artist.name,
+                track.name,
+                format
+            )
+
+        result = await youtube_client.stream_audio_to_device(
+            video_id=video_id,
+            output_format=format,
+            cache=cache,
+            output_path=output_path
+        )
+        if cache and download and output_path:
+            ext = result.get("ext") or format
+            save_youtube_download({
+                "spotify_track_id": download.spotify_track_id,
+                "spotify_artist_id": download.spotify_artist_id,
+                "youtube_video_id": video_id,
+                "download_path": str(output_path.with_suffix(f".{ext}")),
+                "download_status": download.download_status or "completed"
+            })
+        ext = result.get("ext") or format
+        if result.get("type") == "file":
+            return FileResponse(
+                path=result["file_path"],
+                media_type=result["media_type"],
+                filename=f"{result.get('title', video_id)}.{ext}",
+                content_disposition_type="inline"
+            )
+
+        return StreamingResponse(
+            result["stream"],
+            media_type=result["media_type"],
+            headers={"Content-Disposition": f"inline; filename=\"{result.get('title', video_id)}.{ext}\""}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Stream failed: {str(e)}")
 
 
 @router.get("/downloads")
@@ -702,16 +838,25 @@ async def delete_download(
     - **format**: Audio format
     """
     try:
-        deleted = await youtube_client.delete_download(video_id, format)
+        download, _, _, _ = _resolve_track_metadata(video_id)
+        if download and download.download_path:
+            path = Path(download.download_path)
+            if path.exists():
+                path.unlink()
+                return {
+                    "message": f"Successfully deleted audio file for video {video_id}",
+                    "video_id": video_id,
+                    "format": path.suffix[1:]
+                }
 
+        deleted = await youtube_client.delete_download(video_id, format)
         if deleted:
             return {
                 "message": f"Successfully deleted audio file for video {video_id}",
                 "video_id": video_id,
                 "format": format
             }
-        else:
-            raise HTTPException(status_code=404, detail="Audio file not found")
+        raise HTTPException(status_code=404, detail="Audio file not found")
 
     except HTTPException:
         raise

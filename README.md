@@ -60,6 +60,19 @@ A **complete REST API backend** for personal music streaming, featuring **comple
 - **Frontend renovado**: `frontend/src/pages/TracksPage.tsx` muestra métricas globales (cuántas pistas tienen link o MP3), buscador, filtros y accesos directos para abrir YouTube o descargar el MP3 desde `/youtube/download/{video_id}/file`.
 - **Uso recomendado**: abre `http://localhost:5173/tracks` para saber qué canciones ya están listas para streaming/descarga sin entrar álbum por álbum.
 
+## ⚠️ Troubleshooting reciente (YouTube + reproducción)
+
+- **Cuota YouTube 403/429**: los prefetches se paran 15 min tras un 403/429. Evita loops extra y llama a YouTube solo cuando entras a un álbum o cuando el usuario pulsa play. Mantén `YOUTUBE_API_KEY` (y opcionalmente `YOUTUBE_API_KEY_2`) en `.env`.
+- **“Sin enlace de YouTube” con link real**: puede pasar si `download_status` quedó en `missing/error` aunque exista `youtube_video_id`. El backend normaliza a `link_found`, pero si hay datos antiguos conviene revisar/normalizar la tabla `YouTubeDownload`.
+- **IDs de track inconsistentes**: algunas respuestas traen `track.spotify_id` en vez de `track.id`. El frontend debe resolver el ID con `track.id || track.spotify_id` antes de llamar a `/youtube/track/...`.
+- **Streaming vs descarga**:
+  - `GET /youtube/stream/{video_id}` permite reproducir mientras descarga, pero el `audio.duration` puede ser `0/NaN` hasta que cargue metadata y no permite seek.
+  - `GET /youtube/download/{video_id}/file?format=mp3` falla si el archivo está en `m4a`. Consulta primero `/youtube/download/{video_id}/status` para saber el formato real.
+- **Reproductor embebido de YouTube**: el iframe consume CPU y puede bloquear el scroll; usa audio-only siempre que sea posible.
+- **Descargas locales “fake”**: no uses `youtube_video_id` inventados (no son 11 chars). Si hay audio local sin link real, no muestres “Abrir en YouTube” en el UI.
+- **Organización de descargas**: los archivos deben quedar en `downloads/<Artist>/<Album>/<Track>.<ext>`. Para migrar descargas antiguas usa `scripts/organize_downloads_by_album.py --resolve-unknown --resolve-spotify --spotify-create` (requiere credenciales Spotify).
+- **Contador de uso**: `frontend/src/components/YoutubeRequestCounter.tsx` consulta `/youtube/usage` periódicamente; si el backend está apagado verás errores de red en consola.
+
 ## 🏗️ **Tech Stack**
 
 | Component | Technology | Details |

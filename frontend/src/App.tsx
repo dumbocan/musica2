@@ -1,6 +1,7 @@
 import { BrowserRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { YoutubeRequestCounter } from '@/components/YoutubeRequestCounter';
+import { PlayerFooter } from '@/components/PlayerFooter';
 import { useApiStore } from '@/store/useApiStore';
 import { LogOut, User, ChevronDown, Search } from 'lucide-react';
 import { useRef, useState } from 'react';
@@ -173,6 +174,7 @@ function AppShell() {
       </div>
 
       <YoutubeRequestCounter />
+      <PlayerFooter />
     </div>
   );
 }

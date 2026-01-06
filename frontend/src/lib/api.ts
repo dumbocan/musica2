@@ -109,7 +109,7 @@ export const audio2Api = {
     videoId: string,
     params?: { format?: string; quality?: string; to_device?: boolean }
   ) =>
-    api.post(`/youtube/download/${videoId}`, null, { params }),
+    api.post(`/youtube/download/${videoId}`, null, { params, timeout: 180000 }),
   getYoutubeDownloadStatus: (videoId: string, params?: { format?: string }) =>
     api.get(`/youtube/download/${videoId}/status`, { params }),
   prefetchYoutubeAlbum: (spotifyId: string) =>

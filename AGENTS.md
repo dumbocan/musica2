@@ -33,3 +33,11 @@ Secrets stay in `.env`; never hard-code tokens or client secrets. Honor the auth
 - The route `GET /tracks/overview` is the canonical way to expose track/YouTube/cache status. Any frontend widget that needs link/file info should consume this endpoint instead of hitting `/youtube/track/...` en masa.
 - The Tracks page (`frontend/src/pages/TracksPage.tsx`) expects fields like `youtube_status`, `youtube_url`, and `local_file_exists`. When updating backend schemas, keep those keys stable or update the UI in the same change.
 - Album link counters should combine DB data (`YouTubeDownload` joins) with downloaded track IDs. Make sure new features keep that dual-source logic intact, especially when introducing migrations or cleanup scripts.
+
+## Recent Troubleshooting Notes
+- YouTube quota 403/429 stops prefetch for 15 min; avoid extra loops and only search on album entry or explicit play.
+- “Sin enlace de YouTube” can appear if `download_status` is stale; normalize to `link_found` when `youtube_video_id` exists.
+- Frontend must resolve `track.id || track.spotify_id` before calling `/youtube/track/...` to avoid 404s.
+- Streaming uses `/youtube/stream` (no seek, duration may be 0 until metadata); downloads must honor the actual file format from `/youtube/download/.../status`.
+- Keep `youtube_video_id` real (11 chars) or hide YouTube-only UI; local-only files should not pretend to be YouTube IDs.
+- Use `scripts/organize_downloads_by_album.py --resolve-unknown --resolve-spotify --spotify-create` to align existing downloads to `downloads/<Artist>/<Album>/<Track>.<ext>`.
