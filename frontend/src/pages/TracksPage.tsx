@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { audio2Api } from '@/lib/api';
 import { useApiStore } from '@/store/useApiStore';
+import { useFavorites } from '@/hooks/useFavorites';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import type { TrackOverview } from '@/types/api';
 
-type FilterTab = 'all' | 'withLink' | 'noLink' | 'hasFile' | 'missingFile';
+type FilterTab = 'all' | 'favorites' | 'withLink' | 'noLink' | 'hasFile' | 'missingFile';
 type LinkUiState = { status: 'idle' | 'loading' | 'error'; message?: string };
 
 const filterLabels: Record<FilterTab, string> = {
   all: 'Todos',
+  favorites: 'Favoritos',
   withLink: 'Con link YouTube',
   noLink: 'Sin link aún',
   hasFile: 'Con MP3 local',
@@ -22,7 +24,6 @@ export function TracksPage() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<FilterTab>('all');
-  const [favoriteTrackIds, setFavoriteTrackIds] = useState<Set<number>>(new Set());
   const [summary, setSummary] = useState<{
     total: number;
     with_link: number;
@@ -67,8 +68,8 @@ export function TracksPage() {
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z0-9]+/g, ' ')
       .trim();
-  const resolveTrackKey = (track: TrackOverview) =>
-    track.spotify_track_id || String(track.track_id);
+  const resolveTrackKey = useCallback((track: TrackOverview) =>
+    track.spotify_track_id || String(track.track_id), []);
   const dedupeTracks = (items: TrackOverview[]) => {
     const seen = new Set<number>();
     return items.filter((track) => {
@@ -78,32 +79,11 @@ export function TracksPage() {
     });
   };
 
-  useEffect(() => {
-    let cancelled = false;
-    const loadFavorites = async () => {
-      if (!userId) {
-        setFavoriteTrackIds(new Set());
-        return;
-      }
-      try {
-        const res = await audio2Api.listFavorites({ user_id: userId, target_type: 'track' });
-        if (cancelled) return;
-        const next = new Set<number>();
-        (res.data || []).forEach((fav: any) => {
-          if (typeof fav?.track_id === 'number') {
-            next.add(fav.track_id);
-          }
-        });
-        setFavoriteTrackIds(next);
-      } catch (err) {
-        console.error('Failed to load track favorites', err);
-      }
-    };
-    loadFavorites();
-    return () => {
-      cancelled = true;
-    };
-  }, [userId]);
+  const {
+    favoriteIds: favoriteTrackIds,
+    toggleFavorite: toggleTrackFavorite,
+    effectiveUserId: effectiveTrackUserId
+  } = useFavorites('track', userId);
 
   useEffect(() => {
     const activeSearch = search.trim();
@@ -129,8 +109,14 @@ export function TracksPage() {
         setFilteredTotal(response.data.filtered_total ?? null);
         setHasMore(Boolean(response.data.has_more));
         setNextAfter(response.data.next_after ?? null);
-      } catch (err: any) {
-        setError(err?.response?.data?.detail || err?.message || 'No se pudo cargar el listado de pistas');
+      } catch (err: unknown) {
+        const message =
+          err && typeof err === 'object' && 'response' in err && err.response && typeof err.response === 'object' && 'data' in err.response && err.response.data && typeof err.response.data === 'object' && 'detail' in err.response.data
+            ? (err.response.data as { detail: string }).detail
+            : err instanceof Error
+              ? err.message
+              : 'No se pudo cargar el listado de pistas';
+        setError(message);
       } finally {
         setLoading(false);
         setHasLoadedOnce(true);
@@ -140,7 +126,7 @@ export function TracksPage() {
     return () => clearTimeout(timeout);
   }, [filter, limit, search]);
 
-  const handleLoadMore = async () => {
+  const handleLoadMore = useCallback(async () => {
     if (loadingMoreRef.current || loadingMore || !hasMore) return;
     loadingMoreRef.current = true;
     setLoadingMore(true);
@@ -166,13 +152,19 @@ export function TracksPage() {
       if (response.data.filtered_total !== undefined) {
         setFilteredTotal(response.data.filtered_total ?? null);
       }
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || err?.message || 'No se pudo cargar más pistas');
+    } catch (err: unknown) {
+      const message =
+        err && typeof err === 'object' && 'response' in err && err.response && typeof err.response === 'object' && 'data' in err.response && err.response.data && typeof err.response.data === 'object' && 'detail' in err.response.data
+          ? (err.response.data as { detail: string }).detail
+          : err instanceof Error
+            ? err.message
+            : 'No se pudo cargar más pistas';
+      setError(message);
     } finally {
       loadingMoreRef.current = false;
       setLoadingMore(false);
     }
-  };
+  }, [loadingMore, hasMore, search, filter, limit, nextAfter, tracks]);
 
   const stats = useMemo(() => {
     if (summary) {
@@ -203,6 +195,7 @@ export function TracksPage() {
 
       const passesFilter =
         filter === 'all' ||
+        (filter === 'favorites' && favoriteTrackIds.has(track.track_id)) ||
         (filter === 'withLink' && hasLink) ||
         (filter === 'noLink' && !hasLink) ||
         (filter === 'hasFile' && hasFile) ||
@@ -210,7 +203,7 @@ export function TracksPage() {
 
       return passesSearch && passesFilter;
     });
-  }, [tracks, search, filter]);
+  }, [tracks, search, filter, favoriteTrackIds]);
   const buildQueueItems = useCallback(
     (override?: { trackKey: string; videoId: string }) =>
       filteredTracks
@@ -290,8 +283,13 @@ export function TracksPage() {
         }));
         setStatusMessage('No se encontró YouTube para esta canción');
         return null;
-      } catch (err: any) {
-        const message = err?.response?.data?.detail || err?.message || 'Error buscando en YouTube';
+      } catch (err: unknown) {
+        const message =
+          err && typeof err === 'object' && 'response' in err && err.response && typeof err.response === 'object' && 'data' in err.response && err.response.data && typeof err.response.data === 'object' && 'detail' in err.response.data
+            ? (err.response.data as { detail: string }).detail
+            : err instanceof Error
+              ? err.message
+              : 'Error buscando en YouTube';
         setLinkState((prev) => ({
           ...prev,
           [trackKey]: { status: 'error', message },
@@ -321,6 +319,8 @@ export function TracksPage() {
     }
     if (!summary || isSearchActive) return filteredTracks.length;
     switch (filter) {
+      case 'favorites':
+        return favoriteTrackIds.size;
       case 'withLink':
         return summary.with_link;
       case 'noLink':
@@ -332,12 +332,12 @@ export function TracksPage() {
       default:
         return summary.total;
     }
-  }, [filter, filteredTracks.length, filteredTotal, isFilteredView, isSearchActive, summary]);
+  }, [filter, filteredTracks.length, filteredTotal, isFilteredView, isSearchActive, summary, favoriteTrackIds.size]);
   const targetFilteredCount = useMemo(() => {
     if (!isFilteredView) return 0;
     if (filterTotal > 0) return filterTotal;
     return Math.max(80, Math.floor(limit * 0.8));
-  }, [filter, filterTotal, isFilteredView, isSearchActive, limit]);
+  }, [filterTotal, isFilteredView, limit]);
   const progressCount = useMemo(() => {
     const lastVisible = Math.min(
       Math.max(Math.round((scrollTop + containerHeight) / rowHeight), 0),
@@ -357,7 +357,7 @@ export function TracksPage() {
   useEffect(() => {
     if (!shouldPrefetchMore) return;
     handleLoadMore();
-  }, [shouldPrefetchMore]);
+  }, [shouldPrefetchMore, handleLoadMore]);
 
   useEffect(() => {
     const updateMetrics = () => {
@@ -406,6 +406,7 @@ export function TracksPage() {
     loadingMore,
     targetFilteredCount,
     totalRows,
+    handleLoadMore,
   ]);
 
   const formatDuration = (ms?: number | null) => {
@@ -491,31 +492,6 @@ export function TracksPage() {
     ]
   );
 
-  const toggleTrackFavorite = useCallback(
-    async (trackId: number) => {
-      if (!userId) return;
-      try {
-        if (favoriteTrackIds.has(trackId)) {
-          await audio2Api.removeFavorite('track', trackId, userId);
-          setFavoriteTrackIds((prev) => {
-            const next = new Set(prev);
-            next.delete(trackId);
-            return next;
-          });
-        } else {
-          await audio2Api.addFavorite('track', trackId, userId);
-          setFavoriteTrackIds((prev) => {
-            const next = new Set(prev);
-            next.add(trackId);
-            return next;
-          });
-        }
-      } catch (err) {
-        console.error('Failed to toggle track favorite', err);
-      }
-    },
-    [favoriteTrackIds, userId]
-  );
 
   if (loading && !hasLoadedOnce && tracks.length === 0) {
     return <div className="card">Cargando pistas...</div>;
@@ -530,6 +506,7 @@ export function TracksPage() {
       <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
           <SummaryCard label="Total pistas" value={stats.total} />
+          <SummaryCard label="Favoritos" value={favoriteTrackIds.size} />
             <SummaryCard label="Con link YouTube" value={stats.withLink} accent />
             <SummaryCard label="Con MP3 local" value={stats.withFile} accent />
             <SummaryCard label="Pendiente link" value={stats.missingLink} muted />
@@ -755,12 +732,12 @@ export function TracksPage() {
                         className="badge"
                         style={{
                           textDecoration: 'none',
-                          cursor: userId ? 'pointer' : 'not-allowed',
+                          cursor: effectiveTrackUserId ? 'pointer' : 'not-allowed',
                           border: 'none',
                           background: isFavorite ? 'rgba(63, 255, 208, 0.18)' : 'transparent',
                           color: isFavorite ? 'var(--accent)' : 'inherit',
                         }}
-                        disabled={!userId}
+                        disabled={!effectiveTrackUserId}
                         title={isFavorite ? 'Quitar de favoritos' : 'Agregar a favoritos'}
                       >
                         {isFavorite ? '❤️' : '🤍'}

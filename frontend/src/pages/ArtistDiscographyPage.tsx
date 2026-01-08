@@ -53,8 +53,14 @@ export function ArtistDiscographyPage() {
         setArtist(artistRes.data);
         setAlbums(albumsRes.data || []);
         setLocalArtist(localRes.data || null);
-      } catch (err: any) {
-        setError(err?.response?.data?.detail || err?.message || 'Error cargando discografía');
+      } catch (err: unknown) {
+        const message =
+          err && typeof err === 'object' && 'response' in err && err.response && typeof err.response === 'object' && 'data' in err.response && err.response.data && typeof err.response.data === 'object' && 'detail' in err.response.data
+            ? (err.response.data as { detail: string }).detail
+            : err instanceof Error
+              ? err.message
+              : 'Error cargando discografía';
+        setError(message);
       } finally {
         setLoading(false);
       }
@@ -144,7 +150,7 @@ export function ArtistDiscographyPage() {
           )}
           {Array.isArray(artist?.lastfm?.tags) && artist.lastfm.tags.length > 0 && (
             <div className="flex flex-wrap gap-2 text-xs">
-              {artist.lastfm.tags.slice(0, 8).map((t: any) => (
+              {artist.lastfm.tags.slice(0, 8).map((t: { name?: string }) => (
                 <span
                   key={t.name || t}
                   style={{ padding: '4px 8px', borderRadius: 8, background: 'var(--panel)', border: `1px solid var(--border)` }}
@@ -230,7 +236,7 @@ function parseStoredImages(raw?: string | null): string[] {
           .map((item) => (typeof item === 'string' ? item : item?.url))
           .filter(Boolean);
       }
-    } catch (err) {
+    } catch {
       return [];
     }
     return [];

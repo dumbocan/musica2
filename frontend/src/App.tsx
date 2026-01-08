@@ -1,10 +1,10 @@
-import { BrowserRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { YoutubeRequestCounter } from '@/components/YoutubeRequestCounter';
 import { PlayerFooter } from '@/components/PlayerFooter';
 import { useApiStore } from '@/store/useApiStore';
 import { LogOut, User, ChevronDown, Search } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlbumDetailPage } from '@/pages/AlbumDetailPage';
 
 // Pages
@@ -25,6 +25,17 @@ function AppShell() {
   const [menuOpen, setMenuOpen] = useState(false);
   const closeMenuTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useNavigate();
+  const location = useLocation();
+
+  useEffect(() => {
+    if (!isAuthenticated && location.pathname !== '/login') {
+      navigate('/login', { replace: true });
+      return;
+    }
+    if (isAuthenticated && location.pathname === '/login') {
+      navigate('/', { replace: true });
+    }
+  }, [isAuthenticated, location.pathname, navigate]);
 
   const openMenu = () => {
     if (closeMenuTimeout.current) clearTimeout(closeMenuTimeout.current);

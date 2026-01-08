@@ -52,3 +52,7 @@ Thumbs.db
 # Frontend
 frontend/node_modules/
 frontend/dist/
+
+# Application generated content
+cache/
+storage/

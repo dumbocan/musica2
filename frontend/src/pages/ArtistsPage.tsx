@@ -2,14 +2,15 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { API_BASE_URL, audio2Api } from '@/lib/api';
 import { useApiStore } from '@/store/useApiStore';
+import { useFavorites } from '@/hooks/useFavorites';
 import type { Artist } from '@/types/api';
 import { Loader2, Heart, Trash2 } from 'lucide-react';
 import { usePaginatedArtists } from '@/hooks/usePaginatedArtists';
 
-const parseStoredJsonArray = (raw?: string | null) => {
-  if (!raw) return [] as any[];
+const parseStoredJsonArray = (raw?: string | null): unknown[] => {
+  if (!raw) return [];
   const trimmed = raw.trim();
-  if (!trimmed) return [] as any[];
+  if (!trimmed) return [];
 
   const tryParse = (value: string) => {
     try {
@@ -53,52 +54,48 @@ const getArtistAssets = (artist: Artist) => {
   };
 };
 
+type HiddenArtistEntry = { artist_id: number };
+
 export function ArtistsPage() {
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortOption, setSortOption] = useState<'pop-desc' | 'pop-asc' | 'name-asc'>('pop-desc');
+  const [sortOption, setSortOption] = useState<'pop-desc' | 'pop-asc' | 'name-asc' | 'favorites'>('pop-desc');
+  const apiSortOption = sortOption === 'favorites' ? 'pop-desc' : sortOption;
   const [genreFilter, setGenreFilter] = useState('');
-  const { artists, isLoading, error, total } = usePaginatedArtists({ limit: 1000, sortOption });
+  const { artists, isLoading, error, total } = usePaginatedArtists({ limit: 1000, sortOption: apiSortOption });
   const { isArtistsLoading, userId } = useApiStore();
   const navigate = useNavigate();
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
-  const [favoriteIds, setFavoriteIds] = useState<Set<number>>(new Set());
+  const {
+    favoriteIds,
+    toggleFavorite: toggleArtistFavorite,
+    effectiveUserId: effectiveArtistUserId
+  } = useFavorites('artist', userId);
   const [hiddenIds, setHiddenIds] = useState<Set<number>>(new Set());
   const [visibleCount, setVisibleCount] = useState(20);
 
   useEffect(() => {
-    setVisibleCount(20);
+
   }, [searchTerm, genreFilter, sortOption]);
 
   useEffect(() => {
     let aborted = false;
     const loadPreferences = async () => {
       if (!userId) {
-        setFavoriteIds(new Set());
         setHiddenIds(new Set());
         return;
       }
       try {
-        const [favoriteRes, hiddenRes] = await Promise.all([
-          audio2Api.listFavorites({ user_id: userId, target_type: 'artist' }),
-          audio2Api.listHiddenArtists({ user_id: userId })
-        ]);
+        const hiddenRes = await audio2Api.listHiddenArtists({ user_id: userId });
         if (aborted) return;
-        const favSet = new Set<number>();
-        (favoriteRes.data || []).forEach((fav: any) => {
-          if (typeof fav?.artist_id === 'number') {
-            favSet.add(fav.artist_id);
-          }
-        });
         const hiddenSet = new Set<number>();
-        (hiddenRes.data || []).forEach((entry: any) => {
+        (hiddenRes.data || []).forEach((entry: HiddenArtistEntry) => {
           if (typeof entry?.artist_id === 'number') {
             hiddenSet.add(entry.artist_id);
           }
         });
-        setFavoriteIds(favSet);
         setHiddenIds(hiddenSet);
       } catch (prefErr) {
-        console.error('Failed to load artist preferences', prefErr);
+        console.error('Failed to load hidden artists', prefErr);
       }
     };
     loadPreferences();
@@ -124,6 +121,7 @@ export function ArtistsPage() {
 
   const filteredArtists = useMemo(() => {
     return visibleArtists.filter((artist) => {
+      if (sortOption === 'favorites' && !favoriteIds.has(artist.id)) return false;
       const matchesSearch = artist.name.toLowerCase().includes(searchTerm.toLowerCase());
       const genres = parseStoredJsonArray(artist.genres)
         .map((g) => (typeof g === 'string' ? g.toLowerCase() : ''))
@@ -131,7 +129,7 @@ export function ArtistsPage() {
       const matchesGenre = !genreFilter || genres.includes(genreFilter.toLowerCase());
       return matchesSearch && matchesGenre;
     });
-  }, [visibleArtists, searchTerm, genreFilter]);
+  }, [visibleArtists, searchTerm, genreFilter, sortOption, favoriteIds]);
 
   const displayArtists = useMemo(() => filteredArtists.slice(0, visibleCount), [filteredArtists, visibleCount]);
 
@@ -151,31 +149,14 @@ export function ArtistsPage() {
     return () => observer.disconnect();
   }, [filteredArtists.length]);
 
-  const disabledActions = !userId;
+  const canFavorite = !!effectiveArtistUserId;
+  const canHide = !!userId;
 
   const toggleFavorite = async (event: React.MouseEvent, artistId: number) => {
     event.preventDefault();
     event.stopPropagation();
-    if (!userId) return;
-    try {
-      if (favoriteIds.has(artistId)) {
-        await audio2Api.removeFavorite('artist', artistId, userId);
-        setFavoriteIds((prev) => {
-          const next = new Set(prev);
-          next.delete(artistId);
-          return next;
-        });
-      } else {
-        await audio2Api.addFavorite('artist', artistId, userId);
-        setFavoriteIds((prev) => {
-          const next = new Set(prev);
-          next.add(artistId);
-          return next;
-        });
-      }
-    } catch (err) {
-      console.error('Failed to toggle favorite', err);
-    }
+    if (!effectiveArtistUserId) return;
+    await toggleArtistFavorite(artistId);
   };
 
   const hideArtist = async (event: React.MouseEvent, artistId: number) => {
@@ -251,6 +232,7 @@ export function ArtistsPage() {
                 <option value="pop-desc">Popularity (high → low)</option>
                 <option value="pop-asc">Popularity (low → high)</option>
                 <option value="name-asc">Name (A → Z)</option>
+                <option value="favorites">Favoritos</option>
               </select>
             </div>
           </div>
@@ -398,7 +380,7 @@ export function ArtistsPage() {
                     <button
                       type="button"
                       onClick={(e) => toggleFavorite(e, artist.id)}
-                      disabled={disabledActions}
+                        disabled={!canFavorite}
                       style={{
                         border: '1px solid var(--border)',
                         borderRadius: 999,
@@ -408,7 +390,7 @@ export function ArtistsPage() {
                         alignItems: 'center',
                         gap: 6,
                         color: isFavorite ? '#ec4899' : '#fff',
-                        opacity: disabledActions ? 0.4 : 1
+                        opacity: canFavorite ? 1 : 0.4
                       }}
                     >
                       <Heart
@@ -420,7 +402,7 @@ export function ArtistsPage() {
                     <button
                       type="button"
                       onClick={(e) => hideArtist(e, artist.id)}
-                      disabled={disabledActions}
+                        disabled={!canHide}
                       style={{
                         border: '1px solid var(--border)',
                         borderRadius: 999,
@@ -430,7 +412,7 @@ export function ArtistsPage() {
                         alignItems: 'center',
                         gap: 6,
                         color: '#fff',
-                        opacity: disabledActions ? 0.4 : 1
+                        opacity: canHide ? 1 : 0.4
                       }}
                     >
                       <Trash2 className="h-4 w-4" />

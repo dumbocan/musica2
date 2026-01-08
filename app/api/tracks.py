@@ -6,17 +6,22 @@ from typing import List
 import re
 from pathlib import Path as FsPath
 
-from fastapi import APIRouter, Path, HTTPException, Query
+from fastapi import APIRouter, Path, HTTPException, Query, Request
+from pydantic import BaseModel
 from sqlalchemy import func, case, or_, exists, and_
 
 from ..core.db import get_session
-from ..models.base import Track, Artist, Album, YouTubeDownload
+from ..models.base import Track, Artist, Album, YouTubeDownload, UserFavorite
 from ..crud import update_track_lastfm, update_track_spotify_data
 from ..core.lastfm import lastfm_client
 from ..core.spotify import spotify_client
 from sqlmodel import select
 
 router = APIRouter(prefix="/tracks", tags=["tracks"])
+
+
+class TrackResolveRequest(BaseModel):
+    spotify_track_ids: List[str]
 
 
 @router.get("/")
@@ -27,8 +32,28 @@ def get_tracks() -> List[Track]:
     return tracks
 
 
+@router.post("/resolve")
+def resolve_tracks(payload: TrackResolveRequest) -> dict:
+    """Resolve Spotify track IDs to local track IDs."""
+    spotify_ids = [track_id for track_id in payload.spotify_track_ids if track_id]
+    if not spotify_ids:
+        return {"items": []}
+    with get_session() as session:
+        rows = session.exec(
+            select(Track.id, Track.spotify_id)
+            .where(Track.spotify_id.in_(spotify_ids))
+        ).all()
+    items = [
+        {"track_id": track_id, "spotify_track_id": spotify_id}
+        for track_id, spotify_id in rows
+        if spotify_id
+    ]
+    return {"items": items}
+
+
 @router.get("/overview")
 def get_tracks_overview(
+    request: Request,
     verify_files: bool = Query(False, description="Check file existence on disk"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     limit: int = Query(200, ge=1, le=1000, description="Pagination limit"),
@@ -51,7 +76,7 @@ def get_tracks_overview(
     if filter == "all":
         filter = None
     filter = filter or None
-    if filter and filter not in {"withLink", "noLink", "hasFile", "missingFile"}:
+    if filter and filter not in {"withLink", "noLink", "hasFile", "missingFile", "favorites"}:
         raise HTTPException(status_code=400, detail="Invalid filter value")
     search_term = normalize_search(search) if search else ""
     is_filtered_query = bool(filter or search_term)
@@ -120,6 +145,16 @@ def get_tracks_overview(
                     & (YouTubeDownload.download_path != "")
                 )
             )
+            if filter == "favorites":
+                user_id = getattr(request.state, "user_id", None)
+                if not user_id:
+                    raise HTTPException(status_code=401, detail="User not authenticated")
+                favorite_exists = exists(
+                    select(1).where(
+                        (UserFavorite.user_id == user_id)
+                        & (UserFavorite.track_id == Track.id)
+                    )
+                )
             if filter == "withLink":
                 base_query = base_query.where(link_exists)
             elif filter == "noLink":
@@ -128,6 +163,8 @@ def get_tracks_overview(
                 base_query = base_query.where(file_exists)
             elif filter == "missingFile":
                 base_query = base_query.where(~file_exists)
+            elif filter == "favorites":
+                base_query = base_query.where(favorite_exists)
 
         if after_id is not None:
             base_query = base_query.where(Track.id > after_id)
@@ -162,6 +199,16 @@ def get_tracks_overview(
                         & (YouTubeDownload.download_path != "")
                     )
                 )
+                if filter == "favorites":
+                    user_id = getattr(request.state, "user_id", None)
+                    if not user_id:
+                        raise HTTPException(status_code=401, detail="User not authenticated")
+                    favorite_exists = exists(
+                        select(1).where(
+                            (UserFavorite.user_id == user_id)
+                            & (UserFavorite.track_id == Track.id)
+                        )
+                    )
                 if filter == "withLink":
                     count_query = count_query.where(link_exists)
                 elif filter == "noLink":
@@ -170,6 +217,8 @@ def get_tracks_overview(
                     count_query = count_query.where(file_exists)
                 elif filter == "missingFile":
                     count_query = count_query.where(~file_exists)
+                elif filter == "favorites":
+                    count_query = count_query.where(favorite_exists)
             filtered_total = session.exec(count_query).one()
 
     raw_rows = rows

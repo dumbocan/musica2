@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { audio2Api, API_BASE_URL } from '@/lib/api';
+import { YouTubeOverlayPlayer } from '@/components/YouTubeOverlayPlayer';
 import { useApiStore } from '@/store/useApiStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import { useFavorites } from '@/hooks/useFavorites';
@@ -17,6 +18,17 @@ type Track = {
 };
 type AlbumImage = { url: string };
 type ArtistMini = { name: string };
+type YouTubeLinkStatus = {
+  spotify_track_id: string;
+  youtube_video_id?: string;
+  youtube_url?: string;
+  status?: 'available' | 'missing' | 'error' | 'video_not_found';
+  error_message?: string;
+};
+type ResolvedTrack = {
+  spotify_track_id: string;
+  track_id: number;
+};
 type YoutubeAvailability =
   | { status: 'pending' }
   | { status: 'available'; videoId: string; videoUrl: string; title?: string }
@@ -37,10 +49,6 @@ type Album = {
   };
 };
 
-const resolveImageUrl = (url?: string) => {
-  if (!url) return undefined;
-  return url.startsWith('/') ? `${API_BASE_URL}${url}` : url;
-};
 
 export function AlbumDetailPage() {
   const resolveImageUrl = (url?: string) => {
@@ -59,23 +67,19 @@ export function AlbumDetailPage() {
   const [trackFavoriteLoading, setTrackFavoriteLoading] = useState<Record<string, boolean>>({});
   const [youtubeAvailability, setYoutubeAvailability] = useState<Record<string, YoutubeAvailability>>({});
   const [streamState, setStreamState] = useState<Record<string, StreamUiState>>({});
-  const nowPlaying = usePlayerStore((s) => s.nowPlaying);
+  const videoEmbedId = usePlayerStore((s) => s.videoEmbedId);
+  const setVideoEmbedId = usePlayerStore((s) => s.setVideoEmbedId);
   const playbackMode = usePlayerStore((s) => s.playbackMode);
-  const volume = usePlayerStore((s) => s.volume);
+  const setIsPlaying = usePlayerStore((s) => s.setIsPlaying);
+  const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
+  const setDuration = usePlayerStore((s) => s.setDuration);
+  const setStatusMessage = usePlayerStore((s) => s.setStatusMessage);
   const setNowPlaying = usePlayerStore((s) => s.setNowPlaying);
   const playByVideoId = usePlayerStore((s) => s.playByVideoId);
   const setQueue = usePlayerStore((s) => s.setQueue);
   const setCurrentIndex = usePlayerStore((s) => s.setCurrentIndex);
   const setOnPlayTrack = usePlayerStore((s) => s.setOnPlayTrack);
-  const setVideoControls = usePlayerStore((s) => s.setVideoControls);
-  const setIsPlaying = usePlayerStore((s) => s.setIsPlaying);
-  const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
-  const setDuration = usePlayerStore((s) => s.setDuration);
-  const [ytReady, setYtReady] = useState(false);
-  const [playerReady, setPlayerReady] = useState(false);
   const autoSearchOnPlay = true;
-  const playerContainerRef = useRef<HTMLDivElement | null>(null);
-  const playerRef = useRef<any>(null);
   const isMountedRef = useRef(true);
   const userId = useApiStore((s) => s.userId);
   const {
@@ -90,6 +94,13 @@ export function AlbumDetailPage() {
   } = useFavorites('track', userId);
 
   const resolveTrackId = useCallback((track: Track) => track.spotify_id || track.id || '', []);
+  const handleCloseVideo = useCallback(() => {
+    setVideoEmbedId(null);
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+    setStatusMessage('Video detenido');
+  }, [setCurrentTime, setDuration, setIsPlaying, setStatusMessage, setVideoEmbedId]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -97,41 +108,6 @@ export function AlbumDetailPage() {
       isMountedRef.current = false;
     };
   }, []);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if ((window as any).YT?.Player) {
-      setYtReady(true);
-      return;
-    }
-    const existing = document.getElementById('yt-iframe-api');
-    if (!existing) {
-      const script = document.createElement('script');
-      script.id = 'yt-iframe-api';
-      script.src = 'https://www.youtube.com/iframe_api';
-      document.body.appendChild(script);
-    }
-    const interval = window.setInterval(() => {
-      if ((window as any).YT?.Player) {
-        setYtReady(true);
-        window.clearInterval(interval);
-      }
-    }, 200);
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, []);
-
-  useEffect(() => {
-    setVideoControls({
-      play: () => playerRef.current?.playVideo?.(),
-      pause: () => playerRef.current?.pauseVideo?.(),
-      stop: () => playerRef.current?.stopVideo?.(),
-      seek: (value) => playerRef.current?.seekTo?.(value, true),
-    });
-    return () => setVideoControls(null);
-  }, [setVideoControls]);
-
 
   const getRowKey = useCallback(
     (track: Track, idx?: number) =>
@@ -154,7 +130,7 @@ export function AlbumDetailPage() {
         const items = response.data?.items || [];
         const nextAvailability: Record<string, YoutubeAvailability> = {};
         const nextStreamState: Record<string, StreamUiState> = {};
-        items.forEach((item: any) => {
+        items.forEach((item: YouTubeLinkStatus) => {
           const trackId = item.spotify_track_id;
           if (!trackId) return;
           const track = trackLookup.get(trackId);
@@ -216,7 +192,7 @@ export function AlbumDetailPage() {
         const res = await audio2Api.resolveTracks(spotifyTrackIds);
         if (cancelled) return;
         const next: Record<string, number> = {};
-        (res.data?.items || []).forEach((item: any) => {
+        (res.data?.items || []).forEach((item: ResolvedTrack) => {
           if (item?.spotify_track_id && typeof item?.track_id === 'number') {
             next[item.spotify_track_id] = item.track_id;
           }
@@ -241,7 +217,7 @@ export function AlbumDetailPage() {
       try {
         const res = await audio2Api.resolveTracks([spotifyTrackId]);
         const items = res.data?.items || [];
-        const match = items.find((item: any) => item.spotify_track_id === spotifyTrackId);
+        const match = items.find((item: ResolvedTrack) => item.spotify_track_id === spotifyTrackId);
         if (match?.track_id) {
           setTrackLocalIds((prev) => ({ ...prev, [spotifyTrackId]: match.track_id }));
           return match.track_id as number;
@@ -254,7 +230,7 @@ export function AlbumDetailPage() {
         await audio2Api.saveAlbumToDb(spotifyId);
         const res = await audio2Api.resolveTracks([spotifyTrackId]);
         const items = res.data?.items || [];
-        const match = items.find((item: any) => item.spotify_track_id === spotifyTrackId);
+        const match = items.find((item: ResolvedTrack) => item.spotify_track_id === spotifyTrackId);
         if (match?.track_id) {
           setTrackLocalIds((prev) => ({ ...prev, [spotifyTrackId]: match.track_id }));
           return match.track_id as number;
@@ -296,12 +272,18 @@ export function AlbumDetailPage() {
           if (albumId && isMounted) {
             setLocalAlbumId(albumId);
           }
-        } catch (e) {
+        } catch {
           // best effort; ignore
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (!isMounted) return;
-        setError(err?.response?.data?.detail || err?.message || 'Error cargando álbum');
+        const message =
+          err && typeof err === 'object' && 'response' in err && err.response && typeof err.response === 'object' && 'data' in err.response && err.response.data && typeof err.response.data === 'object' && 'detail' in err.response.data
+            ? (err.response.data as { detail: string }).detail
+            : err instanceof Error
+              ? err.message
+              : 'Error cargando álbum';
+        setError(message);
       } finally {
         if (isMounted) setLoading(false);
       }
@@ -363,11 +345,16 @@ export function AlbumDetailPage() {
           const next: YoutubeAvailability = { status: 'not_found' };
           setYoutubeAvailability((prev) => ({ ...prev, [stateKey]: next }));
           return next;
-        } catch (error: any) {
+        } catch (error: unknown) {
           if (!isMountedRef.current) {
             return null;
           }
-          const message = error?.response?.data?.detail || error?.message || 'Error buscando en YouTube';
+          const message =
+            error && typeof error === 'object' && 'response' in error && error.response && typeof error.response === 'object' && 'data' in error.response && error.response.data && typeof error.response.data === 'object' && 'detail' in error.response.data
+              ? (error.response.data as { detail: string }).detail
+              : error instanceof Error
+                ? error.message
+                : 'Error buscando en YouTube';
           return setError(message);
         }
       };
@@ -389,26 +376,34 @@ export function AlbumDetailPage() {
           }
           return refreshFromYoutube();
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (!isMountedRef.current) {
           return null;
         }
-        const statusCode = err?.response?.status;
+        const statusCode =
+          err && typeof err === 'object' && 'response' in err && err.response && typeof err.response === 'object' && 'status' in err.response
+            ? (err.response as { status: number }).status
+            : undefined;
         if (statusCode === 404) {
           if (!autoSearchOnPlay) {
-            const next: YoutubeAvailability = { status: 'missing' };
+            const next: YoutubeAvailability = { status: 'not_found' };
             setYoutubeAvailability((prev) => ({ ...prev, [stateKey]: next }));
             return next;
           }
           return refreshFromYoutube();
         }
-        const detail = err?.response?.data?.detail || err?.message || 'Error consultando YouTube';
+        const detail =
+          err && typeof err === 'object' && 'response' in err && err.response && typeof err.response === 'object' && 'data' in err.response && err.response.data && typeof err.response.data === 'object' && 'detail' in err.response.data
+            ? (err.response.data as { detail: string }).detail
+            : err instanceof Error
+              ? err.message
+              : 'Error consultando YouTube';
         return setError(detail);
       }
 
       return null;
     },
-    [album, resolveTrackId]
+    [album, autoSearchOnPlay, resolveTrackId]
   );
 
   useEffect(() => {
@@ -416,124 +411,7 @@ export function AlbumDetailPage() {
     setStreamState({});
   }, [spotifyId]);
 
-  useEffect(() => {
-    if (playbackMode !== 'video') return;
-    if (!ytReady || !nowPlaying || !playerContainerRef.current) return;
-    const YT = (window as any).YT;
-    const hasPlayerMethods =
-      playerRef.current &&
-      typeof playerRef.current.loadVideoById === 'function' &&
-      typeof playerRef.current.playVideo === 'function';
-    if (!hasPlayerMethods) {
-      if (playerRef.current?.destroy) {
-        playerRef.current.destroy();
-      }
-      playerRef.current = null;
-    }
-    if (!playerRef.current) {
-      playerRef.current = new YT.Player(playerContainerRef.current, {
-        videoId: nowPlaying.videoId,
-        playerVars: {
-          autoplay: 1,
-          controls: 0,
-          disablekb: 1,
-          fs: 0,
-          iv_load_policy: 3,
-          modestbranding: 1,
-          rel: 0,
-          playsinline: 1,
-          vq: 'small',
-          origin: typeof window !== 'undefined' ? window.location.origin : undefined,
-        },
-        events: {
-          onReady: (event: any) => {
-            setDuration(event.target.getDuration() || 0);
-            event.target.setVolume?.(volume);
-            event.target.setPlaybackQuality?.('tiny');
-            event.target.playVideo();
-            setPlayerReady(true);
-          },
-          onStateChange: (event: any) => {
-            const state = event.data;
-            if (state === YT.PlayerState.PLAYING) {
-              setIsPlaying(true);
-              event.target.setPlaybackQuality?.('tiny');
-              setPlayerReady(true);
-            } else if (state === YT.PlayerState.PAUSED) {
-              setIsPlaying(false);
-              setPlayerReady(true);
-            } else if (state === YT.PlayerState.BUFFERING) {
-              setPlayerReady(true);
-            } else if (state === YT.PlayerState.ENDED) {
-              setIsPlaying(false);
-            }
-          },
-        },
-      });
-      return;
-    }
-    if (typeof playerRef.current.loadVideoById === 'function') {
-      playerRef.current.loadVideoById(nowPlaying.videoId);
-    }
-  }, [nowPlaying, ytReady, playbackMode]);
-
-  useEffect(() => {
-    if (!nowPlaying && playerRef.current) {
-      playerRef.current.stopVideo();
-      setIsPlaying(false);
-      setCurrentTime(0);
-      setDuration(0);
-    }
-  }, [nowPlaying]);
-
-  useEffect(() => {
-    setPlayerReady(false);
-  }, [nowPlaying?.videoId, playbackMode]);
-
-  useEffect(() => {
-    if (playbackMode === 'audio') {
-      playerRef.current?.stopVideo?.();
-      setIsPlaying(false);
-    }
-  }, [playbackMode]);
-
-  useEffect(() => {
-    if (playbackMode !== 'audio') return;
-    if (playerRef.current?.destroy) {
-      playerRef.current.destroy();
-    }
-    playerRef.current = null;
-  }, [playbackMode]);
-
-  useEffect(() => {
-    if (playbackMode !== 'video') return;
-    if (!nowPlaying || !playerRef.current) return;
-    const interval = window.setInterval(() => {
-      try {
-        const current = playerRef.current?.getCurrentTime?.();
-        const total = playerRef.current?.getDuration?.();
-        if (Number.isFinite(current)) {
-          setCurrentTime(current);
-        }
-        if (Number.isFinite(total) && total > 0) {
-          setDuration(total);
-        }
-      } catch {
-        // ignore player polling errors
-      }
-    }, 1000);
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [nowPlaying, playbackMode]);
-
-  useEffect(() => {
-    if (playbackMode === 'video') {
-      playerRef.current?.setVolume?.(volume);
-    }
-  }, [volume, playbackMode]);
-
-  const handleStreamTrack = async (track: Track, stateKey: string) => {
+  const handleStreamTrack = useCallback(async (track: Track, stateKey: string) => {
     const setStream = (state: StreamUiState) =>
       setStreamState((prev) => ({
         ...prev,
@@ -572,6 +450,7 @@ export function AlbumDetailPage() {
         setStream({ status: 'idle' });
       } else {
         setStream({ status: 'idle' });
+        setVideoEmbedId(cached.videoId);
       }
       return;
     }
@@ -591,11 +470,17 @@ export function AlbumDetailPage() {
       spotifyTrackId: stateKey,
     };
     setNowPlaying(nextNowPlaying);
-    const idx = tracks.findIndex((t) => resolveTrackId(t) === stateKey);
-    if (idx >= 0) {
-      setCurrentIndex(idx);
+    if (playbackMode !== 'audio') {
+      const idx = tracks.findIndex((t) => resolveTrackId(t) === stateKey);
+      if (idx >= 0) {
+        setCurrentIndex(idx);
+      }
     }
     if (playbackMode === 'audio') {
+      const idx = tracks.findIndex((t) => resolveTrackId(t) === stateKey);
+      if (idx >= 0) {
+        setCurrentIndex(idx);
+      }
       const result = await playByVideoId({
         ...nextNowPlaying,
         durationSec: track.duration_ms ? track.duration_ms / 1000 : undefined,
@@ -607,8 +492,15 @@ export function AlbumDetailPage() {
       setStream({ status: 'idle' });
     } else {
       setStream({ status: 'idle' });
+      setVideoEmbedId(info.videoId);
     }
-  };
+  }, [album?.artists, youtubeAvailability, playbackMode, setNowPlaying, tracks, resolveTrackId, setCurrentIndex, playByVideoId, setVideoEmbedId, fetchYoutubeForTrack, autoSearchOnPlay]);
+
+  useEffect(() => {
+    if (playbackMode !== 'video') {
+      handleCloseVideo();
+    }
+  }, [handleCloseVideo, playbackMode]);
 
   useEffect(() => {
     if (tracks.length === 0) return;
@@ -662,7 +554,7 @@ export function AlbumDetailPage() {
   if (error) return <div className="card">Error: {error}</div>;
   if (!album) return <div className="card">Sin datos.</div>;
 
-  const coverImageUrl = resolveImageUrl(album?.images?.[0]?.url);
+  const coverImageUrl = resolveImageUrl(album.images?.[0]?.url);
 
   return (
     <div className="space-y-4">
@@ -687,28 +579,6 @@ export function AlbumDetailPage() {
 
       <div className="card" style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: 16, alignItems: 'flex-start' }}>
         <div style={{ position: 'relative', width: '100%', paddingTop: '100%', borderRadius: 12, overflow: 'hidden' }}>
-          {playerReady && nowPlaying && playbackMode === 'video' && (
-            <div
-              style={{
-                position: 'absolute',
-                inset: 0,
-                borderRadius: 12,
-                boxShadow: '0 0 24px rgba(63, 255, 208, 0.15)',
-              }}
-            />
-          )}
-          <div
-            ref={playerContainerRef}
-            style={{
-              position: 'absolute',
-              inset: 0,
-              width: '100%',
-              height: '100%',
-              opacity: nowPlaying && playbackMode === 'video' && playerReady ? 1 : 0,
-              pointerEvents: nowPlaying && playbackMode === 'video' && playerReady ? 'auto' : 'none',
-              transition: 'opacity 200ms ease',
-            }}
-          />
           {coverImageUrl && (
             <img
               src={coverImageUrl}
@@ -719,27 +589,10 @@ export function AlbumDetailPage() {
                 width: '100%',
                 height: '100%',
                 objectFit: 'cover',
-                opacity: nowPlaying && playbackMode === 'video' && playerReady ? 0 : 1,
-                transition: 'opacity 200ms ease',
               }}
             />
           )}
-          {nowPlaying && playbackMode === 'video' && !playerReady && (
-            <div
-              style={{
-                position: 'absolute',
-                inset: 0,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: 'var(--muted)',
-                fontSize: 12,
-                background: 'rgba(10, 14, 20, 0.35)',
-              }}
-            >
-              Cargando video...
-            </div>
-          )}
+          {videoEmbedId && <YouTubeOverlayPlayer videoId={videoEmbedId} onClose={handleCloseVideo} />}
         </div>
         <div>
           <div style={{ fontSize: 26, fontWeight: 800, marginBottom: 6 }}>{album.name}</div>
@@ -789,7 +642,7 @@ export function AlbumDetailPage() {
               setFavoriteLoading(true);
               try {
                 await toggleAlbumFavorite(localAlbumId);
-              } catch (e) {
+              } catch {
                 // ignore error for now
               } finally {
                 setFavoriteLoading(false);

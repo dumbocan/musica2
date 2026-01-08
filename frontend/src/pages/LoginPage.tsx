@@ -90,9 +90,14 @@ export function LoginPage() {
       } else {
         await handleSignup();
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error en autenticación:', err);
-      const msg = err.response?.data?.detail || 'Error de autenticación. Revisa la consola.';
+      const msg =
+        err && typeof err === 'object' && 'response' in err && err.response && typeof err.response === 'object' && 'data' in err.response && err.response.data && typeof err.response.data === 'object' && 'detail' in err.response.data
+          ? (err.response.data as { detail: string }).detail
+          : err instanceof Error
+            ? err.message
+            : 'Error de autenticación. Revisa la consola.';
       setError(msg);
     } finally {
       setLoading(false);

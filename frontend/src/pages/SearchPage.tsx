@@ -14,11 +14,26 @@ type ArtistInfo = {
   };
 };
 
+type LastfmImage = {
+  '#text': string;
+  size: 'small' | 'medium' | 'large' | 'extralarge' | 'mega' | '';
+};
+
+type LastfmArtist = {
+  name: string;
+  listeners: string;
+  mbid: string;
+  url: string;
+  streamable: string;
+  image: LastfmImage[];
+  spotify?: SpotifyArtist;
+};
+
 type SearchMode = 'tag' | 'artist';
 
 export function SearchPage() {
-  const [lastfmEnriched, setLastfmEnriched] = useState<any[]>([]);
-  const [lastfmArtists, setLastfmArtists] = useState<any[]>([]);
+  const [lastfmEnriched, setLastfmEnriched] = useState<LastfmArtist[]>([]);
+  const [lastfmArtists, setLastfmArtists] = useState<LastfmArtist[]>([]);
   const [page, setPage] = useState(0);
   const [hasMoreLastfm, setHasMoreLastfm] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
@@ -26,9 +41,9 @@ export function SearchPage() {
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const [visibleCount, setVisibleCount] = useState(20);
   const [searchMode, setSearchMode] = useState<SearchMode>('tag');
-  const [artistProfile, setArtistProfile] = useState<any | null>(null);
-  const [artistSimilar, setArtistSimilar] = useState<any[]>([]);
-  const [trackResults, setTrackResults] = useState<any[]>([]);
+  const [artistProfile, setArtistProfile] = useState<ArtistInfo | null>(null);
+  const [artistSimilar, setArtistSimilar] = useState<ArtistInfo[]>([]);
+  const [trackResults, setTrackResults] = useState<SpotifyTrackLite[]>([]);
 
   const {
     searchMainInfo,
@@ -56,7 +71,7 @@ export function SearchPage() {
     []
   );
 
-  const inferMode = (query: string): SearchMode => {
+  const inferMode = useCallback((query: string): SearchMode => {
     const cleaned = query.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
     if (!cleaned) return 'artist';
     const padded = ` ${cleaned} `;
@@ -67,9 +82,9 @@ export function SearchPage() {
       return padded.includes(paddedKeyword);
     });
     return isGenreSearch ? 'tag' : 'artist';
-  };
+  }, [genreKeywords]);
 
-  const performSearch = async (queryToUse: string, pageToLoad: number = 0, append = false) => {
+  const performSearch = useCallback(async (queryToUse: string, pageToLoad: number = 0, append = false) => {
     if (!queryToUse.trim()) return;
     const mode = inferMode(queryToUse);
     setSearchMode(mode);
@@ -90,13 +105,13 @@ export function SearchPage() {
         });
         const data = response.data || {};
         const artists: SpotifyArtist[] = Array.isArray(data.artists) ? data.artists : [];
-        const relatedList: any[] = Array.isArray(data.related) ? data.related : [];
+        const relatedList: ArtistInfo[] = Array.isArray(data.related) ? data.related : [];
         const relatedFlattened = relatedList
           .map((r) => (r && r.spotify ? r.spotify : r))
           .filter(Boolean) as SpotifyArtist[];
         const tracks: SpotifyTrackLite[] = Array.isArray(data.tracks) ? data.tracks : [];
         const main = data.main as ArtistInfo | null;
-        const lastfmTop: any[] = Array.isArray(data.lastfm_top) ? data.lastfm_top : [];
+        const lastfmTop: LastfmArtist[] = Array.isArray(data.lastfm_top) ? data.lastfm_top : [];
 
         if (!append) {
           setSearchMainInfo(main);
@@ -148,13 +163,13 @@ export function SearchPage() {
       setIsLoading(false);
       setIsLoadingMore(false);
     }
-  };
+  }, [searchMainInfo, setSearchQuery, setSearching, setIsLoading, setIsLoadingMore, setSearchMainInfo, setSearchResults, setRelatedSearchResults, setTrackSearchResults, setLastfmArtists, setLastfmEnriched, setArtistProfile, setArtistSimilar, setPage, setVisibleCount, setHasMoreLastfm, inferMode]);
 
-  const handleLoadMore = () => {
+  const handleLoadMore = useCallback(() => {
     if (searchMode !== 'tag') return;
     if (isLoadingMore || !hasMoreLastfm) return;
     performSearch(searchQuery, page + 1, true);
-  };
+  }, [searchMode, isLoadingMore, hasMoreLastfm, searchQuery, page, performSearch]);
 
   // Infinite scroll observer for Last.fm cards
   useEffect(() => {
@@ -179,7 +194,7 @@ export function SearchPage() {
     );
     observer.observe(target);
     return () => observer.disconnect();
-  }, [isLoadingMore, isLoading, hasMoreLastfm, searchQuery, page, visibleCount, lastfmEnriched, lastfmArtists, searchMode]);
+  }, [isLoadingMore, isLoading, hasMoreLastfm, searchQuery, page, visibleCount, lastfmEnriched, lastfmArtists, searchMode, handleLoadMore]);
 
   // Triggered from topbar search
   useEffect(() => {
@@ -219,9 +234,9 @@ export function SearchPage() {
                 const spImg = artistProfile.spotify?.images?.[0]?.url;
                 const lfmImgs = Array.isArray(artistProfile.lastfm?.image) ? artistProfile.lastfm?.image : [];
                 const lfmPreferred =
-                  lfmImgs.find((im: any) => im?.size === 'extralarge') ||
-                  lfmImgs.find((im: any) => im?.size === 'large') ||
-                  lfmImgs.find((im: any) => im?.size === 'medium');
+                  lfmImgs.find((im: LastfmImage) => im?.size === 'extralarge') ||
+                  lfmImgs.find((im: LastfmImage) => im?.size === 'large') ||
+                  lfmImgs.find((im: LastfmImage) => im?.size === 'medium');
                 const lfmUrl = lfmPreferred?.['#text'];
                 const img = spImg || lfmUrl;
                 if (img) {
@@ -305,7 +320,7 @@ export function SearchPage() {
               )}
               {Array.isArray(artistProfile.lastfm?.tags) && artistProfile.lastfm.tags.length > 0 && (
                 <div className="flex flex-wrap gap-2 text-xs">
-                  {artistProfile.lastfm.tags.slice(0, 10).map((t: any) => (
+                  {artistProfile.lastfm.tags.slice(0, 10).map((t: { name?: string }) => (
                     <span
                       key={t.name || t}
                       style={{ padding: '4px 8px', borderRadius: 8, background: 'var(--panel)', border: `1px solid var(--border)` }}
@@ -322,13 +337,13 @@ export function SearchPage() {
             <div className="space-y-3">
               <h3 className="text-xl font-semibold">Artistas afines</h3>
               <div className="grid-cards" style={{ gap: 18 }}>
-                {artistSimilar.slice(0, 10).map((a: any, idx: number) => {
+                {artistSimilar.slice(0, 10).map((a: ArtistInfo, idx: number) => {
                   const spImg = a.spotify?.images?.[0]?.url;
                   const lfmImgList = Array.isArray(a.image) ? a.image : [];
                   const lfmPreferred =
-                    lfmImgList.find((im: any) => im?.size === 'extralarge') ||
-                    lfmImgList.find((im: any) => im?.size === 'large') ||
-                    lfmImgList.find((im: any) => im?.size === 'medium');
+                    lfmImgList.find((im: LastfmImage) => im?.size === 'extralarge') ||
+                    lfmImgList.find((im: LastfmImage) => im?.size === 'large') ||
+                    lfmImgList.find((im: LastfmImage) => im?.size === 'medium');
                   const img = spImg || lfmPreferred?.['#text'];
                   const spotifyId = a.spotify?.id;
                   const externalUrl = a.url || a.spotify?.external_urls?.spotify;
@@ -400,21 +415,21 @@ export function SearchPage() {
         <div className="space-y-4">
           <h2 className="text-xl font-semibold">Top artistas (Last.fm)</h2>
           <div className="grid-cards" style={{ gap: 18 }}>
-            {(lastfmEnriched.length ? lastfmEnriched : lastfmArtists).slice(0, visibleCount).map((a: any, idx: number) => {
+            {(lastfmEnriched.length ? lastfmEnriched : lastfmArtists).slice(0, visibleCount).map((a: LastfmArtist, idx: number) => {
               const images = Array.isArray(a.spotify?.images) && a.spotify?.images.length
-                ? a.spotify.images.map((im: any) => ({ '#text': im.url }))
+                ? a.spotify.images.map((im: { url: string }) => ({ '#text': im.url }))
                 : Array.isArray(a.image)
                   ? a.image
                   : [];
               const preferred =
-                images.find((im: any) => im?.size === 'large') ||
-                images.find((im: any) => im?.size === 'extralarge') ||
-                images.find((im: any) => im?.size === 'medium');
+                images.find((im: LastfmImage) => im?.size === 'large') ||
+                images.find((im: LastfmImage) => im?.size === 'extralarge') ||
+                images.find((im: LastfmImage) => im?.size === 'medium');
               const fallback = images[images.length - 1];
               const img = preferred || fallback;
               const artistLink = a.spotify?.id ? `/artists/discography/${a.spotify.id}` : a.url;
               const linkProps = a.spotify?.id
-                ? { onClick: (e: any) => { e.preventDefault(); navigate(artistLink); } }
+                ? { onClick: (e: React.MouseEvent) => { e.preventDefault(); navigate(artistLink); } }
                 : {};
               return (
                 <a
@@ -490,16 +505,16 @@ export function SearchPage() {
           <h3 className="text-xl font-semibold">Álbumes con esta canción</h3>
           <div className="space-y-2">
             {Array.from(
-              trackResults.reduce((map: Map<string, any>, t: any) => {
+              trackResults.reduce((map: Map<string, SpotifyTrackLite>, t: SpotifyTrackLite) => {
                 const albumId = t.album?.id;
                 if (!albumId) return map;
                 if (map.has(albumId)) return map;
                 map.set(albumId, t);
                 return map;
-              }, new Map<string, any>())
+              }, new Map<string, SpotifyTrackLite>())
             ).map(([albumId, t], idx) => {
               const albumImg = t.album?.images?.[0]?.url;
-              const artistNames = (t.artists || []).map((a: any) => a.name).join(', ');
+              const artistNames = (t.artists || []).map((a: { name: string }) => a.name).join(', ');
               return (
                 <div
                   key={albumId || `${t.name}-${idx}`}

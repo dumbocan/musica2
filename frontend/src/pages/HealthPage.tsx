@@ -27,8 +27,9 @@ export function HealthPage() {
         setError(null);
         const res = await audio2Api.healthDetailed?.();
         if (res?.data) setData(res.data);
-      } catch (err: any) {
-        setError(err?.message || 'Error fetching health');
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Error fetching health';
+        setError(message);
       }
     };
     load();

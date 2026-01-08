@@ -97,10 +97,12 @@ export const audio2Api = {
     limit?: number;
     include_summary?: boolean;
     after_id?: number | null;
-    filter?: 'all' | 'withLink' | 'noLink' | 'hasFile' | 'missingFile';
+    filter?: 'all' | 'favorites' | 'withLink' | 'noLink' | 'hasFile' | 'missingFile';
     search?: string;
   }) =>
     api.get('/tracks/overview', { params, timeout: 60000 }),
+  resolveTracks: (spotifyTrackIds: string[]) =>
+    api.post('/tracks/resolve', { spotify_track_ids: spotifyTrackIds }),
 
   // Playlists
   getAllPlaylists: () => api.get('/playlists/'),

@@ -121,7 +121,7 @@ export interface SearchArtistsResponse {
     spotify_id: string;
     followers: number;
   };
-  library_expansion?: any;
+  library_expansion?: unknown;
 }
 
 export interface DiscographyResponse {

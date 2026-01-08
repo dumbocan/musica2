@@ -6,8 +6,8 @@ interface RequestLog {
   method: string;
   url: string;
   status: number | null;
-  response: any;
-  error: any;
+  response: unknown;
+  error: unknown;
   timestamp: Date;
 }
 

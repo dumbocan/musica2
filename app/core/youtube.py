@@ -5,6 +5,8 @@ Provides methods to search for music videos and get video metadata.
 
 import os
 import re
+import unicodedata
+from difflib import SequenceMatcher
 import uuid
 import asyncio
 import tempfile
@@ -50,6 +52,56 @@ class YouTubeClient:
 
         if not self.api_key:
             raise ValueError("YouTube API key not configured")
+
+        self._noise_tokens = {
+            "official",
+            "video",
+            "music",
+            "audio",
+            "lyric",
+            "lyrics",
+            "letra",
+            "letras",
+            "hd",
+            "hq",
+            "4k",
+            "remastered",
+            "live",
+            "visualizer",
+            "visualiser",
+            "feat",
+            "ft",
+            "featuring",
+            "album",
+            "full",
+            "version",
+            "clip",
+            "mv",
+            "tv",
+            "radio",
+            "mix",
+            "remix",
+            "edit",
+            "sub",
+            "español",
+            "spanish",
+            "english",
+            "officially",
+            "topic",
+            "records",
+            "record",
+        }
+
+    def _normalize_text(self, text: str) -> str:
+        text = text.lower()
+        text = unicodedata.normalize("NFD", text)
+        text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+        text = re.sub(r"[^a-z0-9]+", " ", text)
+        return text.strip()
+
+    def _tokenize(self, text: str) -> List[str]:
+        tokens = self._normalize_text(text).split()
+        return [t for t in tokens if t and t not in self._noise_tokens]
 
     def clean_filename(self, text: str) -> str:
         """
@@ -345,12 +397,16 @@ class YouTubeClient:
         if max_results > 1:
             queries.append(f"{artist} {track}")
 
+        fetch_results = max(max_results, 5)
         for query in queries:
-            videos = await self.search_videos(query, max_results)
-            if videos:
-                filtered = self._filter_music_videos(videos, artist, track)
-                self._set_cached_search(cache_key, filtered)
-                return filtered
+            videos = await self.search_videos(query, fetch_results)
+            if not videos:
+                continue
+            filtered = self._filter_music_videos(videos, artist, track)
+            if filtered:
+                trimmed = filtered[:max_results]
+                self._set_cached_search(cache_key, trimmed)
+                return trimmed
 
         self._set_cached_search(cache_key, [])
         return []
@@ -372,38 +428,63 @@ class YouTubeClient:
         Returns:
             Filtered list of music videos
         """
-        artist_lower = artist.lower()
-        track_lower = track.lower()
-        
-        def score_video(video: Dict[str, Any]) -> int:
+        artist_tokens = self._tokenize(artist)
+        track_tokens = self._tokenize(track)
+        if not track_tokens:
+            return []
+
+        def score_video(video: Dict[str, Any]) -> Optional[int]:
             """Score a video based on how well it matches the artist and track."""
-            title = video['title'].lower()
+            title = video.get("title", "")
+            description = video.get("description", "")
+            title_norm = self._normalize_text(title)
+            desc_norm = self._normalize_text(description)
+            title_tokens = set(self._tokenize(title))
+            desc_tokens = set(self._tokenize(description))
             score = 0
-            
-            # Check for artist name in title
-            if artist_lower in title:
-                score += 50
-            
-            # Check for track name in title
-            if track_lower in title:
-                score += 50
-            
-            # Bonus for official/vevo keywords
-            if any(keyword in title for keyword in ['official', 'vevo', 'music video']):
-                score += 20
-            
-            # Check for high-quality channels
-            channel = video['channel_title'].lower()
-            if any(ch in channel for ch in ['vevo', 'official', 'musica']):
+
+            track_hits = sum(1 for token in track_tokens if token in title_tokens or token in desc_tokens)
+            artist_hits = sum(1 for token in artist_tokens if token in title_tokens or token in desc_tokens)
+            track_ratio = track_hits / max(1, len(track_tokens))
+            track_phrase = " ".join(track_tokens)
+            title_similarity = SequenceMatcher(None, track_phrase, title_norm).ratio() if track_phrase else 0.0
+
+            if track_ratio < 0.6 and title_similarity < 0.6:
+                return None
+
+            score += track_hits * 60
+            score += artist_hits * 25
+            if track_phrase and track_phrase in title_norm:
+                score += 30
+            if "official" in title_norm:
                 score += 10
-            
+            if "vevo" in title_norm:
+                score += 8
+
+            channel = self._normalize_text(video.get("channel_title", ""))
+            if any(token in channel for token in ("vevo", "official", "musica", "music")):
+                score += 6
+
             return score
         
         # Sort by score and return top results
-        scored_videos = [(score_video(video), video) for video in videos]
+        scored_videos = []
+        for video in videos:
+            score = score_video(video)
+            if score is None:
+                continue
+            scored_videos.append((score, video))
         scored_videos.sort(key=lambda x: x[0], reverse=True)
-        
-        return [video for score, video in scored_videos if score > 0]
+
+        seen_ids = set()
+        results = []
+        for score, video in scored_videos:
+            video_id = video.get("video_id")
+            if not video_id or video_id in seen_ids:
+                continue
+            seen_ids.add(video_id)
+            results.append(video)
+        return results
     
     def extract_video_id(self, url: str) -> Optional[str]:
         """

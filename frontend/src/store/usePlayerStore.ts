@@ -3,6 +3,18 @@ import { audio2Api, API_BASE_URL } from '@/lib/api';
 
 export type PlaybackMode = 'audio' | 'video';
 export type AudioSourceMode = 'file' | 'stream';
+export type VideoController = {
+  play: () => void;
+  pause: () => void;
+  stop: () => void;
+  seek: (value: number) => void;
+  setVolume: (value: number) => void;
+  getVolume: () => number;
+  getCurrentTime: () => number;
+  getDuration: () => number;
+  isMuted: () => boolean;
+  setMuted: (muted: boolean) => void;
+};
 
 export type PlayerTrack = {
   spotifyTrackId: string;
@@ -18,14 +30,7 @@ export type PlayerQueueItem = {
   artist?: string;
   durationMs?: number;
   videoId?: string;
-  rawTrack?: any;
-};
-
-type VideoControls = {
-  play?: () => void;
-  pause?: () => void;
-  stop?: () => void;
-  seek?: (value: number) => void;
+  rawTrack?: unknown;
 };
 
 type PlayerStore = {
@@ -41,7 +46,6 @@ type PlayerStore = {
   audioSourceMode: AudioSourceMode;
   statusMessage: string;
   onPlayTrack: ((item: PlayerQueueItem) => void) | null;
-  videoControls: VideoControls | null;
   setAudioEl: (el: HTMLAudioElement | null) => void;
   setNowPlaying: (track: PlayerTrack | null) => void;
   setQueue: (queue: PlayerQueueItem[], currentIndex?: number) => void;
@@ -54,7 +58,10 @@ type PlayerStore = {
   setAudioSourceMode: (mode: AudioSourceMode) => void;
   setStatusMessage: (message: string) => void;
   setOnPlayTrack: (handler: ((item: PlayerQueueItem) => void) | null) => void;
-  setVideoControls: (controls: VideoControls | null) => void;
+  videoEmbedId: string | null;
+  setVideoEmbedId: (id: string | null) => void;
+  videoController: VideoController | null;
+  setVideoController: (controller: VideoController | null) => void;
   playByVideoId: (payload: PlayerTrack) => Promise<{ ok: boolean; mode?: AudioSourceMode }>;
   tryUpgradeToFile: () => Promise<boolean>;
   resumeAudio: () => void;
@@ -87,7 +94,6 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   audioSourceMode: 'file',
   statusMessage: '',
   onPlayTrack: null,
-  videoControls: null,
   setAudioEl: (audioEl) => set({ audioEl }),
   setNowPlaying: (nowPlaying) => set({ nowPlaying }),
   setQueue: (queue, currentIndex) =>
@@ -104,7 +110,10 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   setAudioSourceMode: (audioSourceMode) => set({ audioSourceMode }),
   setStatusMessage: (statusMessage) => set({ statusMessage }),
   setOnPlayTrack: (onPlayTrack) => set({ onPlayTrack }),
-  setVideoControls: (videoControls) => set({ videoControls }),
+  videoEmbedId: null,
+  setVideoEmbedId: (videoEmbedId) => set({ videoEmbedId }),
+  videoController: null,
+  setVideoController: (videoController) => set({ videoController }),
   playByVideoId: async (payload) => {
     const audio = get().audioEl;
     if (!audio) return { ok: false };

@@ -11,6 +11,12 @@ Audio2 couples a FastAPI backend (`app/`) with a Vite + TypeScript frontend (`fr
 - `python smoke_test.py` / `python test_complete_system.py` — run integration checks that call live APIs.
 Note: this repository is configured to use PostgreSQL only. Ensure `DATABASE_URL` points to Postgres before running the API.
 
+## Database Connection (PostgreSQL)
+- Read `DATABASE_URL` from `.env` (defaults to Postgres in local dev). Example: `postgresql+psycopg2://user:pass@127.0.0.1:5432/music_db`.
+- Verify Postgres is running before DB checks: `pg_isready -h 127.0.0.1 -p 5432`.
+- If Postgres is stopped, start it (ask for permission first): `sudo systemctl start postgresql` or `docker start <container>`.
+- To inspect quickly: `psql "$DATABASE_URL"` or a short `venv/bin/python` snippet using `app.core.db.get_session`.
+
 ## Coding Style & Naming Conventions
 Follow PEP 8 with four-space indents, type hints, and snake_case names; keep SQLModel and Pydantic classes in PascalCase (see `app/models/base.py`). Endpoints should expose concise nouns or verbs (`/artists/save/{spotify_id}`) and return typed schemas, not raw dicts. Shared utilities must accept dependency-injected sessions (`Depends(get_session)`) and avoid bare prints. Frontend code follows the Vite ESLint and Tailwind defaults in `frontend/src`.
 
@@ -44,3 +50,58 @@ Secrets stay in `.env`; never hard-code tokens or client secrets. Honor the auth
  - Tracks totals can be wrong if `youtube_video_id` is empty; treat empty strings as missing and prefer the row with a valid video ID when multiple `YouTubeDownload` rows exist for one track.
  - For performance, filter in `/tracks/overview` (`filter`, `search`) and use `filtered_total` rather than loading the entire library in the frontend.
  - Track pagination should use `after_id` keyset with `limit` and prefetch when ~100 rows remain to minimize network churn.
+
+## Historial reciente y aprendizajes
+- ✅ El nuevo reproductor mezcla audio local (descargas guardadas) con streaming ligero; el footer se mantiene activo, marca favoritos y escucha las pistas desde `downloads/`.
+- ✅ La vista de Tracks y los filtros sticky presentan totales filtrados y cargan lotes graduales sin recargar toda la biblioteca, lo cual mejora la navegación del catálogo.
+- ⚠️ La cuota de YouTube sigue generando 403/429 y algunos filtros (`filter=dr`) pueden devolver `400/422`; los escenarios con CORS bloqueados en `/tracks/overview` o `/search/artist-profile` deben verificar que el backend esté levantado y que se reusarán los tokens correctos.
+- ⚠️ Los nuevos controles de video no han sustituido completamente al audio: los botones del footer reinician la pista tras pausar, el slider no permite `seek` y los iframes a veces muestran pantalla en negro; el modo video se mantiene como solución temporal que abre un iframe en el overlay e invoca solo el link de YouTube, sin recrear toda la lógica de audio.
+
+## Frontend Code Quality Review Findings (Enero 2026)
+
+Se realizó una revisión exhaustiva del código en el directorio `frontend/` para mejorar la calidad, la seguridad de tipos y la adherencia a las mejores prácticas. A continuación, se detallan los tipos de problemas encontrados y las soluciones aplicadas:
+
+### 1. Eliminación de `any` explícitos (`@typescript-eslint/no-explicit-any`)
+
+**Problema:** El uso extendido del tipo `any` debilitaba la seguridad de tipos de TypeScript, dificultando la detección de errores en tiempo de compilación y reduciendo la claridad del código.
+**Solución:** Se reemplazó la mayoría de las ocurrencias de `any` con tipos específicos (como `Artist[]`, `SpotifyArtist[]`, `Track[]`, `LastfmArtist[]`) o con `unknown` cuando el tipo exacto no podía determinarse de inmediato. Esto incluyó la adición de `type guards` para el manejo seguro de errores en bloques `catch` (ej., `err: unknown`).
+
+**Archivos afectados:**
+-   `AlbumDetailPage.tsx`
+-   `SearchPage.tsx`
+-   `TracksPage.tsx`
+-   `NetworkDebugger.tsx`
+-   `YouTubeOverlayPlayer.tsx`
+-   `useFavorites.ts`
+-   `usePaginatedArtists.ts`
+-   `HealthPage.tsx`
+-   `LoginPage.tsx`
+-   `useApiStore.ts`
+-   `usePlayerStore.ts`
+-   `types/api.ts`
+
+### 2. Optimización de React Hooks (`react-hooks/exhaustive-deps`)
+
+**Problema:** Advertencias sobre dependencias faltantes o innecesarias en `useEffect`, `useCallback` y `useMemo`. Esto podía llevar a `stale closures`, comportamientos inesperados o re-ejecuciones innecesarias de funciones y efectos.
+**Solución:**
+-   Se envolvieron funciones de manejo de eventos y lógicas reutilizables en `useCallback` (ej., `handlePlay`, `handlePause`, `handleLoadMore`, `performSearch`, `inferMode`, `resolveTrackKey`).
+-   Se ajustaron correctamente los arrays de dependencias para `useEffect` y `useMemo`, asegurando que los hooks se re-ejecuten solo cuando sea necesario y que las funciones utilizadas dentro de ellos sean estables.
+-   Se movieron funciones auxiliares (ej., `clampVolume`, `seekBy`, `toggleMute`) dentro del `useEffect` donde se utilizan exclusivamente para co-localizar la lógica y simplificar las dependencias.
+
+**Archivos afectados:**
+-   `PlayerFooter.tsx`
+-   `AlbumDetailPage.tsx`
+-   `SearchPage.tsx`
+-   `TracksPage.tsx`
+
+### 3. Refactorización y Mejores Prácticas
+
+**Problema:** Detección de código redundante, interfaces vacías y problemas con Fast Refresh.
+**Solución:**
+-   **`components/ui/button.tsx`**: La definición de `buttonVariants` se movió a un archivo separado (`button-variants.ts`) para cumplir con la restricción de Fast Refresh de React de exportar solo componentes desde un archivo.
+-   **`components/ui/input.tsx`**: Una interfaz vacía (`InputProps`) fue reemplazada por un alias de tipo (`type InputProps = ...`) para mayor concisión y evitar una advertencia del linter.
+-   **`AlbumDetailPage.tsx`**: Eliminación de funciones `resolveImageUrl` duplicadas o no utilizadas.
+-   **`ArtistsPage.tsx`**: Eliminación de directivas `eslint-disable` redundantes.
+
+**Beneficios:**
+La aplicación ahora cuenta con una base de código frontend más robusta, fácil de mantener y extensible, con una mayor confianza en la corrección lógica gracias a la mejora en la seguridad de tipos. El rendimiento y la experiencia de desarrollo también se han optimizado al reducir re-renders innecesarios y mejorar el soporte de Fast Refresh.

@@ -65,17 +65,17 @@ interface ApiStore {
 
   // Search state
   searchQuery: string;
-  searchResults: any[];
-  relatedSearchResults: any[];
-  searchMainInfo: any | null;
-  trackSearchResults: any[];
+  searchResults: Artist[];
+  relatedSearchResults: Artist[];
+  searchMainInfo: Artist | null;
+  trackSearchResults: Track[];
   searchTrigger: number;
   isSearching: boolean;
   setSearchQuery: (query: string) => void;
-  setSearchResults: (results: any[]) => void;
-  setRelatedSearchResults: (results: any[]) => void;
-  setSearchMainInfo: (info: any | null) => void;
-  setTrackSearchResults: (results: any[]) => void;
+  setSearchResults: (results: Artist[]) => void;
+  setRelatedSearchResults: (results: Artist[]) => void;
+  setSearchMainInfo: (info: Artist | null) => void;
+  setTrackSearchResults: (results: Track[]) => void;
   setSearchTrigger: (ts: number) => void;
   setSearching: (searching: boolean) => void;
 
@@ -94,7 +94,7 @@ interface ApiStore {
 // Create store
 export const useApiStore = create<ApiStore>()(
   devtools(
-    (set, _get) => ({
+    (set) => ({
       // Health
       health: null,
       isHealthLoading: false,

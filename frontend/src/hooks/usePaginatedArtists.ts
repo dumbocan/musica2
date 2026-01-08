@@ -7,13 +7,15 @@ interface Options {
   sortOption?: 'pop-desc' | 'pop-asc' | 'name-asc';
 }
 
+type PaginatedArtistsResponse = Artist[] | { items: Artist[], total?: number };
+
 export function usePaginatedArtists({ limit = 500, sortOption = 'pop-desc' }: Options = {}) {
   const [artists, setArtists] = useState<Artist[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [total, setTotal] = useState<number | null>(null);
 
-  const normalizeResponse = useCallback((payload: any): { items: Artist[]; total: number | null } => {
+  const normalizeResponse = useCallback((payload: PaginatedArtistsResponse): { items: Artist[]; total: number | null } => {
     if (Array.isArray(payload)) {
       return { items: payload, total: payload.length };
     }
@@ -34,7 +36,7 @@ export function usePaginatedArtists({ limit = 500, sortOption = 'pop-desc' }: Op
       const { items, total: totalCount } = normalizeResponse(res.data);
       setArtists(items);
       setTotal(totalCount ?? items.length);
-    } catch (err) {
+    } catch {
       setError('Failed to load artists. Please try again.');
     } finally {
       setIsLoading(false);

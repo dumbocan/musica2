@@ -33,6 +33,15 @@ A **complete REST API backend** for personal music streaming, featuring **comple
 - **Biblioteca de artistas renovada**: filtros “Filtered Results / Sort / Genre” usan una tarjeta única, tipografía uniforme y controles alineados con la barra global. Las imágenes ahora vienen siempre desde cache local y el scroll infinito respeta el orden elegido (popularidad asc/desc o alfabético) sin reorganizar la lista cargada.
 - **Scroll infinito virtualizado**: las vistas con catálogos grandes (artists, search) precargan el inventario completo (lotes de 20/1000) y muestran sólo los elementos visibles + lazy images. Esto evita saltos al paginar, mantiene el total al día y permite reutilizar el patrón en cualquier listado (usa `usePaginatedArtists` / `IntersectionObserver`).
 
+## 💅 Frontend Code Quality & Refactoring (Enero 2026)
+
+Se ha realizado una revisión exhaustiva del código del frontend para mejorar la calidad, la seguridad de tipos, el rendimiento y la mantenibilidad. Los cambios clave incluyen:
+
+-   **Tipado estricto con TypeScript:** Eliminación de la mayoría de las ocurrencias del tipo `any`, reemplazándolas por tipos específicos o `unknown` con guardas de tipo, lo que reduce errores en tiempo de ejecución.
+-   **Optimización de React Hooks:** Refactorización de componentes (`PlayerFooter.tsx`, `AlbumDetailPage.tsx`, `SearchPage.tsx`, `TracksPage.tsx`) para asegurar el uso correcto de `useCallback`, `useMemo` y `useEffect`, resolviendo advertencias de `exhaustive-deps` y mejorando la estabilidad del rendimiento.
+-   **Eliminación de código redundante y malas prácticas:** Eliminación de variables no utilizadas, refactorización de interfaces y resolución de problemas de Fast Refresh en componentes UI (como `button.tsx` y `input.tsx`).
+-   **Consistencia y claridad:** Mejora de la legibilidad y la consistencia en el código a través de la estandarización de patrones y la limpieza general.
+
 ## 🆕 Backend & Data Weekend (favoritos, caché de imágenes, DB-first)
 
 - **Favoritos multi-usuario**: nueva tabla `userfavorite` y API `/favorites` para marcar artistas, álbumes o tracks; los registros no se pueden borrar si están marcados. `target_type = artist|album|track`.
@@ -67,6 +76,13 @@ A **complete REST API backend** for personal music streaming, featuring **comple
 - **Paginado y rendimiento**: paginado por `after_id` (keyset) + `limit` en backend; en frontend se precarga cuando quedan ~100 filas y sigue cargando 200 en 200 sin saturar la red.
 - **Consistencia UI**: filtros + búsqueda + progreso quedan sticky y la tabla virtualizada mantiene un solo scroll.
 
+## 🏁 Historias recientes: lo que funciona / lo que queda por pulir
+- ✅ El reproductor híbrido mezcla audio local (MP3/m4a) con streaming de YouTube, mantiene el footer global, sincroniza contadores de peticiones y actualiza el estado `link_found` desde `YouTubeDownload`.
+- ✅ Las descargas se alojan en carpetas organizadas por artista/álbum (`downloads/<Artist>/<Album>/`) y hay scripts para reubicar colecciones antiguas, permitiendo reproducir desde la UI sin salir del navegador.
+- ✅ La vista de Tracks trae sticky filters, barra de progreso y paginado por lotes (200 en 200) con carga anticipada cuando quedan ~100 filas, además de emitir totales filtrados para mostrar “Mostrando X de Y”.
+- ⚠️ La cuota de YouTube puede cortar el prefetch con 403/429; las busquedas ocurrieron una sola vez por álbum, pero los errores aún dejan “Sin enlace” si `download_status` no se normaliza a `link_found`.
+- ⚠️ El modo video todavía compite con el reproductor de audio: los botones del footer reinician la pista cuando deberían pausar, el slider no permite seek manual y los iframes generan flash negro si se recrean sin limpiar el estado anterior.
+- ⚠️ Algunos filtros de `/tracks/overview` devuelven `400 Bad Request` o `422 Invalid filter` si se envían valores no reconocidos, y en local se han visto bloqueos CORS contra `/tracks/overview` y `/search/artist-profile` cuando el backend no está activo.
 ## ⚠️ Troubleshooting reciente (YouTube + reproducción)
 
 - **Cuota YouTube 403/429**: los prefetches se paran 15 min tras un 403/429. Evita loops extra y llama a YouTube solo cuando entras a un álbum o cuando el usuario pulsa play. Mantén `YOUTUBE_API_KEY` (y opcionalmente `YOUTUBE_API_KEY_2`) en `.env`.
