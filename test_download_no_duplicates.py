@@ -11,11 +11,9 @@ sys.path.insert(0, '.')
 from app.core.db import create_db_and_tables, get_session
 from app.core.data_freshness import data_freshness_manager
 from app.models.base import User, YouTubeDownload, Artist
-from app.crud import save_artist, record_play
 from app.core.auto_download import auto_download_service
 from app.core.spotify import spotify_client
 from sqlmodel import select
-import time
 
 async def test_no_duplicates_downloads():
     print('🚀 FINAL TEST: NO DUPLICATES IN DOWNLOADS')
@@ -154,7 +152,6 @@ async def test_no_duplicates_downloads():
             print('❌ WARNING: Some duplicate paths found!')
 
         # Check files on disk
-        import os
         downloads_dir = os.path.join(os.getcwd(), 'downloads')
         if os.path.exists(downloads_dir):
             total_files = 0
@@ -169,7 +166,7 @@ async def test_no_duplicates_downloads():
                 print(f'⚠️  DISCREPANCY: {total_files} disk files vs {len(unique_paths)} database records')
 
         # Show directory structure
-        print(f'\n📁 Downloads directory structure:')
+        print('\n📁 Downloads directory structure:')
         if os.path.exists(downloads_dir):
             for root, dirs, files in os.walk(downloads_dir):
                 level = root.replace(downloads_dir, '').count(os.sep)

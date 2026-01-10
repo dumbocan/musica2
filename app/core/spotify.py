@@ -3,11 +3,9 @@ Spotify API client using Client Credentials flow.
 """
 
 import base64
-import json
 from typing import Optional, List
 
 import httpx
-from pydantic import BaseModel
 
 from .config import settings
 
@@ -171,7 +169,7 @@ class SpotifyClient:
                     # Weight by popularity and recency
                     track['weighted_popularity'] = track.get('popularity', 0)
                     all_tracks.append(track)
-            except Exception as e:
+            except Exception:
                 # Continue if one album fails
                 continue
 

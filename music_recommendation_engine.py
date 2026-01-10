@@ -97,7 +97,6 @@ class MultiLayerMusicRecommender:
     def _generate_discoveries(self, intersections):
         """Genera nuevos artistas para descubrir"""
         discoveries = []
-        existing_artists = set()
 
         for inter_artist in intersections[:5]:  # Usar top 5
             # Simular encontrar artistas relacionados con este

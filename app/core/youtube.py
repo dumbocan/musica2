@@ -3,13 +3,11 @@ YouTube Data API v3 client for music video integration.
 Provides methods to search for music videos and get video metadata.
 """
 
-import os
 import re
 import unicodedata
 from difflib import SequenceMatcher
 import uuid
 import asyncio
-import tempfile
 import time
 import contextlib
 from datetime import datetime, timedelta
@@ -17,10 +15,8 @@ import logging
 from collections import OrderedDict
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-from urllib.parse import urlparse, parse_qs
 import httpx
 import yt_dlp
-import aiofiles
 from fastapi import HTTPException
 from app.core.config import settings
 
@@ -275,21 +271,21 @@ class YouTubeClient:
         self._search_cache.move_to_end(key)
         if len(self._search_cache) > self._search_cache_max_entries:
             self._search_cache.popitem(last=False)
-    
+
     async def search_videos(
-        self, 
-        query: str, 
+        self,
+        query: str,
         max_results: int = 10,
         video_category_id: str = "10"  # Music category
     ) -> List[Dict[str, Any]]:
         """
         Search for music videos by query.
-        
+
         Args:
             query: Search query (artist, track name, etc.)
             max_results: Maximum number of results to return
             video_category_id: YouTube video category ID (10 = Music)
-            
+
         Returns:
             List of video information dictionaries
         """
@@ -301,7 +297,7 @@ class YouTubeClient:
             'maxResults': min(max_results, 50),
             'order': 'relevance'
         }
-        
+
         try:
             response = await self._api_get("search", params)
             response.raise_for_status()
@@ -320,16 +316,18 @@ class YouTubeClient:
                 for item in data.get('items', [])
             ]
         except httpx.HTTPStatusError as e:
-            raise HTTPException(status_code=e.response.status_code,
-                              detail=f"YouTube API error: {str(e)}")
-    
+            raise HTTPException(
+                status_code=e.response.status_code,
+                detail=f"YouTube API error: {str(e)}",
+            )
+
     async def get_video_details(self, video_id: str) -> Dict[str, Any]:
         """
         Get detailed information about a specific video.
-        
+
         Args:
             video_id: YouTube video ID
-            
+
         Returns:
             Detailed video information
         """
@@ -337,7 +335,7 @@ class YouTubeClient:
             'part': 'snippet,statistics,contentDetails',
             'id': video_id,
         }
-        
+
         try:
             response = await self._api_get("videos", params)
             response.raise_for_status()
@@ -362,25 +360,27 @@ class YouTubeClient:
                 'url': f"https://www.youtube.com/watch?v={item['id']}"
             }
         except httpx.HTTPStatusError as e:
-            raise HTTPException(status_code=e.response.status_code,
-                              detail=f"YouTube API error: {str(e)}")
-    
+            raise HTTPException(
+                status_code=e.response.status_code,
+                detail=f"YouTube API error: {str(e)}",
+            )
+
     async def search_music_videos(
-        self, 
-        artist: str, 
-        track: str, 
+        self,
+        artist: str,
+        track: str,
         album: Optional[str] = None,
         max_results: int = 5
     ) -> List[Dict[str, Any]]:
         """
         Search specifically for music videos by artist and track.
-        
+
         Args:
             artist: Artist name
             track: Track name
             album: Optional album name
             max_results: Maximum number of results
-            
+
         Returns:
             List of matching music videos
         """
@@ -410,21 +410,21 @@ class YouTubeClient:
 
         self._set_cached_search(cache_key, [])
         return []
-    
+
     def _filter_music_videos(
-        self, 
-        videos: List[Dict[str, Any]], 
-        artist: str, 
+        self,
+        videos: List[Dict[str, Any]],
+        artist: str,
         track: str
     ) -> List[Dict[str, Any]]:
         """
         Filter videos to find best matches for the given artist and track.
-        
+
         Args:
             videos: List of video information
             artist: Target artist name
             track: Target track name
-            
+
         Returns:
             Filtered list of music videos
         """
@@ -438,7 +438,6 @@ class YouTubeClient:
             title = video.get("title", "")
             description = video.get("description", "")
             title_norm = self._normalize_text(title)
-            desc_norm = self._normalize_text(description)
             title_tokens = set(self._tokenize(title))
             desc_tokens = set(self._tokenize(description))
             score = 0
@@ -466,7 +465,7 @@ class YouTubeClient:
                 score += 6
 
             return score
-        
+
         # Sort by score and return top results
         scored_videos = []
         for video in videos:
@@ -485,14 +484,14 @@ class YouTubeClient:
             seen_ids.add(video_id)
             results.append(video)
         return results
-    
+
     def extract_video_id(self, url: str) -> Optional[str]:
         """
         Extract YouTube video ID from various URL formats.
-        
+
         Args:
             url: YouTube URL
-            
+
         Returns:
             Video ID or None if not found
         """
@@ -500,51 +499,51 @@ class YouTubeClient:
             r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([^&\n?#]+)',
             r'youtube\.com/v/([^&\n?#]+)',
         ]
-        
+
         for pattern in patterns:
             match = re.search(pattern, url)
             if match:
                 return match.group(1)
-        
+
         return None
-    
+
     async def get_video_duration_seconds(self, video_id: str) -> Optional[int]:
         """
         Get video duration in seconds.
-        
+
         Args:
             video_id: YouTube video ID
-            
+
         Returns:
             Duration in seconds or None if not available
         """
         try:
             video_details = await self.get_video_details(video_id)
             duration_str = video_details.get('duration', '')
-            
+
             # Parse ISO 8601 duration (PT4M13S -> 253 seconds)
             if duration_str.startswith('PT'):
                 duration_str = duration_str[2:]  # Remove 'PT'
-                
+
                 seconds = 0
                 if 'H' in duration_str:
                     hours = int(duration_str.split('H')[0])
                     seconds += hours * 3600
                     duration_str = duration_str.split('H')[1]
-                
+
                 if 'M' in duration_str:
                     minutes = int(duration_str.split('M')[0])
                     seconds += minutes * 60
                     duration_str = duration_str.split('M')[1]
-                
+
                 if 'S' in duration_str:
                     seconds += int(duration_str.split('S')[0])
-                
+
                 return seconds
-            
+
         except Exception:
             return None
-        
+
         return None
 
     async def download_audio(

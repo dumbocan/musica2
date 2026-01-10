@@ -76,7 +76,7 @@ def inspect_database():
                 print(f'      ... y {len(track_list) - 8} más tracks')
             print()
 
-        print(f'📊 RESUMEN TRACKS EN BD:')
+        print('📊 RESUMEN TRACKS EN BD:')
         print(f'   • Total tracks de metadata: {len(tracks)}')
         print(f'   • Tracks para Eminem: {sum(len(t) for a, t in artist_tracks.items() if any(x in a.lower() for x in ["eminem", "d12", "bad meets evil", "obie trice", "50 cent", "dr. dre", "ca$his", "royce da 5\'9\""]))}')
         print(f'   • Tracks para Gorillaz: {sum(len(t) for a, t in artist_tracks.items() if any(x in a.lower() for x in ["gorillaz", "franz ferdinand", "radiohead", "tally hall", "foster the people"]))}')

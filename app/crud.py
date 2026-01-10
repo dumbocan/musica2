@@ -6,7 +6,7 @@ import unicodedata
 import json
 
 from typing import Optional, List
-from sqlmodel import Session, select
+from sqlmodel import select
 
 from .models.base import (
     Artist, Album, Track, User, Playlist, PlaylistTrack, Tag, TrackTag,
@@ -988,7 +988,7 @@ def get_user_preferred_genres(user_id: int):
                     artist_genres = eval(artist.genres) if isinstance(artist.genres, str) else artist.genres
                     if isinstance(artist_genres, list):
                         genres.extend(artist_genres)
-                except:
+                except Exception:
                     pass
         
         # Count genre frequencies
@@ -1064,7 +1064,7 @@ def generate_top_rated_playlist(user_id: int = 1, name: str = "Top Rated", limit
             return None
 
         # Create playlist
-        playlist = create_playlist(name, f"Auto-generated top rated tracks", user_id)
+        playlist = create_playlist(name, "Auto-generated top rated tracks", user_id)
 
         # Add tracks to playlist
         for track in tracks:
@@ -1086,7 +1086,7 @@ def generate_most_played_playlist(user_id: int = 1, name: str = "Most Played", l
             return None
 
         # Create playlist
-        playlist = create_playlist(name, f"Auto-generated most played tracks", user_id)
+        playlist = create_playlist(name, "Auto-generated most played tracks", user_id)
 
         # Add tracks to playlist
         for track_id in track_ids:
@@ -1103,7 +1103,7 @@ def generate_favorites_playlist(user_id: int = 1, name: str = "Favorites", limit
         # Get favorite tracks
         tracks = session.exec(
             select(Track)
-            .where(Track.is_favorite == True)
+            .where(Track.is_favorite.is_(True))
             .limit(limit)
         ).all()
 
@@ -1111,7 +1111,7 @@ def generate_favorites_playlist(user_id: int = 1, name: str = "Favorites", limit
             return None
 
         # Create playlist
-        playlist = create_playlist(name, f"Auto-generated favorite tracks", user_id)
+        playlist = create_playlist(name, "Auto-generated favorite tracks", user_id)
 
         # Add tracks to playlist
         for track in tracks:
@@ -1133,7 +1133,7 @@ def generate_recently_played_playlist(user_id: int = 1, name: str = "Recently Pl
             return None
 
         # Create playlist
-        playlist = create_playlist(name, f"Auto-generated recently played tracks", user_id)
+        playlist = create_playlist(name, "Auto-generated recently played tracks", user_id)
 
         # Add tracks to playlist
         for track_id in track_ids:

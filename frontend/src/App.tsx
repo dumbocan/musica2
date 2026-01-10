@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
+import { BrowserRouter as Router, Navigate, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { YoutubeRequestCounter } from '@/components/YoutubeRequestCounter';
 import { PlayerFooter } from '@/components/PlayerFooter';
@@ -20,22 +20,57 @@ import { HealthPage } from '@/pages/HealthPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { ArtistDiscographyPage } from '@/pages/ArtistDiscographyPage';
 
+type JwtPayload = { exp?: number };
+
+const decodeJwtPayload = (token: string): JwtPayload | null => {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64.padEnd(base64.length + (4 - (base64.length % 4)) % 4, '=');
+    const json = atob(padded);
+    return JSON.parse(json) as JwtPayload;
+  } catch {
+    return null;
+  }
+};
+
+const getTokenExpiryMs = (token: string): number | null => {
+  const payload = decodeJwtPayload(token);
+  if (!payload?.exp) return null;
+  return payload.exp * 1000;
+};
+
 function AppShell() {
   const { setSidebarOpen, isAuthenticated, searchQuery, setSearchQuery, setSearchTrigger } = useApiStore();
+  const token = useApiStore((s) => s.token);
+  const logout = useApiStore((s) => s.logout);
   const [menuOpen, setMenuOpen] = useState(false);
   const closeMenuTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
 
   useEffect(() => {
-    if (!isAuthenticated && location.pathname !== '/login') {
-      navigate('/login', { replace: true });
-      return;
-    }
     if (isAuthenticated && location.pathname === '/login') {
       navigate('/', { replace: true });
     }
   }, [isAuthenticated, location.pathname, navigate]);
+
+  useEffect(() => {
+    if (!token) return;
+    const expiryMs = getTokenExpiryMs(token);
+    if (!expiryMs) {
+      logout();
+      return;
+    }
+    const remainingMs = expiryMs - Date.now();
+    if (remainingMs <= 0) {
+      logout();
+      return;
+    }
+    const timeout = setTimeout(() => logout(), remainingMs);
+    return () => clearTimeout(timeout);
+  }, [logout, token]);
 
   const openMenu = () => {
     if (closeMenuTimeout.current) clearTimeout(closeMenuTimeout.current);
@@ -47,8 +82,11 @@ function AppShell() {
     closeMenuTimeout.current = setTimeout(() => setMenuOpen(false), 200);
   };
 
-  // Si no está autenticado, mostrar solo la página de login
+  // Si no está autenticado, forzar login
   if (!isAuthenticated) {
+    if (location.pathname !== '/login') {
+      return <Navigate to="/login" replace />;
+    }
     return (
       <div className="flex h-screen bg-background">
         <main className="flex-1 flex items-center justify-center p-6">

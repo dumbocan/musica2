@@ -1,7 +1,6 @@
-from fastapi import APIRouter, status, HTTPException
+from fastapi import APIRouter, status
 import httpx
-from datetime import datetime, timedelta
-from typing import Optional
+from datetime import datetime
 
 from ..core.db import get_session
 from sqlmodel import select
@@ -145,6 +144,7 @@ async def api_status() -> dict:
 @router.get("/db-status", status_code=status.HTTP_200_OK)
 def db_status() -> dict:
     """Get current database status."""
+    check_database()
     return {
         "status": "online" if api_status_cache['database']['is_online'] else "offline",
         "last_checked": api_status_cache['database']['last_checked'].isoformat() if api_status_cache['database']['last_checked'] else None,

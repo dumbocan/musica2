@@ -16,45 +16,23 @@ from .api.youtube import router as youtube_router
 from .api.auth import router as auth_router
 from .api.favorites import router as favorites_router
 from .api.images import router as images_router
-from .core.db import create_db_and_tables, get_session
+from .core.config import settings
+from .core.db import get_session
 from .core.maintenance import daily_refresh_loop
-from .core.simple_security import get_current_user_id
+from .core.security import get_current_user_id_from_token
 from .models.base import User
 from sqlmodel import select
 import asyncio
 
 app = FastAPI(title="Audio2 API", description="Personal Music API Backend")
 
-# Enable CORS for local dev (frontend on Vite)
-# Lista explícita para compatibilidad con credentials
-allowed_origins = [
-    "http://localhost:5173",
-    "http://localhost:5174",
-    "http://localhost:5175",
-    "http://localhost:5176",
-    "http://localhost:5177",
-    "http://localhost:5178",
-    "http://localhost:5179",
-    "http://localhost:5180",
-    "http://127.0.0.1:5173",
-    "http://127.0.0.1:5174",
-    "http://127.0.0.1:5175",
-    "http://127.0.0.1:5176",
-    "http://127.0.0.1:5177",
-    "http://127.0.0.1:5178",
-    "http://127.0.0.1:5179",
-    "http://127.0.0.1:5180",
-]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=settings.CORS_ALLOW_CREDENTIALS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Create tables if they don't exist
-create_db_and_tables()
 
 # Auth guard: block everything if no users exist or no token provided
 PUBLIC_PATHS = {
@@ -65,6 +43,9 @@ PUBLIC_PATHS = {
     "/auth/login",
     "/auth/register",
     "/auth/create-first-user",
+    "/auth/account-lookup",
+    "/auth/reset-password",
+    "/db-status",
     "/images/proxy",
 }
 PUBLIC_PREFIXES = (
@@ -97,7 +78,7 @@ async def require_authenticated_user(request: Request, call_next):
             return JSONResponse(status_code=401, content={"detail": "Authorization bearer token required"})
 
         try:
-            user_id = get_current_user_id(token)
+            user_id = get_current_user_id_from_token(token)
         except ValueError as exc:
             return JSONResponse(status_code=401, content={"detail": str(exc)})
 

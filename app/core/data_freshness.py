@@ -10,7 +10,7 @@ Key Features:
 
 import asyncio
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List
 from datetime import datetime, timedelta
 from sqlmodel import select
 
@@ -321,8 +321,6 @@ class DataFreshnessManager:
         - Detailed biographies from Last.fm
         - Similar artists + their complete discographies
         """
-        from ..core.youtube import youtube_client
-
         logger.info(f"🚀 Starting COMPLETE library expansion for {main_artist_name}")
         if include_youtube_links:
             logger.info("📚 Will get: full discography, YouTube links, biographies, artwork")
@@ -410,7 +408,10 @@ class DataFreshnessManager:
             artist_name = similar_artist['name']
             match_score = similar_artist.get('match', 0.0)
 
-            logger.info(f"🎹 Processing SIMILAR ARTIST {total_artists_processed}/{similar_count+1}: {artist_name} (match: {match_score:.2f})")
+            logger.info(
+                f"🎹 Processing SIMILAR ARTIST {total_artists_processed}/{similar_count + 1}: {artist_name} "
+                f"(match: {match_score:.2f})"
+            )
 
             try:
                 # Search artist on Spotify
@@ -527,21 +528,21 @@ class DataFreshnessManager:
             }
         }
 
-        logger.info(f"🎉 COMPLETE Library expansion DONE:")
-        logger.info(f"   📚 {total_artists_processed} artists processed")
-        logger.info(f"   📀 {total_albums_processed} albums saved with full artwork")
-        logger.info(f"   🎵 {total_tracks_processed} tracks saved with YouTube links")
-        logger.info(f"   📖 Biographies and complete metadata saved")
+        logger.info("🎉 COMPLETE Library expansion DONE:")
+        logger.info("   📚 %s artists processed", total_artists_processed)
+        logger.info("   📀 %s albums saved with full artwork", total_albums_processed)
+        logger.info("   🎵 %s tracks saved with YouTube links", total_tracks_processed)
+        logger.info("   📖 Biographies and complete metadata saved")
 
         return result
 
     async def save_track_with_youtube_link(self, track_data: Dict[str, any], album_id: int, artist_id: int) -> None:
         """Save a track and automatically search for its YouTube link"""
         from ..core.youtube import youtube_client
-        from ..crud import save_track, save_youtube_download
+        from ..crud import save_track
 
         # Save the track first
-        track = save_track(track_data, album_id, artist_id)
+        save_track(track_data, album_id, artist_id)
         logger.info(f"💾 Saved track: {track_data['name']} by artist #{artist_id}")
 
         # Skip search if we already have a cached link for this track

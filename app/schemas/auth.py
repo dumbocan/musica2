@@ -64,6 +64,30 @@ class PasswordChange(BaseModel):
     new_password: str = Field(..., min_length=8, max_length=100)
 
 
+class PasswordResetRequest(BaseModel):
+    """Schema for password reset using recovery code."""
+    email: EmailStr = Field(..., max_length=150)
+    recovery_code: str = Field(..., min_length=4, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=100)
+
+
+class AccountLookupRequest(BaseModel):
+    """Schema for account lookup using recovery code."""
+    email: EmailStr = Field(..., max_length=150)
+    recovery_code: str = Field(..., min_length=4, max_length=128)
+
+
+class AccountLookupResponse(BaseModel):
+    """Schema for account lookup response."""
+    id: int
+    name: str
+    username: str
+    email: EmailStr
+
+    class Config:
+        from_attributes = True
+
+
 class MessageResponse(BaseModel):
     """Schema for simple message responses."""
     message: str

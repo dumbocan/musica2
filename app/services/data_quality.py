@@ -57,4 +57,3 @@ def write_report(limit: int | None = None) -> List[Dict[str, str]]:
     }
     REPORT_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return report
-

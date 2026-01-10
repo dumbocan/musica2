@@ -2,8 +2,6 @@
 Ratings and favorites endpoints.
 """
 
-from typing import List
-
 from fastapi import APIRouter, Path, HTTPException, Query
 
 from ..core.db import get_session
@@ -52,7 +50,7 @@ def rate_track(
 def get_favorite_tracks():
     """Get all favorite tracks."""
     with get_session() as session:
-        tracks = session.exec(select(Track).where(Track.is_favorite == True)).all()
+        tracks = session.exec(select(Track).where(Track.is_favorite.is_(True))).all()
         return [track.dict() for track in tracks]
 
 @router.get("/top-rated")

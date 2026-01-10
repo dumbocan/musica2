@@ -132,9 +132,9 @@ pip install -r requirements.txt
 # Copy and edit .env
 cp .env.example .env
 # Edit .env with your database and API credentials
-# The backend now defaults to SQLite (audio2.db) so you can run without Postgres.
 # Add Spotify/Last.fm/Youtube keys only if you will hit those endpoints.
 # IMPORTANT: set YOUTUBE_API_KEY before visiting album/track pages; otherwise the UI will warn about missing streaming links.
+# Optional: set AUTH_RECOVERY_CODE to enable password reset from the login screen.
 ```
 
 4. **Start the server:**
@@ -150,19 +150,17 @@ curl http://localhost:8000/health
 # Expected: {"status": "ok"}
 ```
 
-## 🗄️ Database Setup (SQLite vs PostgreSQL)
+## 🗄️ Database Setup (PostgreSQL)
 
 - **Project requirement**: This repo is configured to use **PostgreSQL only**. Keep `DATABASE_URL` set to a Postgres connection string.
-- **Local/dev = SQLite**: por defecto `DATABASE_URL` apunta a `sqlite:///./audio2.db`. No requiere servidor externo y permite correr pruebas o `uvicorn` al instante.
-- **Producción/staging = PostgreSQL**: el roadmap exige estandarizar Postgres en despliegues reales para soportar concurrencia, roles y extensiones. Configura `DATABASE_URL=postgresql+psycopg2://user:pass@host:5432/dbname` y ejecuta `create_db_and_tables()` para migrar los modelos.
-- **Diferencias clave**: SQLite vive en un archivo único (sin usuarios ni conexiones múltiples); Postgres es un servicio completo con ACID sólido, replicación y rendimiento en paralelo — por eso SQLite queda para desarrollo y Postgres será obligatorio en producción.
+- **Local/dev and production**: set `DATABASE_URL=postgresql+psycopg2://user:pass@host:5432/dbname` and ensure Postgres is running before starting the API.
 - **Stack ORM explicado**:
   - `SQLModel 0.0.27` define clases únicas que sirven como modelos de Pydantic y tablas SQL (ver `app/models/base.py`).
   - `SQLAlchemy 2.0.44` ejecuta las consultas/relaciones reales sobre cualquier motor soportado.
   - `psycopg2-binary 2.9.11` es el driver Postgres que SQLAlchemy usa cuando la URL apunta a `postgresql+psycopg2://`.
 
 ```bash
-# Cambiar a Postgres para desarrollo o producción
+# Arrancar con Postgres (dev o produccion)
 createdb audio2
 export DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/audio2
 python - <<'PY'
@@ -170,8 +168,6 @@ from app.core.db import create_db_and_tables
 create_db_and_tables()
 PY
 ```
-
-> Nota: si vuelves a SQLite, solo elimina/renombra `audio2.db` y FastAPI la recreará en el próximo arranque.
 
 ## 📚 **API Endpoints**
 

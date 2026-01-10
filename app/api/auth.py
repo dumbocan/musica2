@@ -2,34 +2,48 @@
 Authentication API endpoints for user registration, login, and management.
 """
 
-from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.security import HTTPBearer
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel.ext.asyncio.session import AsyncSession
+import hmac
 from app.core.db import SessionDep
-from app.core.simple_security import (
+from app.core.config import settings
+from app.core.security import (
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    create_user_token,
     get_password_hash,
     verify_password,
-    create_user_token,
 )
 from app.models.base import User
 from app.schemas.auth import (
-    UserCreate, 
-    UserResponse, 
+    UserCreate,
+    UserResponse,
     UserUpdate,
-    LoginRequest, 
+    LoginRequest,
     Token,
     PasswordChange,
+    PasswordResetRequest,
+    AccountLookupRequest,
+    AccountLookupResponse,
     MessageResponse,
-    UserInDB
 )
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
-security = HTTPBearer()
 
 def require_user_id(request: Request) -> int:
     return request.state.user_id
+
+def _validate_recovery_code(recovery_code: str) -> None:
+    if not settings.AUTH_RECOVERY_CODE:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="AUTH_RECOVERY_CODE is not configured"
+        )
+    if not hmac.compare_digest(recovery_code, settings.AUTH_RECOVERY_CODE):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid recovery code"
+        )
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register_user(
@@ -57,8 +71,20 @@ async def register_user(
     
     # Create new user
     hashed_password = get_password_hash(user_data.password)
+    base_username = user_data.email.split("@")[0] or "user"
+    username = base_username
+    suffix = 1
+    while True:
+        username_result = await session.execute(
+            select(User).where(User.username == username)
+        )
+        if not username_result.scalar_one_or_none():
+            break
+        suffix += 1
+        username = f"{base_username}{suffix}"
     new_user = User(
         name=user_data.name,
+        username=username,
         email=user_data.email,
         password_hash=hashed_password
     )
@@ -100,7 +126,7 @@ async def login_user(
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "expires_in": 86400  # 24h in seconds
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
     }
 
 
@@ -212,6 +238,50 @@ async def change_password(
     return {"message": "Password updated successfully"}
 
 
+@router.post("/account-lookup", response_model=AccountLookupResponse)
+async def account_lookup(
+    lookup_data: AccountLookupRequest,
+    session: AsyncSession = Depends(SessionDep)
+):
+    """
+    Lookup account details using the recovery code.
+    """
+    _validate_recovery_code(lookup_data.recovery_code)
+    result = await session.execute(
+        select(User).where(User.email == lookup_data.email)
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    return user
+
+
+@router.post("/reset-password", response_model=MessageResponse)
+async def reset_password(
+    reset_data: PasswordResetRequest,
+    session: AsyncSession = Depends(SessionDep)
+):
+    """
+    Reset a user's password using the recovery code.
+    """
+    _validate_recovery_code(reset_data.recovery_code)
+    result = await session.execute(
+        select(User).where(User.email == reset_data.email)
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    user.password_hash = get_password_hash(reset_data.new_password)
+    await session.commit()
+    return {"message": "Password reset successfully"}
+
+
 @router.get("/verify-token", response_model=MessageResponse)
 async def verify_auth_token(current_user_id: int = Depends(require_user_id)):
     """
@@ -264,20 +334,15 @@ async def create_first_user(
     Create the first user in the system (one-time setup).
     Only works when no users exist yet.
     """
-    # Check if any users exist; if yes, return the first instead of erroring
+    # Check if any users exist; if yes, block creation
     result = await session.execute(select(User))
     existing_users = result.scalars().all()
 
     if len(existing_users) > 0:
-        # Update the first user with provided credentials so the UX remains predictable
-        existing = existing_users[0]
-        existing.name = user_data.name
-        existing.email = user_data.email
-        existing.username = user_data.email.split("@")[0]
-        existing.password_hash = get_password_hash(user_data.password)
-        await session.commit()
-        await session.refresh(existing)
-        return existing
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="First user already exists. Use login or password recovery."
+        )
 
     # Create first user with ID=1
     hashed_password = get_password_hash(user_data.password)

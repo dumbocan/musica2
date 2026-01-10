@@ -6,7 +6,8 @@ import type {
   Track,
   Playlist,
   HealthCheckResponse,
-  DownloadStatus
+  DownloadStatus,
+  SpotifyTrackLite
 } from '../types/api';
 
 // API Store interface
@@ -68,14 +69,14 @@ interface ApiStore {
   searchResults: Artist[];
   relatedSearchResults: Artist[];
   searchMainInfo: Artist | null;
-  trackSearchResults: Track[];
+  trackSearchResults: SpotifyTrackLite[];
   searchTrigger: number;
   isSearching: boolean;
   setSearchQuery: (query: string) => void;
   setSearchResults: (results: Artist[]) => void;
   setRelatedSearchResults: (results: Artist[]) => void;
   setSearchMainInfo: (info: Artist | null) => void;
-  setTrackSearchResults: (results: Track[]) => void;
+  setTrackSearchResults: (results: SpotifyTrackLite[]) => void;
   setSearchTrigger: (ts: number) => void;
   setSearching: (searching: boolean) => void;
 

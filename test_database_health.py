@@ -222,7 +222,6 @@ def run_checks(session: Session) -> Tuple[Dict[str, int], List[str]]:
     artist_ids = session.exec(select(Artist.id)).all()
     album_ids = session.exec(select(Album.id)).all()
     track_ids = session.exec(select(Track.id)).all()
-    playlist_ids = session.exec(select(Playlist.id)).all()
     tag_ids = session.exec(select(Tag.id)).all()
 
     issues: List[str] = []

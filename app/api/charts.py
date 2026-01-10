@@ -2,13 +2,11 @@
 Personal charts endpoints.
 """
 
-from typing import List, Optional
 from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Query
 
 from ..core.db import get_session
 from ..models.base import Track, Artist, Album, PlayHistory, Tag, TrackTag
-from ..crud import get_most_played_tracks
 from sqlmodel import select, func, and_
 
 router = APIRouter(prefix="/charts", tags=["charts"])
@@ -262,11 +260,9 @@ def get_play_trends_chart(
         if interval == "daily":
             # Daily trends
             date_trunc = "date"
-            interval_days = 1
         elif interval == "weekly":
             # Weekly trends
             date_trunc = "week"
-            interval_days = 7
         else:
             raise HTTPException(status_code=400, detail="Invalid interval")
 
@@ -326,8 +322,13 @@ def get_tag_popularity_chart(
 
         if start or end:
             # Need to join with PlayHistory to filter by date
-            query = query.join(Track, Track.id == TrackTag.track_id) \
-                          .join(PlayHistory, PlayHistory.track_id == Track.id)
+            query = query.join(
+                Track,
+                Track.id == TrackTag.track_id
+            ).join(
+                PlayHistory,
+                PlayHistory.track_id == Track.id
+            )
 
             if start:
                 query = query.where(PlayHistory.played_at >= start)

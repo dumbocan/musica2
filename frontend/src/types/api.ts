@@ -105,6 +105,13 @@ export interface User {
   updated_at: string;
 }
 
+export interface AccountLookupResponse {
+  id: number;
+  name: string;
+  username: string;
+  email: string;
+}
+
 // API Request/Response Types
 export interface SearchArtistsRequest {
   q: string;
@@ -158,25 +165,7 @@ export interface SpotifyTrackLite {
     spotify: string;
   };
   album?: {
-    name: string;
-    images?: Array<{ url: string; height: number | null; width: number | null }>;
-  };
-  artists: Array<{
-    id: string;
-    name: string;
-  }>;
-}
-
-export interface SpotifyTrackLite {
-  id: string;
-  name: string;
-  duration_ms: number;
-  popularity: number;
-  preview_url: string | null;
-  external_urls?: {
-    spotify: string;
-  };
-  album?: {
+    id?: string;
     name: string;
     images?: Array<{ url: string; height: number | null; width: number | null }>;
   };

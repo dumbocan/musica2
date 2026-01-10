@@ -4,7 +4,7 @@ Handles user registration, login, and token management.
 """
 
 from datetime import datetime, timedelta
-from typing import Optional, Union
+from typing import Optional
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
@@ -17,7 +17,7 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # JWT configuration
 SECRET_KEY = settings.JWT_SECRET_KEY
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30  # Token expires in 30 minutes
+ACCESS_TOKEN_EXPIRE_MINUTES = 24 * 60  # Token expires in 24 hours
 
 # Bearer token authentication
 security = HTTPBearer()
@@ -68,6 +68,21 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) 
 def get_current_user_id(token_data: dict = Depends(verify_token)) -> int:
     """Extract user ID from JWT token payload."""
     return token_data.get("user_id")
+
+def decode_token(token: str) -> dict:
+    """Decode JWT token string and validate expiration/signature."""
+    try:
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError as exc:
+        raise ValueError("Invalid or expired token") from exc
+
+def get_current_user_id_from_token(token: str) -> int:
+    """Extract user ID from a raw JWT token string."""
+    payload = decode_token(token)
+    user_id = payload.get("user_id")
+    if user_id is None:
+        raise ValueError("Invalid token payload")
+    return user_id
 
 def create_user_token(user_id: int, email: str) -> str:
     """Create access token for user."""

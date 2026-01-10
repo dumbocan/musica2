@@ -8,14 +8,15 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Depends
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
+from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select
 
 from app.core.youtube import youtube_client
 from app.core.spotify import spotify_client
-from app.core.db import get_session
+from app.core.db import get_session, SessionDep
 from app.crud import save_youtube_download
 from app.models.base import Album, Artist, Track, YouTubeDownload
 
@@ -34,19 +35,29 @@ class YoutubeTrackRefreshRequest(BaseModel):
     album: Optional[str] = None
 
 
-def _resolve_track_metadata(video_id: str) -> Tuple[Optional[YouTubeDownload], Optional[Track], Optional[Album], Optional[Artist]]:
+def _fetch_existing_download_ids(track_ids: List[str]) -> set[str]:
     with get_session() as session:
-        row = session.exec(
-            select(YouTubeDownload, Track, Album, Artist)
-            .join(Track, Track.spotify_id == YouTubeDownload.spotify_track_id)
-            .join(Artist, Artist.id == Track.artist_id)
-            .outerjoin(Album, Album.id == Track.album_id)
-            .where(YouTubeDownload.youtube_video_id == video_id)
-        ).first()
-        if not row:
-            return None, None, None, None
-        download, track, album, artist = row
-        return download, track, album, artist
+        rows = session.exec(
+            select(YouTubeDownload.spotify_track_id).where(YouTubeDownload.spotify_track_id.in_(track_ids))
+        ).all()
+    return {row[0] for row in rows if row[0]}
+
+
+async def _resolve_track_metadata(
+    video_id: str,
+    session: AsyncSession,
+) -> Tuple[Optional[YouTubeDownload], Optional[Track], Optional[Album], Optional[Artist]]:
+    row = (await session.exec(
+        select(YouTubeDownload, Track, Album, Artist)
+        .join(Track, Track.spotify_id == YouTubeDownload.spotify_track_id)
+        .join(Artist, Artist.id == Track.artist_id)
+        .outerjoin(Album, Album.id == Track.album_id)
+        .where(YouTubeDownload.youtube_video_id == video_id)
+    )).first()
+    if not row:
+        return None, None, None, None
+    download, track, album, artist = row
+    return download, track, album, artist
 
 
 async def _prefetch_album_links(spotify_album_id: str):
@@ -59,14 +70,10 @@ async def _prefetch_album_links(spotify_album_id: str):
         default_artist_name = default_artist.get("name", "")
         default_artist_id = default_artist.get("id")
 
-        existing_downloads = {}
+        existing_downloads = set()
         track_ids = [track.get("id") for track in tracks if track.get("id")]
         if track_ids:
-            with get_session() as session:
-                rows = session.exec(
-                    select(YouTubeDownload).where(YouTubeDownload.spotify_track_id.in_(track_ids))
-                ).all()
-            existing_downloads = {row.spotify_track_id: row for row in rows}
+            existing_downloads = await asyncio.to_thread(_fetch_existing_download_ids, track_ids)
 
         for index, track in enumerate(tracks):
             artist_info = (track.get("artists") or [{}])[0]
@@ -77,8 +84,7 @@ async def _prefetch_album_links(spotify_album_id: str):
             if not spotify_track_id or not artist_name:
                 continue
 
-            existing = existing_downloads.get(spotify_track_id)
-            if existing:
+            if spotify_track_id in existing_downloads:
                 continue
 
             try:
@@ -90,7 +96,7 @@ async def _prefetch_album_links(spotify_album_id: str):
                 )
                 if videos:
                     best = videos[0]
-                    save_youtube_download({
+                    await asyncio.to_thread(save_youtube_download, {
                         "spotify_track_id": spotify_track_id,
                         "spotify_artist_id": artist_id,
                         "youtube_video_id": best["video_id"],
@@ -99,7 +105,7 @@ async def _prefetch_album_links(spotify_album_id: str):
                         "error_message": None
                     })
                 else:
-                    save_youtube_download({
+                    await asyncio.to_thread(save_youtube_download, {
                         "spotify_track_id": spotify_track_id,
                         "spotify_artist_id": artist_id,
                         "youtube_video_id": "",
@@ -108,7 +114,7 @@ async def _prefetch_album_links(spotify_album_id: str):
                         "error_message": "Video not found"
                     })
             except HTTPException as exc:
-                save_youtube_download({
+                await asyncio.to_thread(save_youtube_download, {
                     "spotify_track_id": spotify_track_id,
                     "spotify_artist_id": artist_id,
                     "youtube_video_id": "",
@@ -121,7 +127,7 @@ async def _prefetch_album_links(spotify_album_id: str):
                     break
             except Exception as err:
                 logger.warning("Failed to cache YouTube link for %s: %s", spotify_track_id, err)
-                save_youtube_download({
+                await asyncio.to_thread(save_youtube_download, {
                     "spotify_track_id": spotify_track_id,
                     "spotify_artist_id": artist_id,
                     "youtube_video_id": "",
@@ -203,23 +209,25 @@ async def search_music_videos(
 
 
 @router.post("/album/{spotify_id}/prefetch")
-async def prefetch_album_youtube_links(spotify_id: str):
+async def prefetch_album_youtube_links(
+    spotify_id: str,
+    session: AsyncSession = Depends(SessionDep),
+):
     """
     Schedule a background job to fetch YouTube links for every track in an album.
     """
-    with get_session() as session:
-        album = session.exec(
-            select(Album).where(Album.spotify_id == spotify_id)
-        ).first()
-        if album:
-            existing = session.exec(
-                select(YouTubeDownload.spotify_track_id)
-                .join(Track, Track.spotify_id == YouTubeDownload.spotify_track_id)
-                .where(Track.album_id == album.id)
-                .limit(1)
-            ).first()
-            if existing:
-                return {"status": "cached", "message": "Links already cached for this album"}
+    album = (await session.exec(
+        select(Album).where(Album.spotify_id == spotify_id)
+    )).first()
+    if album:
+        existing = (await session.exec(
+            select(YouTubeDownload.spotify_track_id)
+            .join(Track, Track.spotify_id == YouTubeDownload.spotify_track_id)
+            .where(Track.album_id == album.id)
+            .limit(1)
+        )).first()
+        if existing:
+            return {"status": "cached", "message": "Links already cached for this album"}
 
     if spotify_id in prefetch_tasks and not prefetch_tasks[spotify_id].done():
         return {"status": "running", "message": "Prefetch already in progress"}
@@ -314,7 +322,8 @@ def get_track_youtube_links(payload: YoutubeLinkBatchRequest):
 @router.post("/track/{spotify_track_id}/refresh")
 async def refresh_track_youtube_link(
     spotify_track_id: str,
-    payload: YoutubeTrackRefreshRequest
+    payload: YoutubeTrackRefreshRequest,
+    session: AsyncSession = Depends(SessionDep),
 ):
     """
     Search YouTube for a track and persist the link. Intended for user-triggered play.
@@ -324,20 +333,19 @@ async def refresh_track_youtube_link(
     album_name = payload.album
     spotify_artist_id = None
 
-    with get_session() as session:
-        row = session.exec(
-            select(Track, Artist, Album)
-            .join(Artist, Artist.id == Track.artist_id)
-            .outerjoin(Album, Album.id == Track.album_id)
-            .where(Track.spotify_id == spotify_track_id)
-        ).first()
+    row = (await session.exec(
+        select(Track, Artist, Album)
+        .join(Artist, Artist.id == Track.artist_id)
+        .outerjoin(Album, Album.id == Track.album_id)
+        .where(Track.spotify_id == spotify_track_id)
+    )).first()
 
-        if row:
-            track, artist, album = row
-            artist_name = artist.name or artist_name
-            track_name = track.name or track_name
-            album_name = album.name if album else album_name
-            spotify_artist_id = artist.spotify_id
+    if row:
+        track, artist, album = row
+        artist_name = artist.name or artist_name
+        track_name = track.name or track_name
+        album_name = album.name if album else album_name
+        spotify_artist_id = artist.spotify_id
 
     if not artist_name or not track_name:
         raise HTTPException(status_code=400, detail="Artist and track are required to search YouTube")
@@ -351,7 +359,7 @@ async def refresh_track_youtube_link(
         )
         if videos:
             best = videos[0]
-            save_youtube_download({
+            await asyncio.to_thread(save_youtube_download, {
                 "spotify_track_id": spotify_track_id,
                 "spotify_artist_id": spotify_artist_id,
                 "youtube_video_id": best["video_id"],
@@ -366,7 +374,7 @@ async def refresh_track_youtube_link(
                 "youtube_url": best["url"],
                 "error_message": None
             }
-        save_youtube_download({
+        await asyncio.to_thread(save_youtube_download, {
             "spotify_track_id": spotify_track_id,
             "spotify_artist_id": spotify_artist_id,
             "youtube_video_id": "",
@@ -382,7 +390,7 @@ async def refresh_track_youtube_link(
             "error_message": "Video not found"
         }
     except HTTPException as exc:
-        save_youtube_download({
+        await asyncio.to_thread(save_youtube_download, {
             "spotify_track_id": spotify_track_id,
             "spotify_artist_id": spotify_artist_id,
             "youtube_video_id": "",
@@ -478,10 +486,6 @@ async def get_track_videos(
     - **max_results**: Maximum number of videos to return (1-10)
     """
     try:
-        from app.core.db import SessionDep
-        from sqlmodel import select
-        from app.models.base import Track, Artist, Album
-        
         # Get track with artist info from database
         track = await Track.get_track_with_details(track_id)
         if not track:
@@ -526,9 +530,6 @@ async def get_artist_videos(
     - **max_results**: Maximum number of videos to return (1-25)
     """
     try:
-        from sqlmodel import select
-        from app.models.base import Artist, Track
-        
         # Get artist and their tracks
         artist = await Artist.get_artist_with_tracks(artist_id)
         if not artist:
@@ -577,7 +578,7 @@ async def youtube_health_check():
     """
     try:
         # Test basic connectivity to YouTube API
-        test_videos = await youtube_client.search_videos("test", max_results=1)
+        await youtube_client.search_videos("test", max_results=1)
         downloads_dir = youtube_client.download_dir.exists()
         return {
             "status": "ok",
@@ -600,7 +601,8 @@ async def download_audio(
     video_id: str,
     format: str = Query("mp3", description="Audio format (mp3, m4a, etc.)"),
     quality: str = Query("bestaudio", description="Audio quality (bestaudio, best, worst)"),
-    to_device: bool = Query(False, description="Stream directly to device instead of storing")
+    to_device: bool = Query(False, description="Stream directly to device instead of storing"),
+    session: AsyncSession = Depends(SessionDep),
 ):
     """
     Download audio from a YouTube video.
@@ -622,7 +624,7 @@ async def download_audio(
             )
         else:
             # Store in backend for caching/recovery
-            download, track, album, artist = _resolve_track_metadata(video_id)
+            download, track, album, artist = await _resolve_track_metadata(video_id, session)
             if track and artist and album:
                 result = await youtube_client.download_audio_for_album_track(
                     video_id=video_id,
@@ -649,7 +651,7 @@ async def download_audio(
 
             if download and result.get("file_path"):
                 status = result.get("status") or "completed"
-                save_youtube_download({
+                await asyncio.to_thread(save_youtube_download, {
                     "spotify_track_id": download.spotify_track_id,
                     "spotify_artist_id": download.spotify_artist_id,
                     "youtube_video_id": video_id,
@@ -667,7 +669,8 @@ async def download_audio(
 @router.get("/download/{video_id}/status")
 async def check_download_status(
     video_id: str,
-    format: str = Query("mp3", description="Audio format")
+    format: str = Query("mp3", description="Audio format"),
+    session: AsyncSession = Depends(SessionDep),
 ):
     """
     Check if an audio file exists for a video.
@@ -676,7 +679,7 @@ async def check_download_status(
     - **format**: Audio format
     """
     try:
-        download, _, _, _ = _resolve_track_metadata(video_id)
+        download, _, _, _ = await _resolve_track_metadata(video_id, session)
         if download and download.download_path:
             path = Path(download.download_path)
             if path.exists():
@@ -696,7 +699,8 @@ async def check_download_status(
 @router.get("/download/{video_id}/file")
 async def get_downloaded_file(
     video_id: str,
-    format: str = Query("mp3", description="Audio format")
+    format: str = Query("mp3", description="Audio format"),
+    session: AsyncSession = Depends(SessionDep),
 ):
     """
     Serve a downloaded audio file.
@@ -705,7 +709,7 @@ async def get_downloaded_file(
     - **format**: Audio format
     """
     try:
-        download, track, _, _ = _resolve_track_metadata(video_id)
+        download, track, _, _ = await _resolve_track_metadata(video_id, session)
         if download and download.download_path:
             path = Path(download.download_path)
             if path.exists():
@@ -729,7 +733,7 @@ async def get_downloaded_file(
         try:
             video_details = await youtube_client.get_video_details(video_id)
             filename = f"{video_details['title']}.{format}"
-        except:
+        except Exception:
             filename = f"{video_id}.{format}"
 
         media_type = "audio/mp4" if format in ("m4a", "mp4") else "audio/mpeg"
@@ -750,7 +754,8 @@ async def get_downloaded_file(
 async def stream_audio(
     video_id: str,
     format: str = Query("m4a", description="Stream format (m4a, webm)"),
-    cache: bool = Query(True, description="Cache streamed audio in downloads")
+    cache: bool = Query(True, description="Cache streamed audio in downloads"),
+    session: AsyncSession = Depends(SessionDep),
 ):
     """
     Stream audio directly while downloading it from YouTube.
@@ -761,7 +766,7 @@ async def stream_audio(
     """
     try:
         output_path = None
-        download, track, album, artist = _resolve_track_metadata(video_id)
+        download, track, album, artist = await _resolve_track_metadata(video_id, session)
         if track and artist and album:
             output_path = youtube_client.get_album_download_path(
                 artist.name,
@@ -784,7 +789,7 @@ async def stream_audio(
         )
         if cache and download and output_path:
             ext = result.get("ext") or format
-            save_youtube_download({
+            await asyncio.to_thread(save_youtube_download, {
                 "spotify_track_id": download.spotify_track_id,
                 "spotify_artist_id": download.spotify_artist_id,
                 "youtube_video_id": video_id,
@@ -829,7 +834,8 @@ async def list_downloads():
 @router.delete("/download/{video_id}")
 async def delete_download(
     video_id: str,
-    format: str = Query("mp3", description="Audio format")
+    format: str = Query("mp3", description="Audio format"),
+    session: AsyncSession = Depends(SessionDep),
 ):
     """
     Delete a downloaded audio file.
@@ -838,7 +844,7 @@ async def delete_download(
     - **format**: Audio format
     """
     try:
-        download, _, _, _ = _resolve_track_metadata(video_id)
+        download, _, _, _ = await _resolve_track_metadata(video_id, session)
         if download and download.download_path:
             path = Path(download.download_path)
             if path.exists():

@@ -15,12 +15,9 @@ from app.core.db import create_db_and_tables
 from app.core.data_freshness import data_freshness_manager
 from app.crud import (
     save_artist, get_artist_by_spotify_id, save_album, save_track,
-    create_playlist, record_play, generate_top_rated_playlist
 )
 from app.core.spotify import spotify_client
 from app.core.lastfm import lastfm_client
-from app.schemas.auth import UserCreate
-from datetime import datetime
 
 
 async def setup_test_data():
@@ -56,7 +53,7 @@ async def test_user_search(user_id: int, query: str):
             # Check if data needs refresh
             needs_refresh = await data_freshness_manager.should_refresh_artist(existing_artist)
             if needs_refresh:
-                print(f"🔄 Artist data is stale, refreshing...")
+                print("🔄 Artist data is stale, refreshing...")
                 success = await data_freshness_manager.refresh_artist_data(first_artist['id'])
                 if success:
                     print("✅ Artist data refreshed")
@@ -72,7 +69,7 @@ async def test_user_search(user_id: int, query: str):
 
         else:
             # Save new artist to DB
-            print(f"💾 Saving new artist to DB...")
+            print("💾 Saving new artist to DB...")
             artist = save_artist(first_artist)
             print(f"✅ Artist saved (ID: {artist.id})")
 
@@ -118,7 +115,7 @@ async def test_user_search(user_id: int, query: str):
             print(f"   {i}. {track.name} (Popularity: {track.popularity}, Last.fm: {track.lastfm_listeners})")
 
         # 4. Show data freshness report
-        print(f"📊 Data freshness status after search:")
+        print("📊 Data freshness status after search:")
         report = await data_freshness_manager.get_data_freshness_report()
         print(f"   Artists: {report['artists']['total']} total, {report['artists']['fresh']} fresh")
         print(f"   Downloads: {report['downloads']['total_attempts']} attempts, {report['downloads']['completed']} completed")
@@ -144,7 +141,7 @@ async def run_multi_user_test():
     await test_user_search(user_id=2, query="Gorillaz")
 
     # Show final data freshness report
-    print(f"\n📈 FINAL DATA FRESHNESS REPORT")
+    print("\n📈 FINAL DATA FRESHNESS REPORT")
     print("=" * 40)
 
     try:

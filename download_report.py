@@ -118,7 +118,7 @@ def generate_download_report():
         if completed_downloads:
             total_size_bytes = sum(d.file_size or 0 for d in completed_downloads)
             total_size_mb = total_size_bytes / (1024 * 1024)
-            print('.1f')
+            print(f'   • Total size downloaded: {total_size_mb:.1f} MB')
             print()
             print('📄 COMPLETED DOWNLOADS:')
             for download in completed_downloads:

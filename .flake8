@@ -1,0 +1,11 @@
+[flake8]
+exclude =
+    venv,
+    frontend,
+    node_modules,
+    downloads,
+    cache,
+    storage,
+    __pycache__
+max-line-length = 120
+ignore = E501,E302,E303,W293,W503,W504,E402,E226,E305,E261,E231,W391

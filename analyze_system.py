@@ -41,8 +41,8 @@ async def main():
             popularity = track.get('popularity', 'N/A')
             print(f'   {i}. "{name}" (popularidad: {popularity})')
 
-        print(f'\n📊 Resumen:')
-        print(f'   🎤 Artista principal: Eminem')
+        print('\n📊 Resumen:')
+        print('   🎤 Artista principal: Eminem')
         print(f'   🎵 Top tracks identificados: {len(top_tracks)}')
         print(f'   🎸 Artistas similares encontrados: {len(similar_top[:3])}')
 
@@ -61,7 +61,10 @@ async def main():
             status = "✅ Usar" if i <= 3 else "⏳ Backup"
             print(f'   {i}. {name} → 3 mejores pistas (compatibilidad: {match:.2f}) {status}')
 
-        print(f'\n🎪 **TOTAL DESCARGAS PROPUESTAS:** {len(eminem_tracks)} (Eminem) + {3*3} (related) = {len(eminem_tracks)+9} tracks')
+        print(
+            f'\n🎪 **TOTAL DESCARGAS PROPUESTAS:** {len(eminem_tracks)} (Eminem) + {3 * 3} (related) = '
+            f'{len(eminem_tracks) + 9} tracks'
+        )
 
     except Exception as e:
         print(f'❌ Error con Spotify: {e}')

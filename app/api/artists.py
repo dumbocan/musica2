@@ -2,15 +2,17 @@
 Artist endpoints: search, discography, etc.
 """
 
+import asyncio
 import logging
 import json
 import ast
 from typing import List
 
-from fastapi import APIRouter, Query, Path, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Query, Path, HTTPException, BackgroundTasks, Depends
 from sqlalchemy import desc, asc, func
-
-logger = logging.getLogger(__name__)
+from sqlmodel.ext.asyncio.session import AsyncSession
+from sqlmodel import select
+from sqlalchemy.orm import selectinload
 
 from ..core.spotify import spotify_client
 from ..crud import (
@@ -21,14 +23,14 @@ from ..crud import (
     unhide_artist_for_user,
     list_hidden_artists
 )
-from ..core.db import get_session
+from ..core.db import get_session, SessionDep
 from ..models.base import Artist, Album, Track, YouTubeDownload
 from ..core.lastfm import lastfm_client
 from ..core.auto_download import auto_download_service
 from ..core.data_freshness import data_freshness_manager
 from ..core.image_proxy import proxy_image_list
-from sqlmodel import select
-from sqlalchemy.orm import selectinload
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/artists", tags=["artists"])
 
@@ -121,7 +123,10 @@ async def search_artists_auto_download(
     }
 
 @router.get("/{spotify_id}/albums")
-async def get_artist_albums(spotify_id: str = Path(..., description="Spotify artist ID")) -> List[dict]:
+async def get_artist_albums(
+    spotify_id: str = Path(..., description="Spotify artist ID"),
+    session: AsyncSession = Depends(SessionDep),
+) -> List[dict]:
     """Get all albums for an artist via Spotify API."""
     albums = await spotify_client.get_artist_albums(spotify_id)
     album_ids = [album.get("id") for album in albums if album.get("id")]
@@ -131,46 +136,45 @@ async def get_artist_albums(spotify_id: str = Path(..., description="Spotify art
     downloaded_tracks: set[str] = set()
 
     if album_ids:
-        with get_session() as session:
-            rows = session.exec(
-                select(
-                    Album.spotify_id,
-                    func.count(func.distinct(YouTubeDownload.spotify_track_id)).label("link_count"),
-                )
-                .join(Track, Track.album_id == Album.id)
-                .join(YouTubeDownload, YouTubeDownload.spotify_track_id == Track.spotify_id)
-                .where(
-                    Album.spotify_id.in_(album_ids),
-                    YouTubeDownload.youtube_video_id.is_not(None),
-                    YouTubeDownload.youtube_video_id != "",
-                    YouTubeDownload.download_status.in_(("link_found", "completed")),
-                )
-                .group_by(Album.spotify_id)
-            ).all()
-            counts = {album_spotify_id: int(count) for album_spotify_id, count in rows}
+        rows = (await session.exec(
+            select(
+                Album.spotify_id,
+                func.count(func.distinct(YouTubeDownload.spotify_track_id)).label("link_count"),
+            )
+            .join(Track, Track.album_id == Album.id)
+            .join(YouTubeDownload, YouTubeDownload.spotify_track_id == Track.spotify_id)
+            .where(
+                Album.spotify_id.in_(album_ids),
+                YouTubeDownload.youtube_video_id.is_not(None),
+                YouTubeDownload.youtube_video_id != "",
+                YouTubeDownload.download_status.in_(("link_found", "completed")),
+            )
+            .group_by(Album.spotify_id)
+        )).all()
+        counts = {album_spotify_id: int(count) for album_spotify_id, count in rows}
 
-            local_rows = session.exec(
-                select(Album.spotify_id, Track.spotify_id)
-                .join(Track, Track.album_id == Album.id)
-                .where(
-                    Album.spotify_id.in_(album_ids),
-                    Track.spotify_id.is_not(None),
-                )
-            ).all()
-            for album_spotify_id, track_spotify_id in local_rows:
-                if track_spotify_id:
-                    local_tracks.setdefault(album_spotify_id, set()).add(track_spotify_id)
+        local_rows = (await session.exec(
+            select(Album.spotify_id, Track.spotify_id)
+            .join(Track, Track.album_id == Album.id)
+            .where(
+                Album.spotify_id.in_(album_ids),
+                Track.spotify_id.is_not(None),
+            )
+        )).all()
+        for album_spotify_id, track_spotify_id in local_rows:
+            if track_spotify_id:
+                local_tracks.setdefault(album_spotify_id, set()).add(track_spotify_id)
 
-            download_rows = session.exec(
-                select(YouTubeDownload.spotify_track_id)
-                .where(
-                    YouTubeDownload.spotify_artist_id == spotify_id,
-                    YouTubeDownload.youtube_video_id.is_not(None),
-                    YouTubeDownload.youtube_video_id != "",
-                    YouTubeDownload.download_status.in_(("link_found", "completed")),
-                )
-            ).all()
-            downloaded_tracks = {row[0] for row in download_rows if row[0]}
+        download_rows = (await session.exec(
+            select(YouTubeDownload.spotify_track_id)
+            .where(
+                YouTubeDownload.spotify_artist_id == spotify_id,
+                YouTubeDownload.youtube_video_id.is_not(None),
+                YouTubeDownload.youtube_video_id != "",
+                YouTubeDownload.download_status.in_(("link_found", "completed")),
+            )
+        )).all()
+        downloaded_tracks = {row[0] for row in download_rows if row[0]}
 
     for album in albums:
         album_id = album.get("id")
@@ -210,27 +214,27 @@ async def save_artist_to_db(spotify_id: str = Path(..., description="Spotify art
     artist_data = await spotify_client.get_artist(spotify_id)
     if not artist_data:
         raise HTTPException(status_code=404, detail="Artist not found on Spotify")
-    artist = save_artist(artist_data)
+    artist = await asyncio.to_thread(save_artist, artist_data)
     return {"message": "Artist saved to DB", "artist": artist.dict()}
 
 
 @router.post("/{spotify_id}/sync-discography")
-async def sync_artist_discography(spotify_id: str = Path(..., description="Spotify artist ID")):
+async def sync_artist_discography(
+    spotify_id: str = Path(..., description="Spotify artist ID"),
+    session: AsyncSession = Depends(SessionDep),
+):
     """Sync artist's discography: fetch and save new albums/tracks from Spotify."""
-    with get_session() as session:
-        artist = session.exec(select(Artist).where(Artist.spotify_id == spotify_id)).first()
-        if not artist:
-            raise HTTPException(status_code=404, detail="Artist not saved locally")
+    artist = (await session.exec(select(Artist).where(Artist.spotify_id == spotify_id))).first()
+    if not artist:
+        raise HTTPException(status_code=404, detail="Artist not saved locally")
 
     # Fetch all albums
     albums_data = await spotify_client.get_artist_albums(spotify_id)
 
     from ..crud import save_album
     synced_albums = 0
-    synced_tracks = 0
-
     for album_data in albums_data:
-        album = save_album(album_data)
+        album = await asyncio.to_thread(save_album, album_data)
         # Since save_album saves tracks if album new, count
         if not album.spotify_id:  # If it was new, but since update, difficult to count
             synced_albums += 1
@@ -285,7 +289,7 @@ async def get_artist_info(spotify_id: str = Path(..., description="Spotify artis
             lastfm_data = await lastfm_client.get_artist_info(name)
     except Exception as exc:
         # Don't fail the request on Last.fm issues
-        print(f"[artist_info] lastfm fetch failed for {spotify_id}: {exc}")
+        logger.warning("[artist_info] lastfm fetch failed for %s: %s", spotify_id, exc)
         lastfm_data = {}
 
     # Persist artist/albums/tracks in background (best effort)
@@ -304,31 +308,6 @@ async def get_artist_recommendations(spotify_id: str = Path(..., description="Sp
     """Get music recommendations based on artist (tracks and artists)."""
     recommendations = await spotify_client.get_recommendations(seed_artists=[spotify_id], limit=20)
     return recommendations
-
-
-@router.get("/{spotify_id}/info")
-async def get_artist_info(spotify_id: str = Path(..., description="Spotify artist ID")):
-    """Get artist info from Spotify + Last.fm bio/tags/listeners (no DB write)."""
-    from ..core.lastfm import lastfm_client
-
-    spotify_data = await spotify_client.get_artist(spotify_id)
-    if not spotify_data:
-        raise HTTPException(status_code=404, detail="Artist not found on Spotify")
-
-    lastfm_data = {}
-    try:
-        name = spotify_data.get("name")
-        if name:
-            lastfm_data = await lastfm_client.get_artist_info(name)
-    except Exception as exc:
-        # Don't fail the request on Last.fm issues
-        print(f"[artist_info] lastfm fetch failed for {spotify_id}: {exc}")
-        lastfm_data = {}
-
-    return {
-        "spotify": spotify_data,
-        "lastfm": lastfm_data
-    }
 
 
 @router.get("/{spotify_id}/related")
@@ -358,7 +337,7 @@ async def get_related_artists(spotify_id: str = Path(..., description="Spotify a
     try:
         similar = await asyncio.wait_for(lastfm_client.get_similar_artists(main_name, limit=8), timeout=5.0)
     except Exception as exc:
-        print(f"[related] Last.fm similar failed for {main_name}: {exc}")
+        logger.warning("[related] Last.fm similar failed for %s: %s", main_name, exc)
         similar = []
 
     for s in similar:
@@ -417,10 +396,6 @@ async def get_related_artists(spotify_id: str = Path(..., description="Spotify a
 @router.get("/id/{artist_id}/discography")
 def get_artist_discography(artist_id: int = Path(..., description="Local artist ID")):
     """Get artist with full discography: albums + tracks from DB."""
-    from ..models.base import Album, Track
-    from ..core.db import get_session
-    from sqlmodel import select
-
     with get_session() as session:
         # Get artist with albums
         artist = session.exec(
@@ -491,7 +466,8 @@ async def get_artists(
         "pop-desc",
         pattern="^(pop-desc|pop-asc|name-asc)$",
         description="Ordering for returned artists"
-    )
+    ),
+    session: AsyncSession = Depends(SessionDep),
 ) -> dict:
     """Get saved artists with pagination, ordering, and ensure cached images are proxied."""
     order_by_map = {
@@ -500,29 +476,28 @@ async def get_artists(
         "name-asc": [asc(Artist.name), asc(Artist.id)]
     }
     order_by_clause = order_by_map.get(order, order_by_map["pop-desc"])
-    with get_session() as session:
-        total = session.exec(select(func.count()).select_from(Artist)).one()
-        statement = select(Artist).order_by(*order_by_clause).offset(offset).limit(limit)
-        artists = session.exec(statement).all()
-        needs_commit = False
-        for artist in artists:
-            stored_images = _parse_images_field(artist.images)
-            if _is_proxied_images(stored_images):
-                continue
-            proxied = proxy_image_list(stored_images, size=256)
-            if not proxied and artist.spotify_id:
-                try:
-                    spotify_data = await spotify_client.get_artist(artist.spotify_id)
-                    proxied = proxy_image_list(spotify_data.get("images", []), size=256)
-                except Exception as exc:
-                    logger.warning("Failed to refresh artist %s images: %s", artist.spotify_id, exc)
-                    proxied = []
-            if proxied:
-                artist.images = json.dumps(proxied)
-                session.add(artist)
-                needs_commit = True
-        if needs_commit:
-            session.commit()
+    total = (await session.exec(select(func.count()).select_from(Artist))).one()
+    statement = select(Artist).order_by(*order_by_clause).offset(offset).limit(limit)
+    artists = (await session.exec(statement)).all()
+    needs_commit = False
+    for artist in artists:
+        stored_images = _parse_images_field(artist.images)
+        if _is_proxied_images(stored_images):
+            continue
+        proxied = proxy_image_list(stored_images, size=256)
+        if not proxied and artist.spotify_id:
+            try:
+                spotify_data = await spotify_client.get_artist(artist.spotify_id)
+                proxied = proxy_image_list(spotify_data.get("images", []), size=256)
+            except Exception as exc:
+                logger.warning("Failed to refresh artist %s images: %s", artist.spotify_id, exc)
+                proxied = []
+        if proxied:
+            artist.images = json.dumps(proxied)
+            session.add(artist)
+            needs_commit = True
+    if needs_commit:
+        await session.commit()
     return {"items": artists, "total": int(total)}
 
 
@@ -590,7 +565,7 @@ async def save_full_discography(spotify_id: str = Path(..., description="Spotify
 
     # Save artist
     from ..crud import save_artist
-    artist = save_artist(artist_data)
+    artist = await asyncio.to_thread(save_artist, artist_data)
 
     # Get albums
     albums_data = await spotify_client.get_artist_albums(spotify_id)
@@ -604,12 +579,12 @@ async def save_full_discography(spotify_id: str = Path(..., description="Spotify
 
         # Save album and tracks
         from ..crud import save_album, save_track
-        album = save_album(album_data)
+        album = await asyncio.to_thread(save_album, album_data)
         if album.spotify_id:  # Album was saved (not duplicate)
             saved_albums += 1
             artist_id = album.artist_id
             for track_data in tracks_data:
-                save_track(track_data, album.id, artist_id)
+                await asyncio.to_thread(save_track, track_data, album.id, artist_id)
                 saved_tracks += 1
 
     return {
@@ -620,12 +595,14 @@ async def save_full_discography(spotify_id: str = Path(..., description="Spotify
     }
 
 @router.post("/enrich_bio/{artist_id}")
-async def enrich_artist_bio(artist_id: int = Path(..., description="Local artist ID")):
+async def enrich_artist_bio(
+    artist_id: int = Path(..., description="Local artist ID"),
+    session: AsyncSession = Depends(SessionDep),
+):
     """Fetch and enrich artist bio from Last.fm."""
-    with get_session() as session:
-        artist = session.exec(select(Artist).where(Artist.id == artist_id)).first()
-        if not artist:
-            raise HTTPException(status_code=404, detail="Artist not found")
+    artist = (await session.exec(select(Artist).where(Artist.id == artist_id))).first()
+    if not artist:
+        raise HTTPException(status_code=404, detail="Artist not found")
 
     # Fetch Last.fm bio using artist name
     bio_data = await lastfm_client.get_artist_info(artist.name)
@@ -633,7 +610,7 @@ async def enrich_artist_bio(artist_id: int = Path(..., description="Local artist
     bio_content = bio_data['content']
 
     # Update DB
-    updated_artist = update_artist_bio(artist_id, bio_summary, bio_content)
+    updated_artist = await asyncio.to_thread(update_artist_bio, artist_id, bio_summary, bio_content)
     return {"message": "Artist bio enriched", "artist": updated_artist.dict() if updated_artist else {}}
 
 
@@ -706,7 +683,10 @@ async def manual_download_top_tracks(
 
 
 @router.post("/{spotify_id}/refresh-data")
-async def refresh_artist_data(spotify_id: str = Path(..., description="Spotify artist ID")):
+async def refresh_artist_data(
+    spotify_id: str = Path(..., description="Spotify artist ID"),
+    session: AsyncSession = Depends(SessionDep),
+):
     """
     Force refresh all data for an artist from external APIs.
 
@@ -714,13 +694,9 @@ async def refresh_artist_data(spotify_id: str = Path(..., description="Spotify a
     """
     try:
         # First ensure artist exists locally
-        session = get_session()
-        try:
-            artist = session.exec(select(Artist).where(Artist.spotify_id == spotify_id)).first()
-            if not artist:
-                raise HTTPException(status_code=404, detail="Artist not found locally. Save artist first.")
-        finally:
-            session.close()
+        artist = (await session.exec(select(Artist).where(Artist.spotify_id == spotify_id))).first()
+        if not artist:
+            raise HTTPException(status_code=404, detail="Artist not found locally. Save artist first.")
 
         # Refresh artist metadata
         await data_freshness_manager.refresh_artist_data(spotify_id)
@@ -776,7 +752,10 @@ async def bulk_refresh_stale_data(max_artists: int = Query(10, description="Maxi
 
 
 @router.get("/{spotify_id}/content-changes")
-async def check_artist_content_changes(spotify_id: str = Path(..., description="Spotify artist ID")):
+async def check_artist_content_changes(
+    spotify_id: str = Path(..., description="Spotify artist ID"),
+    session: AsyncSession = Depends(SessionDep),
+):
     """
     Check what new content is available for an artist since last sync.
 
@@ -784,13 +763,9 @@ async def check_artist_content_changes(spotify_id: str = Path(..., description="
     """
     try:
         # First ensure artist exists locally
-        session = get_session()
-        try:
-            artist = session.exec(select(Artist).where(Artist.spotify_id == spotify_id)).first()
-            if not artist:
-                raise HTTPException(status_code=404, detail="Artist not found locally. Save artist first.")
-        finally:
-            session.close()
+        artist = (await session.exec(select(Artist).where(Artist.spotify_id == spotify_id))).first()
+        if not artist:
+            raise HTTPException(status_code=404, detail="Artist not found locally. Save artist first.")
 
         # Check for new content
         new_content = await data_freshness_manager.check_for_new_artist_content(spotify_id)

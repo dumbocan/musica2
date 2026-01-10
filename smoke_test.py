@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Quick smoke test for the local API when running with SQLite.
+Quick smoke test for the local API.
 It verifies:
 - /health
 - /auth/create-first-user

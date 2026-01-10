@@ -6,7 +6,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Path, HTTPException, Query
 from ..crud import (
     create_playlist, update_playlist, delete_playlist,
-    add_track_to_playlist, remove_track_from_playlist, get_playlist_by_id
+    add_track_to_playlist, remove_track_from_playlist
 )
 from ..core.db import get_session
 from ..models.base import Playlist, PlaylistTrack, Track

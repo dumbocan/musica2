@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { audio2Api } from '@/lib/api';
 import { useApiStore } from '@/store/useApiStore';
@@ -124,14 +124,13 @@ export function SearchPage() {
           setArtistSimilar([]);
           setPage(pageToLoad);
           setVisibleCount(20);
-          const trackRes = await audio2Api.searchTracksQuick({ q: queryToUse, limit: 5 });
-          setTrackResults(trackRes.data?.tracks || []);
+          setTrackResults(tracks || []);
         } else {
           const current = useApiStore.getState();
           setSearchMainInfo(searchMainInfo || main);
           setSearchResults([...(current.searchResults as SpotifyArtist[]), ...artists]);
           setRelatedSearchResults([...(current.relatedSearchResults as SpotifyArtist[]), ...relatedFlattened]);
-          setTrackSearchResults([...(current.trackSearchResults as SpotifyTrackLite[]), ...tracks]);
+          setTrackSearchResults([...(current.trackSearchResults || []), ...tracks]);
           setLastfmArtists((prev) => [...prev, ...lastfmTop]);
           setLastfmEnriched((prev) => [...prev, ...lastfmTop]);
           setPage(pageToLoad);
@@ -143,8 +142,8 @@ export function SearchPage() {
         const data = response.data || {};
         const main = data.main as ArtistInfo | null;
         const similar = Array.isArray(data.similar) ? data.similar : [];
-        const trackRes = await audio2Api.searchTracksQuick({ q: queryToUse, limit: 5 });
-        setTrackResults(trackRes.data?.tracks || []);
+        const tracks: SpotifyTrackLite[] = Array.isArray(data.tracks) ? data.tracks : [];
+        setTrackResults(tracks || []);
         setArtistProfile(main);
         setArtistSimilar(similar);
         setSearchMainInfo(main);

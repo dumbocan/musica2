@@ -117,6 +117,8 @@ export function TracksPage() {
               ? err.message
               : 'No se pudo cargar el listado de pistas';
         setError(message);
+        setHasMore(false);
+        setNextAfter(null);
       } finally {
         setLoading(false);
         setHasLoadedOnce(true);
@@ -128,6 +130,8 @@ export function TracksPage() {
 
   const handleLoadMore = useCallback(async () => {
     if (loadingMoreRef.current || loadingMore || !hasMore) return;
+    const afterId = nextAfter ?? (tracks.length > 0 ? tracks[tracks.length - 1].track_id : null);
+    if (afterId === null) return;
     loadingMoreRef.current = true;
     setLoadingMore(true);
     try {
@@ -137,18 +141,26 @@ export function TracksPage() {
         verify_files: false,
         limit,
         include_summary: false,
-        after_id: nextAfter ?? (tracks.length > 0 ? tracks[tracks.length - 1].track_id : null),
+        after_id: afterId,
         filter: isFiltered && filter !== 'all' ? filter : undefined,
         search: isFiltered ? activeSearch : undefined,
       });
       const nextItems = response.data.items || [];
-      setTracks((prev) => {
-        const seen = new Set(prev.map((track) => track.track_id));
-        const unique = nextItems.filter((track: TrackOverview) => !seen.has(track.track_id));
-        return unique.length > 0 ? [...prev, ...unique] : prev;
-      });
-      setHasMore(Boolean(response.data.has_more));
-      setNextAfter(response.data.next_after ?? null);
+      const seen = new Set(tracks.map((track) => track.track_id));
+      const unique = nextItems.filter((track: TrackOverview) => !seen.has(track.track_id));
+      if (unique.length > 0) {
+        setTracks((prev) => [...prev, ...unique]);
+      }
+      const nextCursor = response.data.next_after ?? null;
+      const hasMoreFromServer = Boolean(response.data.has_more);
+      const didAdvance = nextCursor !== null && nextCursor !== afterId;
+      if (!unique.length || !hasMoreFromServer || !didAdvance) {
+        setHasMore(false);
+        setNextAfter(null);
+      } else {
+        setHasMore(true);
+        setNextAfter(nextCursor);
+      }
       if (response.data.filtered_total !== undefined) {
         setFilteredTotal(response.data.filtered_total ?? null);
       }
@@ -160,6 +172,8 @@ export function TracksPage() {
             ? err.message
             : 'No se pudo cargar más pistas';
       setError(message);
+      setHasMore(false);
+      setNextAfter(null);
     } finally {
       loadingMoreRef.current = false;
       setLoadingMore(false);
@@ -333,11 +347,12 @@ export function TracksPage() {
         return summary.total;
     }
   }, [filter, filteredTracks.length, filteredTotal, isFilteredView, isSearchActive, summary, favoriteTrackIds.size]);
+  const prefetchTarget = useMemo(() => Math.max(80, Math.floor(limit * 0.8)), [limit]);
   const targetFilteredCount = useMemo(() => {
     if (!isFilteredView) return 0;
-    if (filterTotal > 0) return filterTotal;
-    return Math.max(80, Math.floor(limit * 0.8));
-  }, [filterTotal, isFilteredView, limit]);
+    if (filterTotal > 0) return Math.min(filterTotal, prefetchTarget);
+    return prefetchTarget;
+  }, [filterTotal, isFilteredView, prefetchTarget]);
   const progressCount = useMemo(() => {
     const lastVisible = Math.min(
       Math.max(Math.round((scrollTop + containerHeight) / rowHeight), 0),
@@ -386,7 +401,6 @@ export function TracksPage() {
       const relativeTop = Math.max(window.scrollY - listTop, 0);
       setScrollTop(relativeTop);
       if (!hasMore || loadingMore || loading) return;
-      if (isFilteredView && filteredTracks.length >= targetFilteredCount) return;
       const currentIndex = Math.floor((relativeTop + containerHeight) / rowHeight);
       const remainingRows = Math.max(totalRows - currentIndex, 0);
       if (remainingRows <= 100) {

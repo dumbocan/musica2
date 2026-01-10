@@ -2,19 +2,13 @@
 Tags and play history endpoints.
 """
 
-from typing import List
-from datetime import datetime
-
 from fastapi import APIRouter, Path, HTTPException, Query
 
-from ..core.db import get_session
-from ..models.base import Tag, Track, PlayHistory
 from ..crud import (
-    create_tag, get_tag_by_id, get_tag_by_name, get_all_tags,
+    create_tag, get_tag_by_id, get_all_tags,
     add_tag_to_track, remove_tag_from_track, get_track_tags,
     record_play, get_play_history, get_recent_plays, get_most_played_tracks
 )
-from sqlmodel import select
 
 router = APIRouter(prefix="/tags", tags=["tags"])
 

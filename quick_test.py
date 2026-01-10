@@ -55,7 +55,7 @@ async def run_test():
             tracks_per_artist=8
         )
 
-        print(f'\n📊 GORILLAZ EXPANSION:')
+        print('\n📊 GORILLAZ EXPANSION:')
         print(f'• Similar artists added: {expansion["similar_artists_found"]}')
         print(f'• Total tracks added: {expansion["total_tracks_added"]}')
 

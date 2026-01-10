@@ -49,10 +49,15 @@ export const audio2Api = {
   login: (userData: { email: string; password: string }) =>
     api.post('/auth/login', userData),
   getCurrentUser: () => api.get('/auth/me'),
+  accountLookup: (payload: { email: string; recovery_code: string }) =>
+    api.post('/auth/account-lookup', payload),
+  resetPassword: (payload: { email: string; recovery_code: string; new_password: string }) =>
+    api.post('/auth/reset-password', payload),
 
   // Health
   healthCheck: () => api.get('/health'),
   healthDetailed: () => api.get('/health/detailed'),
+  dbStatus: () => api.get('/db-status'),
 
   // Artists
   getArtistFullDiscography: (spotifyId: string) =>

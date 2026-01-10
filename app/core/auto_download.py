@@ -3,17 +3,15 @@ Auto-download service for music tracks from YouTube.
 Handles intelligent downloading based on Spotify metadata.
 """
 
-import asyncio
 import logging
-from typing import List, Optional, Dict
+from typing import Optional, Dict
 from sqlmodel import select
 from fastapi import BackgroundTasks
 
 from app.core.youtube import youtube_client
 from app.core.spotify import spotify_client
 from app.core.data_freshness import data_freshness_manager
-from app.models.base import YouTubeDownload, Track
-from app.core.db import SessionDep
+from app.models.base import YouTubeDownload
 
 logger = logging.getLogger(__name__)
 
@@ -22,26 +20,6 @@ class AutoDownloadService:
 
     def __init__(self):
         self.max_concurrent_downloads = 3  # Limit concurrent downloads
-
-    async def get_artist_download_progress(self, artist_spotify_id: str) -> dict:
-        """
-        Simple progress stub so the endpoint does not break.
-        Returns counts of completed/pending downloads for the artist.
-        """
-        from app.core.db import get_session
-        session = get_session()
-        try:
-            downloads = session.exec(
-                select(YouTubeDownload).where(YouTubeDownload.spotify_artist_id == artist_spotify_id)
-            ).all()
-            completed = [d for d in downloads if d.download_status == "completed"]
-            return {
-                "total": len(downloads),
-                "completed": len(completed),
-                "pending": len(downloads) - len(completed)
-            }
-        finally:
-            session.close()
 
     async def is_track_downloaded(self, spotify_track_id: str, format_type: str = "mp3") -> bool:
         """
@@ -285,7 +263,7 @@ class AutoDownloadService:
                         logger.error(f"Error downloading tracks for {artist_name}: {str(artist_error)}")
                         continue
 
-                logger.info(f"✅ Comprehensive download completed:")
+                logger.info("✅ Comprehensive download completed:")
                 logger.info(f"   📀 Main artist: {main_artist_name} ({tracks_per_artist} tracks)")
                 logger.info(f"   🎸 Related artists: {downloaded_related}/{len(similar_artists)} ({downloaded_related * tracks_per_artist} tracks)")
 
@@ -318,7 +296,12 @@ class AutoDownloadService:
                 )
             ).all())
 
-            print(f"🔍 Debug: Found {total_downloads} total, {completed_downloads} completed for artist {artist_spotify_id[:10]}...")
+            logger.debug(
+                "Found %s total, %s completed for artist %s...",
+                total_downloads,
+                completed_downloads,
+                artist_spotify_id[:10],
+            )
 
             return {
                 "total_expected": 5,  # We target top 5
@@ -329,6 +312,7 @@ class AutoDownloadService:
             }
         finally:
             session.close()
+
 
 # Global service instance
 auto_download_service = AutoDownloadService()

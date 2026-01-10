@@ -4,7 +4,6 @@ Comparación completa: archivos en disco vs registros en base de datos
 """
 
 import sys
-import os
 from pathlib import Path
 sys.path.insert(0, '.')
 

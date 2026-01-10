@@ -2,26 +2,63 @@
 Advanced search endpoints.
 """
 
-from typing import Optional, List
 import asyncio
-from fastapi import APIRouter, HTTPException, Query
+import logging
+import time
+from typing import Optional
 
-from ..core.db import get_session
+from fastapi import APIRouter, HTTPException, Query, Depends
+from sqlmodel import select, and_
+
+from ..core.config import settings
+from ..core.db import get_session, SessionDep
+from ..core.image_proxy import proxy_image_list
+from ..core.lastfm import lastfm_client
+from ..core.spotify import spotify_client
 from ..models.base import Artist, Album, Track, Tag, TrackTag
-from sqlmodel import select, or_, and_
+from ..services.library_expansion import save_artist_and_similars
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 router = APIRouter(prefix="/search", tags=["search"])
+logger = logging.getLogger(__name__)
 
-from ..core.spotify import spotify_client
-from ..core.config import settings
-from ..core.lastfm import lastfm_client
-from ..services.library_expansion import save_artist_and_similars
-from ..core.db import get_session
-from ..models.base import Artist, Album, Track
-from sqlmodel import select
-from urllib.parse import quote_plus
+CACHE_TTL_SECONDS = 60
+MAX_CACHE_ENTRIES = 200
+_orchestrated_cache: dict[str, tuple[float, dict]] = {}
+_artist_profile_cache: dict[str, tuple[float, dict]] = {}
 
-from ..core.image_proxy import proxy_image_list
+
+def _cache_get(cache: dict[str, tuple[float, dict]], key: str) -> Optional[dict]:
+    entry = cache.get(key)
+    if not entry:
+        return None
+    ts, payload = entry
+    if time.time() - ts > CACHE_TTL_SECONDS:
+        cache.pop(key, None)
+        return None
+    return payload
+
+
+def _cache_set(cache: dict[str, tuple[float, dict]], key: str, payload: dict) -> None:
+    if len(cache) >= MAX_CACHE_ENTRIES:
+        cache.clear()
+    cache[key] = (time.time(), payload)
+
+
+def _format_tracks(tracks: list[dict]) -> list[dict]:
+    results = []
+    for t in tracks or []:
+        results.append({
+            "id": t.get("id"),
+            "name": t.get("name"),
+            "preview_url": t.get("preview_url"),
+            "popularity": t.get("popularity"),
+            "explicit": t.get("explicit"),
+            "duration_ms": t.get("duration_ms"),
+            "artists": t.get("artists", []),
+            "album": t.get("album", {})
+        })
+    return results
 
 
 def _infer_genre_keywords(query: str) -> list[str]:
@@ -58,7 +95,7 @@ async def _safe_call(coro, default):
     try:
         return await coro
     except Exception as exc:
-        print(f"[search_orchestrated] skipping failed call: {exc}")
+        logger.warning("[search_orchestrated] skipping failed call: %s", exc)
         return default
 
 
@@ -67,21 +104,12 @@ async def _safe_timed(coro, default, timeout: float):
     try:
         return await asyncio.wait_for(coro, timeout=timeout)
     except Exception as exc:
-        print(f"[search_orchestrated] timed call failed after {timeout}s: {exc}")
+        logger.warning(
+            "[search_orchestrated] timed call failed after %ss: %s",
+            timeout,
+            exc,
+        )
         return default
-
-
-def _normalize_name(name: str) -> str:
-    return "".join(ch for ch in (name or "").lower() if ch.isalnum())
-
-
-def _name_matches(target: str, candidate: str) -> bool:
-    """Basic fuzzy match to avoid mismapped photos (e.g., Snoop showing Eminem)."""
-    t = _normalize_name(target)
-    c = _normalize_name(candidate)
-    if not t or not c:
-        return False
-    return t in c or c in t
 
 
 def _normalize_name(name: str) -> str:
@@ -172,15 +200,21 @@ async def orchestrated_search(
     page: int = Query(0, description="Página de resultados (0-index)"),
     lastfm_limit: int = Query(60, description="Máximo artistas por tag Last.fm"),
     related_limit: int = Query(8, description="Límite de similares Last.fm"),
-    min_followers: int = Query(300_000, description="Umbral mínimo de followers para mostrar")
+    min_followers: int = Query(300_000, description="Umbral mínimo de followers para mostrar"),
+    session: AsyncSession = Depends(SessionDep),
 ):
     """
     Endpoint único que orquesta Spotify + Last.fm y devuelve un payload listo
     para renderizar, evitando múltiples llamadas desde el frontend.
     """
     from ..core.lastfm import lastfm_client
+    cache_key = f"{q.lower()}|{max(page, 0)}|{limit}|{lastfm_limit}|{related_limit}|{min_followers}"
+    cached = _cache_get(_orchestrated_cache, cache_key)
+    if cached:
+        return cached
+
     if not settings.LASTFM_API_KEY:
-        return {
+        payload = {
             "query": q,
             "page": max(page, 0),
             "limit": limit,
@@ -192,20 +226,26 @@ async def orchestrated_search(
             "tracks": [],
             "lastfm_top": []
         }
+        _cache_set(_orchestrated_cache, cache_key, payload)
+        return payload
 
     genre_keys = _infer_genre_keywords(q)
     timeout_spotify = 4.0
     timeout_lastfm = 6.0
     timeout_related = 5.0
 
+    tracks_task = asyncio.create_task(
+        _safe_timed(spotify_client.search_tracks(q, limit=5), [], timeout_spotify)
+    )
+
     # Primero intentamos desde DB
     db_artists = []
-    with get_session() as session:
-        db_artists = session.exec(
-            select(Artist).where(Artist.name.ilike(f"%{q}%")).limit(limit)
-        ).all()
+    db_artists = (await session.exec(
+        select(Artist).where(Artist.name.ilike(f"%{q}%")).limit(limit)
+    )).all()
 
     if db_artists:
+        tracks = _format_tracks(await tracks_task)
         artists_for_grid = []
         for a in db_artists:
             data = a.dict()
@@ -217,7 +257,7 @@ async def orchestrated_search(
                 imgs = []
             data["images"] = proxy_image_list(imgs, size=512)
             artists_for_grid.append(data)
-        return {
+        payload = {
             "query": q,
             "page": max(page, 0),
             "limit": limit,
@@ -226,9 +266,11 @@ async def orchestrated_search(
             "main": None,
             "artists": artists_for_grid,
             "related": [],
-            "tracks": [],
+            "tracks": tracks,
             "lastfm_top": []
         }
+        _cache_set(_orchestrated_cache, cache_key, payload)
+        return payload
 
     # Si no hay suficientes datos locales, usamos Last.fm + Spotify y persistimos
     lastfm_top_task = asyncio.create_task(
@@ -414,7 +456,8 @@ async def orchestrated_search(
         else:
             artists_for_grid.append({"id": entry.get("name"), "name": entry.get("name"), "followers": {"total": entry.get("listeners", 0)}})
 
-    return {
+    tracks = _format_tracks(await tracks_task)
+    payload = {
         "query": q,
         "page": max(page, 0),
         "limit": limit,
@@ -423,9 +466,11 @@ async def orchestrated_search(
         "main": main_block,
         "artists": artists_for_grid,
         "related": related,
-        "tracks": [],
+        "tracks": tracks,
         "lastfm_top": lastfm_enriched
     }
+    _cache_set(_orchestrated_cache, cache_key, payload)
+    return payload
 
 
 @router.get("/artist-profile")
@@ -435,6 +480,11 @@ async def search_artist_profile(
     min_followers: int = Query(200_000, description="Umbral mínimo de followers Spotify para similares")
 ):
     """Devuelve ficha del artista (bio Last.fm + datos Spotify) y similares."""
+    cache_key = f"{q.lower()}|{similar_limit}|{min_followers}"
+    cached = _cache_get(_artist_profile_cache, cache_key)
+    if cached:
+        return cached
+
     if not settings.LASTFM_API_KEY:
         raise HTTPException(status_code=400, detail="Se requiere LASTFM_API_KEY para este endpoint")
 
@@ -505,16 +555,11 @@ async def search_artist_profile(
                 break
         return results
 
+    tracks_task = asyncio.create_task(
+        _safe_timed(spotify_client.search_tracks(q, limit=5), [], timeout_spotify)
+    )
     main = await fetch_main()
     main_name = main.get("spotify", {}).get("name") or q
-    # Persist main + similars in background
-    try:
-        main_spotify_id = main.get("spotify", {}).get("id") if isinstance(main, dict) else None
-        similar_ids = [s.get("spotify", {}).get("id") for s in similars if s.get("spotify")]
-        if main_spotify_id:
-            asyncio.create_task(save_artist_and_similars(main_spotify_id, similar_ids, limit=5))
-    except Exception:
-        pass
     similars = await fetch_similars(main_name)
 
     # Persist main artist and up to 5 similars in background
@@ -526,12 +571,16 @@ async def search_artist_profile(
     except Exception:
         pass
 
-    return {
+    tracks = _format_tracks(await tracks_task)
+    payload = {
         "query": q,
         "mode": "artist",
         "main": main,
-        "similar": similars
+        "similar": similars,
+        "tracks": tracks
     }
+    _cache_set(_artist_profile_cache, cache_key, payload)
+    return payload
 
 
 @router.get("/tracks-quick")
@@ -542,19 +591,7 @@ async def search_tracks_quick(
     """Búsqueda rápida de canciones en Spotify con sus artistas y álbum."""
     try:
         tracks = await spotify_client.search_tracks(q, limit=limit)
-        results = []
-        for t in tracks:
-            results.append({
-                "id": t.get("id"),
-                "name": t.get("name"),
-                "preview_url": t.get("preview_url"),
-                "popularity": t.get("popularity"),
-                "explicit": t.get("explicit"),
-                "duration_ms": t.get("duration_ms"),
-                "artists": t.get("artists", []),
-                "album": t.get("album", {})
-            })
-        return {"query": q, "tracks": results}
+        return {"query": q, "tracks": _format_tracks(tracks)}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error searching tracks: {exc}")
 

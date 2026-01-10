@@ -13,7 +13,6 @@ from app.models.base import User, Artist, Track, YouTubeDownload
 from app.core.spotify import spotify_client
 from app.core.auto_download import auto_download_service
 from sqlmodel import select
-import time
 
 async def test_complete_system():
     print('🚀 TEST AUDIO2 CON BD PERSISTENTE - VERIFICACIÓN NO DUPLICADOS')
@@ -53,7 +52,7 @@ async def test_complete_system():
         existing_tracks = session.exec(select(Track)).all()
         existing_downloads = session.exec(select(YouTubeDownload)).all()
 
-        print(f'\n📊 ESTADO ACTUAL DE BD:')
+        print('\n📊 ESTADO ACTUAL DE BD:')
         print(f'   🎤 Artistas almacenados: {len(existing_artists)}')
         print(f'   🎵 Tracks en metadata: {len(existing_tracks)}')
         print(f'   💾 Downloads completados: {len(existing_downloads)}')
@@ -115,7 +114,7 @@ async def test_complete_system():
     try:
         artists_count = session.exec(select(Artist)).all()
         tracks_count = session.exec(select(Track)).all()
-        print(f'\n📊 Base de datos después de expansión:')
+        print('\n📊 Base de datos después de expansión:')
         print(f'   🎤 {len(artists_count)} artistas totales')
         print(f'   🎵 {len(tracks_count)} tracks de metadata para descargar')
         print(f'   📦 Estimado descarga: ~{len(tracks_count) * 4} MB')
@@ -144,7 +143,7 @@ async def test_complete_system():
             'radiohead', 'mgmt', 'twenty one pilots', 'foster the people'
         ])]
 
-        print(f'\n⬇️ Descargando TODAS las tracks según especificación:')
+        print('\n⬇️ Descargando TODAS las tracks según especificación:')
         print(f'   User 1: {len(user1_artists)} artistas × 8 tracks cada uno = {len(user1_artists)*8}')
         print(f'   User 2: {len(user2_artists)} artistas × 8 tracks cada uno = {len(user2_artists)*8}')
         print(f'   TOTAL: {len(user1_artists)*8 + len(user2_artists)*8} tracks (según tus especificaciones)')
@@ -179,13 +178,13 @@ async def test_complete_system():
         # Show final download stats
         downloads = session.exec(select(YouTubeDownload)).all()
         completed = [d for d in downloads if d.download_status == 'completed']
-        print(f'\n📊 ESTADO FINAL DE DESCARGAS:')
+        print('\n📊 ESTADO FINAL DE DESCARGAS:')
         print(f'   📥 Intentadas: {len(downloads)} tracks')
         print(f'   ✅ Completadas: {len(completed)} tracks')
         print(f'   📦 Tamaño descargado: ~{sum(d.file_size or 0 for d in completed) // (1024*1024)} MB')
 
         # Show file structure
-        print(f'\n📁 ESTRUCTURA DE ARCHIVOS DESCARGADOS:')
+        print('\n📁 ESTRUCTURA DE ARCHIVOS DESCARGADOS:')
         import os
         downloads_dir = 'downloads'
         if os.path.exists(downloads_dir):
@@ -246,13 +245,13 @@ async def test_complete_system():
             else:
                 print('   ❌ DUPLICADOS encontrados en archivos')
 
-        print(f'\n🎉 SISTEMA COMPLETO AUDIO2 FUNCIONANDO:')
-        print(f'   🧑‍🤝‍🧑 2 usuarios operativos')
-        print(f'   🎵 Colecciones musicales expandidas')
-        print(f'   🔄 Sin duplicados en BD ni archivos')
-        print(f'   📁 Folder compartido eficiente')
-        print(f'   ⚡ Metadata siempre fresca')
-        print(f'   🚀 Listo para producción!')
+        print('\n🎉 SISTEMA COMPLETO AUDIO2 FUNCIONANDO:')
+        print('   🧑‍🤝‍🧑 2 usuarios operativos')
+        print('   🎵 Colecciones musicales expandidas')
+        print('   🔄 Sin duplicados en BD ni archivos')
+        print('   📁 Folder compartido eficiente')
+        print('   ⚡ Metadata siempre fresca')
+        print('   🚀 Listo para producción!')
 
     finally:
         session.close()

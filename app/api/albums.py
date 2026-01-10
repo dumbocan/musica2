@@ -12,7 +12,7 @@ from ..core.lastfm import lastfm_client
 from ..core.image_proxy import proxy_image_list
 from ..crud import save_album, delete_album
 from ..core.db import get_session
-from ..models.base import Album, Track
+from ..models.base import Album
 from sqlmodel import select
 
 router = APIRouter(prefix="/albums", tags=["albums"])
@@ -63,7 +63,7 @@ async def save_album_to_db(spotify_id: str = Path(..., description="Spotify albu
     tracks_data = await spotify_client.get_album_tracks(spotify_id)
     album = save_album(album_data)
 
-    from ..crud import save_track, get_artist_by_spotify_id
+    from ..crud import save_track
     artist_id = album.artist_id
 
     for track_data in tracks_data:

@@ -8,6 +8,7 @@ sys.path.append(os.path.dirname(__file__))
 
 from app.core.db import get_session, create_db_and_tables
 from app.models.base import User
+from sqlmodel import select
 
 def create_test_user():
     # Create tables first
@@ -34,6 +35,6 @@ def create_test_user():
     finally:
         session.close()
 
+
 if __name__ == "__main__":
-    from sqlmodel import select
     create_test_user()

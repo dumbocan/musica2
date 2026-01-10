@@ -3,14 +3,14 @@
 Algoritmo mejorado para selección inteligente de música
 """
 import asyncio
-from typing import List, Dict, Tuple
+from typing import List, Dict
 
 # Hardcoded iconic tracks para artistas legendarios
 ICONIC_TRACKS = {
     'eminem': [
         'Lose Yourself',      # Oscars, 8 Mile movie
         'Stan',              # Grammy winner, cultural phenomenon
-        'Love The Way You Lie', # First #1 Billboard in 8 years
+        'Love The Way You Lie',  # First #1 Billboard in 8 years
         'Rap God',           # Guinness World Record
         'Not Afraid'         # Post-recovery anthem
     ],
@@ -161,7 +161,7 @@ class SmartMusicSelector:
                             'album': album.get('name', 'Unknown')
                         })
 
-                    except:
+                    except Exception:
                         # Fallback without Last.fm
                         track_candidates.append({
                             'name': track_name,
