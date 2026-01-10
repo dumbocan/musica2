@@ -1,5 +1,7 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useApiStore } from '@/store/useApiStore';
+import { usePlayerStore } from '@/store/usePlayerStore';
+import { YouTubeOverlayPlayer } from '@/components/YouTubeOverlayPlayer';
 import {
   Home,
   Search,
@@ -27,6 +29,44 @@ const navigation = [
 export function Sidebar() {
   const location = useLocation();
   const { sidebarOpen, setSidebarOpen } = useApiStore();
+  const videoEmbedId = usePlayerStore((s) => s.videoEmbedId);
+  const videoController = usePlayerStore((s) => s.videoController);
+  const setVideoEmbedId = usePlayerStore((s) => s.setVideoEmbedId);
+  const setStatusMessage = usePlayerStore((s) => s.setStatusMessage);
+  const setIsPlaying = usePlayerStore((s) => s.setIsPlaying);
+  const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
+  const setDuration = usePlayerStore((s) => s.setDuration);
+  const playbackMode = usePlayerStore((s) => s.playbackMode);
+  const nowPlaying = usePlayerStore((s) => s.nowPlaying);
+  const videoDownloadVideoId = usePlayerStore((s) => s.videoDownloadVideoId);
+  const videoDownloadStatus = usePlayerStore((s) => s.videoDownloadStatus);
+  const audioDownloadVideoId = usePlayerStore((s) => s.audioDownloadVideoId);
+  const audioDownloadStatus = usePlayerStore((s) => s.audioDownloadStatus);
+
+  const audioDownloadLabel = (() => {
+    if (!nowPlaying?.videoId) return 'pendiente';
+    if (audioDownloadVideoId !== nowPlaying.videoId) return 'pendiente';
+    if (audioDownloadStatus === 'checking') return 'comprobando';
+    if (audioDownloadStatus === 'downloading') return 'descargando';
+    if (audioDownloadStatus === 'downloaded') return 'descargado';
+    if (audioDownloadStatus === 'error') return 'error';
+    return 'pendiente';
+  })();
+  const audioDownloadActive =
+    !!nowPlaying?.videoId &&
+    audioDownloadVideoId === nowPlaying.videoId &&
+    audioDownloadStatus === 'downloading';
+
+  const handleCloseVideo = () => {
+    if (videoController) {
+      videoController.stop();
+    }
+    setVideoEmbedId(null);
+    setStatusMessage('Video detenido');
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+  };
 
   return (
     <>
@@ -75,6 +115,79 @@ export function Sidebar() {
 
           {/* Footer */}
           <div className="sidebar-footer">
+            {videoEmbedId && (
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8 }}>
+                  Video en reproduccion
+                </div>
+                <div
+                  style={{
+                    position: 'relative',
+                    width: '115%',
+                    paddingTop: '62%',
+                    marginLeft: '-7.5%',
+                    borderRadius: 12,
+                    overflow: 'hidden',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                    background: 'rgba(8, 12, 20, 0.7)',
+                  }}
+                >
+                  <YouTubeOverlayPlayer videoId={videoEmbedId} onClose={handleCloseVideo} />
+                </div>
+                <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                  <span
+                    style={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: '50%',
+                      background:
+                        videoDownloadStatus === 'downloading' && videoDownloadVideoId === videoEmbedId
+                          ? '#22c55e'
+                          : 'transparent',
+                      border: '2px solid #22c55e',
+                      display: 'inline-block',
+                    }}
+                  />
+                  <span>
+                    Audio:{' '}
+                    {videoDownloadVideoId !== videoEmbedId
+                      ? 'pendiente'
+                      : videoDownloadStatus === 'checking'
+                        ? 'comprobando'
+                        : videoDownloadStatus === 'downloading'
+                          ? 'descargando'
+                          : videoDownloadStatus === 'downloaded'
+                            ? 'descargado'
+                            : videoDownloadStatus === 'error'
+                              ? 'error'
+                              : 'pendiente'}
+                  </span>
+                </div>
+              </div>
+            )}
+            {!videoEmbedId && playbackMode === 'audio' && nowPlaying && (
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8 }}>
+                  Audio en reproduccion
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {nowPlaying.title} · {nowPlaying.artist || ''}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                  <span
+                    style={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: '50%',
+                      background: audioDownloadActive ? '#22c55e' : 'transparent',
+                      border: '2px solid #22c55e',
+                      display: 'inline-block',
+                    }}
+                  />
+                  <span>Audio: {audioDownloadLabel}</span>
+                </div>
+              </div>
+            )}
             Audio2 Frontend · v0.1.0
           </div>
         </div>

@@ -16,6 +16,8 @@ export type VideoController = {
   setMuted: (muted: boolean) => void;
 };
 
+export type VideoDownloadStatus = 'idle' | 'checking' | 'downloading' | 'downloaded' | 'missing' | 'error';
+
 export type PlayerTrack = {
   spotifyTrackId: string;
   title: string;
@@ -62,6 +64,14 @@ type PlayerStore = {
   setVideoEmbedId: (id: string | null) => void;
   videoController: VideoController | null;
   setVideoController: (controller: VideoController | null) => void;
+  videoDownloadVideoId: string | null;
+  videoDownloadStatus: VideoDownloadStatus;
+  setVideoDownloadState: (videoId: string | null, status: VideoDownloadStatus) => void;
+  audioDownloadVideoId: string | null;
+  audioDownloadStatus: VideoDownloadStatus;
+  setAudioDownloadState: (videoId: string | null, status: VideoDownloadStatus) => void;
+  lastDownloadedVideo: { videoId: string; ts: number } | null;
+  setLastDownloadedVideo: (videoId: string | null) => void;
   playByVideoId: (payload: PlayerTrack) => Promise<{ ok: boolean; mode?: AudioSourceMode }>;
   tryUpgradeToFile: () => Promise<boolean>;
   resumeAudio: () => void;
@@ -114,6 +124,17 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   setVideoEmbedId: (videoEmbedId) => set({ videoEmbedId }),
   videoController: null,
   setVideoController: (videoController) => set({ videoController }),
+  videoDownloadVideoId: null,
+  videoDownloadStatus: 'idle',
+  setVideoDownloadState: (videoDownloadVideoId, videoDownloadStatus) =>
+    set({ videoDownloadVideoId, videoDownloadStatus }),
+  audioDownloadVideoId: null,
+  audioDownloadStatus: 'idle',
+  setAudioDownloadState: (audioDownloadVideoId, audioDownloadStatus) =>
+    set({ audioDownloadVideoId, audioDownloadStatus }),
+  lastDownloadedVideo: null,
+  setLastDownloadedVideo: (videoId) =>
+    set({ lastDownloadedVideo: videoId ? { videoId, ts: Date.now() } : null }),
   playByVideoId: async (payload) => {
     const audio = get().audioEl;
     if (!audio) return { ok: false };
@@ -122,6 +143,8 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
       currentTime: 0,
       duration: payload.durationSec || 0,
       statusMessage: 'Abriendo audio...',
+      audioDownloadVideoId: payload.videoId,
+      audioDownloadStatus: 'checking',
     });
     audio.muted = false;
     audio.pause();
@@ -131,10 +154,10 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
       .getYoutubeDownloadStatus(payload.videoId, { format: fileFormat })
       .catch(() => null);
     if (status?.data?.exists) {
-      set({ audioSourceMode: 'file', statusMessage: '' });
+      set({ audioSourceMode: 'file', statusMessage: '', audioDownloadStatus: 'downloaded' });
       audio.src = `${API_BASE_URL}/youtube/download/${payload.videoId}/file?format=${fileFormat}`;
     } else {
-      set({ audioSourceMode: 'stream', statusMessage: 'Streaming...' });
+      set({ audioSourceMode: 'stream', statusMessage: 'Streaming...', audioDownloadStatus: 'downloading' });
       audio.src = `${API_BASE_URL}/youtube/stream/${payload.videoId}?format=${streamFormat}&cache=true`;
     }
     audio.load();
@@ -143,7 +166,7 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
       return { ok: true, mode: get().audioSourceMode };
     } catch {
       audio.src = '';
-      set({ statusMessage: 'No se pudo reproducir el audio' });
+      set({ statusMessage: 'No se pudo reproducir el audio', audioDownloadStatus: 'error' });
       return { ok: false };
     }
   },
@@ -155,9 +178,16 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
       .getYoutubeDownloadStatus(nowPlaying.videoId, { format: fileFormat })
       .catch(() => null);
     if (!status?.data?.exists) return false;
+    set({
+      audioDownloadStatus: 'downloaded',
+      lastDownloadedVideo: { videoId: nowPlaying.videoId, ts: Date.now() },
+    });
+    if (!audioEl.paused && Number.isFinite(audioEl.currentTime) && audioEl.currentTime > 1) {
+      return false;
+    }
     const resumeTime = Number.isFinite(audioEl.currentTime) ? audioEl.currentTime : 0;
     const wasPlaying = !audioEl.paused;
-    set({ audioSourceMode: 'file', statusMessage: '' });
+    set({ audioSourceMode: 'file', statusMessage: '', audioDownloadStatus: 'downloaded' });
     audioEl.src = `${API_BASE_URL}/youtube/download/${nowPlaying.videoId}/file?format=${fileFormat}`;
     const handleLoaded = () => {
       audioEl.removeEventListener('loadedmetadata', handleLoaded);

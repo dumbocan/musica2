@@ -39,6 +39,7 @@ export function TracksPage() {
   const { userId } = useApiStore();
   const listRef = useRef<HTMLDivElement | null>(null);
   const loadingMoreRef = useRef(false);
+  const requestedAfterIdRef = useRef<number | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [containerHeight, setContainerHeight] = useState(600);
   const [listTop, setListTop] = useState(0);
@@ -46,8 +47,15 @@ export function TracksPage() {
   const playByVideoId = usePlayerStore((s) => s.playByVideoId);
   const setQueue = usePlayerStore((s) => s.setQueue);
   const setOnPlayTrack = usePlayerStore((s) => s.setOnPlayTrack);
-  const setPlaybackMode = usePlayerStore((s) => s.setPlaybackMode);
+  const playbackMode = usePlayerStore((s) => s.playbackMode);
+  const lastDownloadedVideo = usePlayerStore((s) => s.lastDownloadedVideo);
+  const setNowPlaying = usePlayerStore((s) => s.setNowPlaying);
+  const setVideoEmbedId = usePlayerStore((s) => s.setVideoEmbedId);
+  const setIsPlaying = usePlayerStore((s) => s.setIsPlaying);
+  const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
+  const setDuration = usePlayerStore((s) => s.setDuration);
   const setStatusMessage = usePlayerStore((s) => s.setStatusMessage);
+  const pauseAudio = usePlayerStore((s) => s.pauseAudio);
   const rowHeight = 64;
   const overscan = 8;
   const stickyTop = 84;
@@ -92,6 +100,7 @@ export function TracksPage() {
       setLoading(true);
       setLoadingMore(false);
       loadingMoreRef.current = false;
+      requestedAfterIdRef.current = null;
       setError(null);
       try {
         const response = await audio2Api.getTracksOverview({
@@ -128,11 +137,28 @@ export function TracksPage() {
     return () => clearTimeout(timeout);
   }, [filter, limit, search]);
 
+  useEffect(() => {
+    if (!lastDownloadedVideo) return;
+    const { videoId } = lastDownloadedVideo;
+    setTracks((prev) =>
+      prev.map((track) => {
+        if (track.youtube_video_id !== videoId || track.local_file_exists) return track;
+        return {
+          ...track,
+          local_file_exists: true,
+          youtube_status: 'completed',
+        };
+      })
+    );
+  }, [lastDownloadedVideo]);
+
   const handleLoadMore = useCallback(async () => {
     if (loadingMoreRef.current || loadingMore || !hasMore) return;
     const afterId = nextAfter ?? (tracks.length > 0 ? tracks[tracks.length - 1].track_id : null);
     if (afterId === null) return;
+    if (requestedAfterIdRef.current === afterId) return;
     loadingMoreRef.current = true;
+    requestedAfterIdRef.current = afterId;
     setLoadingMore(true);
     try {
       const activeSearch = search.trim();
@@ -146,15 +172,17 @@ export function TracksPage() {
         search: isFiltered ? activeSearch : undefined,
       });
       const nextItems = response.data.items || [];
-      const seen = new Set(tracks.map((track) => track.track_id));
-      const unique = nextItems.filter((track: TrackOverview) => !seen.has(track.track_id));
-      if (unique.length > 0) {
-        setTracks((prev) => [...prev, ...unique]);
-      }
+      let uniqueCount = 0;
+      setTracks((prev) => {
+        const seen = new Set(prev.map((track) => track.track_id));
+        const unique = nextItems.filter((track: TrackOverview) => !seen.has(track.track_id));
+        uniqueCount = unique.length;
+        return unique.length > 0 ? [...prev, ...unique] : prev;
+      });
       const nextCursor = response.data.next_after ?? null;
       const hasMoreFromServer = Boolean(response.data.has_more);
       const didAdvance = nextCursor !== null && nextCursor !== afterId;
-      if (!unique.length || !hasMoreFromServer || !didAdvance) {
+      if (!uniqueCount || !hasMoreFromServer || !didAdvance) {
         setHasMore(false);
         setNextAfter(null);
       } else {
@@ -174,6 +202,7 @@ export function TracksPage() {
       setError(message);
       setHasMore(false);
       setNextAfter(null);
+      requestedAfterIdRef.current = null;
     } finally {
       loadingMoreRef.current = false;
       setLoadingMore(false);
@@ -469,6 +498,7 @@ export function TracksPage() {
         setStatusMessage('Sin enlace de YouTube');
         return;
       }
+      const durationSec = track.duration_ms ? Math.round(track.duration_ms / 1000) : undefined;
       const queueItems = buildQueueItems({ trackKey, videoId });
       const index = queueItems.findIndex((item) => item.spotifyTrackId === trackKey);
       setQueue(queueItems, index >= 0 ? index : 0);
@@ -477,21 +507,56 @@ export function TracksPage() {
           setStatusMessage('Sin enlace de YouTube');
           return;
         }
-        void playByVideoId({
+        const state = usePlayerStore.getState();
+        const nextDurationSec = item.durationMs ? Math.round(item.durationMs / 1000) : undefined;
+        if (state.playbackMode === 'video') {
+          state.pauseAudio();
+          state.setNowPlaying({
+            spotifyTrackId: item.spotifyTrackId,
+            title: item.title,
+            artist: item.artist,
+            videoId: item.videoId,
+            durationSec: nextDurationSec,
+          });
+          state.setCurrentTime(0);
+          if (nextDurationSec) {
+            state.setDuration(nextDurationSec);
+          }
+          state.setVideoEmbedId(item.videoId);
+          state.setIsPlaying(true);
+          return;
+        }
+        void state.playByVideoId({
           spotifyTrackId: item.spotifyTrackId,
           title: item.title,
           artist: item.artist,
           videoId: item.videoId,
-          durationSec: item.durationMs ? Math.round(item.durationMs / 1000) : undefined,
+          durationSec: nextDurationSec,
         });
       });
-      setPlaybackMode('audio');
+      if (playbackMode === 'video') {
+        pauseAudio();
+        setNowPlaying({
+          spotifyTrackId: trackKey,
+          title: track.track_name || '—',
+          artist: track.artist_name || undefined,
+          videoId,
+          durationSec,
+        });
+        setCurrentTime(0);
+        if (durationSec) {
+          setDuration(durationSec);
+        }
+        setVideoEmbedId(videoId);
+        setIsPlaying(true);
+        return;
+      }
       await playByVideoId({
         spotifyTrackId: trackKey,
         title: track.track_name || '—',
         artist: track.artist_name || undefined,
         videoId,
-        durationSec: track.duration_ms ? Math.round(track.duration_ms / 1000) : undefined,
+        durationSec,
       });
     },
     [
@@ -500,9 +565,15 @@ export function TracksPage() {
       playByVideoId,
       resolveTrackKey,
       setOnPlayTrack,
-      setPlaybackMode,
       setQueue,
       setStatusMessage,
+      playbackMode,
+      setNowPlaying,
+      setVideoEmbedId,
+      setIsPlaying,
+      setCurrentTime,
+      setDuration,
+      pauseAudio,
     ]
   );
 

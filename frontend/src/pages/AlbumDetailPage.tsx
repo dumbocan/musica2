@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { audio2Api, API_BASE_URL } from '@/lib/api';
-import { YouTubeOverlayPlayer } from '@/components/YouTubeOverlayPlayer';
 import { useApiStore } from '@/store/useApiStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import { useFavorites } from '@/hooks/useFavorites';
@@ -592,7 +591,6 @@ export function AlbumDetailPage() {
               }}
             />
           )}
-          {videoEmbedId && <YouTubeOverlayPlayer videoId={videoEmbedId} onClose={handleCloseVideo} />}
         </div>
         <div>
           <div style={{ fontSize: 26, fontWeight: 800, marginBottom: 6 }}>{album.name}</div>

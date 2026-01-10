@@ -243,6 +243,13 @@ def get_tracks_overview(
         if not existing:
             download_map[download.spotify_track_id] = download
             continue
+        existing_has_path = bool(existing.download_path)
+        new_has_path = bool(download.download_path)
+        if new_has_path and not existing_has_path:
+            download_map[download.spotify_track_id] = download
+            continue
+        if existing_has_path and not new_has_path:
+            continue
         existing_has_video = bool(existing.youtube_video_id)
         new_has_video = bool(download.youtube_video_id)
         if new_has_video and not existing_has_video:

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { usePlayerStore } from '@/store/usePlayerStore';
+import { audio2Api } from '@/lib/api';
 
 export function PlayerFooter() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -15,7 +16,11 @@ export function PlayerFooter() {
   const videoController = usePlayerStore((s) => s.videoController);
   const audioSourceMode = usePlayerStore((s) => s.audioSourceMode);
   const statusMessage = usePlayerStore((s) => s.statusMessage);
+  const audioDownloadStatus = usePlayerStore((s) => s.audioDownloadStatus);
+  const audioDownloadVideoId = usePlayerStore((s) => s.audioDownloadVideoId);
   const onPlayTrack = usePlayerStore((s) => s.onPlayTrack);
+  const setVideoDownloadState = usePlayerStore((s) => s.setVideoDownloadState);
+  const setLastDownloadedVideo = usePlayerStore((s) => s.setLastDownloadedVideo);
   const setAudioEl = usePlayerStore((s) => s.setAudioEl);
   const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
   const setDuration = usePlayerStore((s) => s.setDuration);
@@ -32,6 +37,18 @@ export function PlayerFooter() {
   const seekAudio = usePlayerStore((s) => s.seekAudio);
   const upgradeInFlightRef = useRef(false);
   const lastVolumeRef = useRef(volume);
+  const downloadRequestedRef = useRef(new Set<string>());
+  const getPreferredFormats = () => {
+    const audio = audioRef.current;
+    if (!audio) return { fileFormat: 'm4a', streamFormat: 'm4a' };
+    const canMp3 = audio.canPlayType('audio/mpeg');
+    const canM4a = audio.canPlayType('audio/mp4');
+    const canWebm = audio.canPlayType('audio/webm');
+    return {
+      fileFormat: canMp3 ? 'mp3' : 'm4a',
+      streamFormat: canM4a ? 'm4a' : canWebm ? 'webm' : 'm4a',
+    };
+  };
 
   const prevItem = currentIndex > 0 ? queue[currentIndex - 1] : null;
   const nextItem = currentIndex >= 0 && currentIndex < queue.length - 1 ? queue[currentIndex + 1] : null;
@@ -125,7 +142,7 @@ export function PlayerFooter() {
 
   useEffect(() => {
     if (playbackMode !== 'video' || !videoController) return;
-    let raf = 0;
+    let interval = 0;
     const tick = () => {
       const nextTime = videoController.getCurrentTime();
       if (Number.isFinite(nextTime)) {
@@ -135,11 +152,48 @@ export function PlayerFooter() {
       if (Number.isFinite(nextDuration) && nextDuration > 0) {
         setDuration(nextDuration);
       }
-      raf = window.requestAnimationFrame(tick);
     };
-    raf = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(raf);
+    interval = window.setInterval(tick, 400);
+    return () => window.clearInterval(interval);
   }, [playbackMode, setCurrentTime, setDuration, videoController]);
+
+  const requestVideoDownload = useCallback(async (videoId: string) => {
+    if (!videoId) return;
+    if (downloadRequestedRef.current.has(videoId)) return;
+    downloadRequestedRef.current.add(videoId);
+    setVideoDownloadState(videoId, 'checking');
+    try {
+      const { fileFormat, streamFormat } = getPreferredFormats();
+      const preferredFormat = streamFormat || fileFormat;
+      const primaryStatus = await audio2Api.getYoutubeDownloadStatus(videoId, { format: fileFormat });
+      if (primaryStatus.data?.exists) {
+        setVideoDownloadState(videoId, 'downloaded');
+        setLastDownloadedVideo(videoId);
+        return;
+      }
+      if (streamFormat && streamFormat !== fileFormat) {
+        const streamStatus = await audio2Api.getYoutubeDownloadStatus(videoId, { format: streamFormat });
+        if (streamStatus.data?.exists) {
+          setVideoDownloadState(videoId, 'downloaded');
+          setLastDownloadedVideo(videoId);
+          return;
+        }
+      }
+      setVideoDownloadState(videoId, 'downloading');
+      await audio2Api.downloadYoutubeAudio(videoId, { format: preferredFormat, quality: 'bestaudio' });
+      setVideoDownloadState(videoId, 'downloaded');
+      setLastDownloadedVideo(videoId);
+    } catch (err) {
+      console.warn('No se pudo descargar el audio del video', err);
+      setVideoDownloadState(videoId, 'error');
+      downloadRequestedRef.current.delete(videoId);
+    }
+  }, [setLastDownloadedVideo, setVideoDownloadState]);
+
+  useEffect(() => {
+    if (!videoEmbedId) return;
+    void requestVideoDownload(videoEmbedId);
+  }, [requestVideoDownload, videoEmbedId]);
 
   useEffect(() => {
     if (playbackMode !== 'audio') return;
@@ -171,6 +225,19 @@ export function PlayerFooter() {
     return isPlaying ? 'Reproduciendo' : 'Pausado';
   }, [isPlaying, nowPlaying, statusMessage]);
   const isVideo = playbackMode === 'video';
+  const audioDownloadLabel = useMemo(() => {
+    if (!nowPlaying?.videoId) return 'pendiente';
+    if (audioDownloadVideoId !== nowPlaying.videoId) return 'pendiente';
+    if (audioDownloadStatus === 'checking') return 'comprobando';
+    if (audioDownloadStatus === 'downloading') return 'descargando';
+    if (audioDownloadStatus === 'downloaded') return 'descargado';
+    if (audioDownloadStatus === 'error') return 'error';
+    return 'pendiente';
+  }, [audioDownloadStatus, audioDownloadVideoId, nowPlaying?.videoId]);
+  const audioDownloadActive =
+    !!nowPlaying?.videoId &&
+    audioDownloadVideoId === nowPlaying.videoId &&
+    audioDownloadStatus === 'downloading';
   const trackLabel = nowPlaying
     ? `${isVideo ? 'Video' : 'Reproduciendo'}: ${nowPlaying.title} · ${nowPlaying.artist || ''}`
     : isVideo
@@ -425,6 +492,21 @@ export function PlayerFooter() {
           />
         </div>
         <div className="album-player__status">{footerStatus}</div>
+        {!isVideo && nowPlaying && (
+          <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+            <span
+              style={{
+                width: 10,
+                height: 10,
+                borderRadius: '50%',
+                background: audioDownloadActive ? '#22c55e' : 'transparent',
+                border: '2px solid #22c55e',
+                display: 'inline-block',
+              }}
+            />
+            <span>Audio: {audioDownloadLabel}</span>
+          </div>
+        )}
       </div>
       <audio ref={audioRef} hidden />
     </>

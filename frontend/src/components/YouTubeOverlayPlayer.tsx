@@ -12,6 +12,7 @@ type PlayerApi = {
   getDuration?: () => number;
   setVolume?: (value: number) => void;
   getVolume?: () => number;
+  setPlaybackQuality?: (quality: string) => void;
   mute?: () => void;
   unMute?: () => void;
   isMuted?: () => boolean;
@@ -24,6 +25,7 @@ type YT = {
     el: HTMLElement,
     options: {
       videoId: string;
+      host?: string;
       playerVars: Record<string, unknown>;
       events: {
         onReady: (event: { target: PlayerApi }) => void;
@@ -66,6 +68,7 @@ type YouTubeOverlayPlayerProps = {
 export function YouTubeOverlayPlayer({ videoId, onClose }: YouTubeOverlayPlayerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const playerRef = useRef<PlayerApi | null>(null);
+  const endGuardRef = useRef(false);
   const setVideoController = usePlayerStore((s) => s.setVideoController);
   const setIsPlaying = usePlayerStore((s) => s.setIsPlaying);
   const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
@@ -91,13 +94,17 @@ export function YouTubeOverlayPlayer({ videoId, onClose }: YouTubeOverlayPlayerP
         autoplay: 1,
         controls: 0,
         disablekb: 1,
+        fs: 0,
+        iv_load_policy: 3,
         modestbranding: 1,
         rel: 0,
         playsinline: 1,
         origin: window.location.origin,
+        vq: 'tiny',
       };
 
       const onReady = (event: { target: PlayerApi }) => {
+        event.target.setPlaybackQuality?.('tiny');
         const nextDuration = event.target.getDuration?.() ?? 0;
         if (Number.isFinite(nextDuration) && nextDuration > 0) {
           setDuration(nextDuration);
@@ -110,6 +117,7 @@ export function YouTubeOverlayPlayer({ videoId, onClose }: YouTubeOverlayPlayerP
         if (event.data === states.PLAYING) {
           setIsPlaying(true);
           setStatusMessage('');
+          endGuardRef.current = false;
           return;
         }
         if (event.data === states.PAUSED) {
@@ -132,6 +140,7 @@ export function YouTubeOverlayPlayer({ videoId, onClose }: YouTubeOverlayPlayerP
       } else {
         playerRef.current = new yt.Player(containerRef.current, {
           videoId,
+          host: 'https://www.youtube-nocookie.com',
           playerVars,
           events: { onReady, onStateChange, onError },
         });
@@ -148,6 +157,27 @@ export function YouTubeOverlayPlayer({ videoId, onClose }: YouTubeOverlayPlayerP
       cancelled = true;
     };
   }, [setCurrentTime, setDuration, setIsPlaying, setStatusMessage, setVideoController, videoId]);
+
+  useEffect(() => {
+    let interval = 0;
+    const tick = () => {
+      const player = playerRef.current;
+      if (!player) return;
+      const duration = player.getDuration?.() ?? 0;
+      const current = player.getCurrentTime?.() ?? 0;
+      if (duration > 1 && current > 0 && duration - current <= 0.6 && !endGuardRef.current) {
+        endGuardRef.current = true;
+        const freezeAt = Math.max(duration - 0.4, 0);
+        player.seekTo?.(freezeAt, true);
+        player.pauseVideo?.();
+        setCurrentTime(freezeAt);
+        setIsPlaying(false);
+        setStatusMessage('Video finalizado');
+      }
+    };
+    interval = window.setInterval(tick, 250);
+    return () => window.clearInterval(interval);
+  }, [setCurrentTime, setIsPlaying, setStatusMessage]);
 
   useEffect(() => {
     return () => {

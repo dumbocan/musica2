@@ -49,8 +49,9 @@ async def _resolve_track_metadata(
 ) -> Tuple[Optional[YouTubeDownload], Optional[Track], Optional[Album], Optional[Artist]]:
     row = (await session.exec(
         select(YouTubeDownload, Track, Album, Artist)
-        .join(Track, Track.spotify_id == YouTubeDownload.spotify_track_id)
-        .join(Artist, Artist.id == Track.artist_id)
+        .select_from(YouTubeDownload)
+        .outerjoin(Track, Track.spotify_id == YouTubeDownload.spotify_track_id)
+        .outerjoin(Artist, Artist.id == Track.artist_id)
         .outerjoin(Album, Album.id == Track.album_id)
         .where(YouTubeDownload.youtube_video_id == video_id)
     )).first()
