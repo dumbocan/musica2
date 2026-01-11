@@ -48,6 +48,7 @@ wheels/
 # OS
 .DS_Store
 Thumbs.db
+Documento sin título
 
 # Frontend
 frontend/node_modules/
