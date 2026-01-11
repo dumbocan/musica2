@@ -30,12 +30,6 @@ export function Sidebar() {
   const location = useLocation();
   const { sidebarOpen, setSidebarOpen } = useApiStore();
   const videoEmbedId = usePlayerStore((s) => s.videoEmbedId);
-  const videoController = usePlayerStore((s) => s.videoController);
-  const setVideoEmbedId = usePlayerStore((s) => s.setVideoEmbedId);
-  const setStatusMessage = usePlayerStore((s) => s.setStatusMessage);
-  const setIsPlaying = usePlayerStore((s) => s.setIsPlaying);
-  const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
-  const setDuration = usePlayerStore((s) => s.setDuration);
   const playbackMode = usePlayerStore((s) => s.playbackMode);
   const nowPlaying = usePlayerStore((s) => s.nowPlaying);
   const videoDownloadVideoId = usePlayerStore((s) => s.videoDownloadVideoId);
@@ -56,17 +50,6 @@ export function Sidebar() {
     !!nowPlaying?.videoId &&
     audioDownloadVideoId === nowPlaying.videoId &&
     audioDownloadStatus === 'downloading';
-
-  const handleCloseVideo = () => {
-    if (videoController) {
-      videoController.stop();
-    }
-    setVideoEmbedId(null);
-    setStatusMessage('Video detenido');
-    setIsPlaying(false);
-    setCurrentTime(0);
-    setDuration(0);
-  };
 
   return (
     <>
@@ -132,7 +115,7 @@ export function Sidebar() {
                     background: 'rgba(8, 12, 20, 0.7)',
                   }}
                 >
-                  <YouTubeOverlayPlayer videoId={videoEmbedId} onClose={handleCloseVideo} />
+                  <YouTubeOverlayPlayer videoId={videoEmbedId} />
                 </div>
                 <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
                   <span

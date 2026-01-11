@@ -38,6 +38,7 @@ export function PlayerFooter() {
   const upgradeInFlightRef = useRef(false);
   const lastVolumeRef = useRef(volume);
   const downloadRequestedRef = useRef(new Set<string>());
+  const endGuardRef = useRef(false);
   const getPreferredFormats = () => {
     const audio = audioRef.current;
     if (!audio) return { fileFormat: 'm4a', streamFormat: 'm4a' };
@@ -98,12 +99,9 @@ export function PlayerFooter() {
 
   useEffect(() => {
     const nextVolume = Math.max(0, Math.min(volume, 100));
-    if (playbackMode === 'video') {
-      if (videoController) {
-        videoController.setVolume(nextVolume);
-        videoController.setMuted(nextVolume === 0);
-      }
-      return;
+    if (playbackMode === 'video' && videoController) {
+      videoController.setVolume(0);
+      videoController.setMuted(true);
     }
     const audio = audioRef.current;
     if (!audio) return;
@@ -117,7 +115,6 @@ export function PlayerFooter() {
   }, [volume]);
 
   useEffect(() => {
-    if (playbackMode !== 'audio') return;
     const audio = audioRef.current;
     if (!audio) return;
     let raf = 0;
@@ -138,24 +135,63 @@ export function PlayerFooter() {
     };
     raf = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(raf);
-  }, [duration, playbackMode, setCurrentTime, setDuration]);
+  }, [duration, setCurrentTime, setDuration]);
+
+  useEffect(() => {
+    endGuardRef.current = false;
+  }, [nowPlaying?.videoId]);
+
+  useEffect(() => {
+    if (!duration || duration <= 0) return;
+    if (endGuardRef.current && currentTime < duration - 2.5) {
+      endGuardRef.current = false;
+    }
+  }, [currentTime, duration]);
 
   useEffect(() => {
     if (playbackMode !== 'video' || !videoController) return;
-    let interval = 0;
-    const tick = () => {
-      const nextTime = videoController.getCurrentTime();
-      if (Number.isFinite(nextTime)) {
-        setCurrentTime(nextTime);
+    const audio = audioRef.current;
+    if (!audio) return;
+    const syncNow = () => {
+      const audioTime = audio.currentTime || 0;
+      if (!Number.isFinite(audioTime)) return;
+      const nextDuration = Number.isFinite(duration) && duration > 0 ? duration : audio.duration || 0;
+      if (nextDuration > 0 && nextDuration - audioTime <= 2 && !endGuardRef.current) {
+        endGuardRef.current = true;
+        const freezeAt = Math.max(nextDuration - 2, 0);
+        videoController.seek(freezeAt);
+        videoController.pause();
+        return;
       }
-      const nextDuration = videoController.getDuration();
-      if (Number.isFinite(nextDuration) && nextDuration > 0) {
-        setDuration(nextDuration);
+      if (endGuardRef.current) {
+        videoController.pause();
+        return;
+      }
+      const videoTime = videoController.getCurrentTime();
+      if (!Number.isFinite(videoTime)) return;
+      const drift = Math.abs(videoTime - audioTime);
+      if (drift > 0.75) {
+        videoController.seek(audioTime);
       }
     };
-    interval = window.setInterval(tick, 400);
+    syncNow();
+    let interval = 0;
+    interval = window.setInterval(syncNow, 900);
     return () => window.clearInterval(interval);
-  }, [playbackMode, setCurrentTime, setDuration, videoController]);
+  }, [currentTime, duration, nowPlaying?.videoId, playbackMode, videoController]);
+
+  useEffect(() => {
+    if (playbackMode !== 'video' || !videoController) return;
+    if (endGuardRef.current) {
+      videoController.pause();
+      return;
+    }
+    if (isPlaying) {
+      videoController.play();
+    } else {
+      videoController.pause();
+    }
+  }, [isPlaying, playbackMode, videoController]);
 
   const requestVideoDownload = useCallback(async (videoId: string) => {
     if (!videoId) return;
@@ -196,7 +232,6 @@ export function PlayerFooter() {
   }, [requestVideoDownload, videoEmbedId]);
 
   useEffect(() => {
-    if (playbackMode !== 'audio') return;
     if (!nowPlaying || audioSourceMode !== 'stream') return;
     let interval = 0;
     interval = window.setInterval(async () => {
@@ -209,7 +244,7 @@ export function PlayerFooter() {
       }
     }, 2500);
     return () => window.clearInterval(interval);
-  }, [audioSourceMode, nowPlaying, playbackMode, tryUpgradeToFile]);
+  }, [audioSourceMode, nowPlaying, tryUpgradeToFile]);
 
   const formatTime = (value: number) => {
     if (!Number.isFinite(value) || value <= 0) return '0:00';
@@ -218,7 +253,7 @@ export function PlayerFooter() {
     return `${mins}:${String(secs).padStart(2, '0')}`;
   };
 
-  const canSeek = playbackMode === 'video' ? !!videoController : audioSourceMode !== 'stream';
+  const canSeek = audioSourceMode !== 'stream';
   const footerStatus = useMemo(() => {
     if (!nowPlaying) return 'Pausado';
     if (statusMessage) return statusMessage;
@@ -244,72 +279,44 @@ export function PlayerFooter() {
       ? 'Selecciona una canción para ver el video'
       : 'Selecciona una canción para reproducir';
 
-  const handlePlay = useCallback(() => {
-    if (!nowPlaying) return;
+  useEffect(() => {
     if (playbackMode === 'video') {
-      if (!nowPlaying.videoId) return;
-      pauseAudio();
-      setStatusMessage('');
-      if (!videoEmbedId || videoEmbedId !== nowPlaying.videoId) {
+      if (nowPlaying?.videoId && videoEmbedId !== nowPlaying.videoId) {
         setVideoEmbedId(nowPlaying.videoId);
-        setIsPlaying(true);
-        return;
-      }
-      if (videoController) {
-        videoController.play();
-        setIsPlaying(true);
-      } else {
-        setStatusMessage('Cargando video...');
       }
       return;
     }
+    if (videoEmbedId) {
+      setVideoEmbedId(null);
+    }
+  }, [nowPlaying?.videoId, playbackMode, setVideoEmbedId, videoEmbedId]);
+
+  const handlePlay = useCallback(() => {
+    if (!nowPlaying) return;
     const audio = audioRef.current;
     if (!audio) return;
     if (!audio.src || !audio.src.includes(nowPlaying.videoId)) {
       void playByVideoId(nowPlaying);
       return;
     }
+    setStatusMessage('');
     resumeAudio();
-  }, [nowPlaying, playbackMode, pauseAudio, setStatusMessage, videoEmbedId, setVideoEmbedId, setIsPlaying, videoController, playByVideoId, resumeAudio]);
+  }, [nowPlaying, playByVideoId, resumeAudio, setStatusMessage]);
 
   const handlePause = useCallback(() => {
-    if (playbackMode === 'video') {
-      if (videoController) {
-        videoController.pause();
-        setStatusMessage('Video pausado');
-      } else {
-        setStatusMessage('Video no disponible');
-      }
-      setIsPlaying(false);
-      return;
-    }
     pauseAudio();
-  }, [playbackMode, videoController, setStatusMessage, setIsPlaying, pauseAudio]);
+  }, [pauseAudio]);
 
   const handleStop = useCallback(() => {
-    if (playbackMode === 'video') {
-      if (videoController) {
-        videoController.stop();
-      }
-      setVideoEmbedId(null);
-      setStatusMessage('Video detenido');
-      setIsPlaying(false);
-      setCurrentTime(0);
-      setDuration(0);
-      return;
-    }
     stopAudio();
-  }, [playbackMode, videoController, setVideoEmbedId, setStatusMessage, setIsPlaying, setCurrentTime, setDuration, stopAudio]);
+  }, [stopAudio]);
 
   const handleSeek = useCallback((value: number) => {
-    if (playbackMode === 'video') {
-      if (!videoController) return;
-      videoController.seek(value);
-      setCurrentTime(value);
-      return;
-    }
     seekAudio(value);
-  }, [playbackMode, videoController, setCurrentTime, seekAudio]);
+    if (playbackMode === 'video' && videoController) {
+      videoController.seek(value);
+    }
+  }, [playbackMode, videoController, seekAudio]);
 
   const handlePrev = useCallback(() => {
     if (!prevItem || !onPlayTrack) return;
@@ -336,9 +343,6 @@ export function PlayerFooter() {
     const toggleMute = () => {
       const next = volume > 0 ? 0 : Math.max(5, lastVolumeRef.current || 70);
       setVolume(next);
-      if (playbackMode === 'video') {
-        videoController?.setMuted(next === 0);
-      }
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -411,9 +415,7 @@ export function PlayerFooter() {
     handleStop,
     isPlaying,
     nowPlaying,
-    playbackMode,
     setVolume,
-    videoController,
     volume,
   ]);
 

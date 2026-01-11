@@ -62,26 +62,18 @@ const createController = (player: PlayerApi): VideoController => ({
 
 type YouTubeOverlayPlayerProps = {
   videoId: string;
-  onClose?: () => void;
 };
 
-export function YouTubeOverlayPlayer({ videoId, onClose }: YouTubeOverlayPlayerProps) {
+export function YouTubeOverlayPlayer({ videoId }: YouTubeOverlayPlayerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const playerRef = useRef<PlayerApi | null>(null);
-  const endGuardRef = useRef(false);
   const setVideoController = usePlayerStore((s) => s.setVideoController);
-  const setIsPlaying = usePlayerStore((s) => s.setIsPlaying);
-  const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
-  const setDuration = usePlayerStore((s) => s.setDuration);
   const setStatusMessage = usePlayerStore((s) => s.setStatusMessage);
 
   useEffect(() => {
     let cancelled = false;
 
     const mount = async () => {
-      setStatusMessage('Cargando video...');
-      setCurrentTime(0);
-      setDuration(0);
       await loadYoutubeIframeApi();
       if (cancelled || !containerRef.current) return;
 
@@ -104,39 +96,21 @@ export function YouTubeOverlayPlayer({ videoId, onClose }: YouTubeOverlayPlayerP
       };
 
       const onReady = (event: { target: PlayerApi }) => {
+        event.target.mute?.();
+        event.target.setVolume?.(0);
         event.target.setPlaybackQuality?.('tiny');
-        const nextDuration = event.target.getDuration?.() ?? 0;
-        if (Number.isFinite(nextDuration) && nextDuration > 0) {
-          setDuration(nextDuration);
-        }
-        setStatusMessage('');
       };
 
-      const onStateChange = (event: { data: number }) => {
-        const states = yt.PlayerState || {};
-        if (event.data === states.PLAYING) {
-          setIsPlaying(true);
-          setStatusMessage('');
-          endGuardRef.current = false;
-          return;
-        }
-        if (event.data === states.PAUSED) {
-          setIsPlaying(false);
-          return;
-        }
-        if (event.data === states.ENDED) {
-          setIsPlaying(false);
-          setCurrentTime(0);
-        }
-      };
+      const onStateChange = (_event: { data: number }) => {};
 
       const onError = () => {
         setStatusMessage('No se pudo cargar el video');
-        setIsPlaying(false);
       };
 
       if (playerRef.current) {
         playerRef.current.loadVideoById?.(videoId);
+        playerRef.current.mute?.();
+        playerRef.current.setVolume?.(0);
       } else {
         playerRef.current = new yt.Player(containerRef.current, {
           videoId,
@@ -156,28 +130,7 @@ export function YouTubeOverlayPlayer({ videoId, onClose }: YouTubeOverlayPlayerP
     return () => {
       cancelled = true;
     };
-  }, [setCurrentTime, setDuration, setIsPlaying, setStatusMessage, setVideoController, videoId]);
-
-  useEffect(() => {
-    let interval = 0;
-    const tick = () => {
-      const player = playerRef.current;
-      if (!player) return;
-      const duration = player.getDuration?.() ?? 0;
-      const current = player.getCurrentTime?.() ?? 0;
-      if (duration > 1 && current > 0 && duration - current <= 0.6 && !endGuardRef.current) {
-        endGuardRef.current = true;
-        const freezeAt = Math.max(duration - 0.4, 0);
-        player.seekTo?.(freezeAt, true);
-        player.pauseVideo?.();
-        setCurrentTime(freezeAt);
-        setIsPlaying(false);
-        setStatusMessage('Video finalizado');
-      }
-    };
-    interval = window.setInterval(tick, 250);
-    return () => window.clearInterval(interval);
-  }, [setCurrentTime, setIsPlaying, setStatusMessage]);
+  }, [setStatusMessage, setVideoController, videoId]);
 
   useEffect(() => {
     return () => {
@@ -201,28 +154,6 @@ export function YouTubeOverlayPlayer({ videoId, onClose }: YouTubeOverlayPlayerP
       }}
     >
       <div ref={containerRef} style={{ width: '100%', height: '100%', pointerEvents: 'none' }} />
-      <button
-        onClick={onClose}
-        style={{
-          position: 'absolute',
-          top: 8,
-          right: 8,
-          width: 26,
-          height: 26,
-          borderRadius: 999,
-          border: 'none',
-          background: 'rgba(0,0,0,0.65)',
-          color: '#fff',
-          cursor: 'pointer',
-          fontSize: 16,
-          lineHeight: '26px',
-          textAlign: 'center',
-          padding: 0,
-        }}
-        aria-label="Cerrar video"
-      >
-        x
-      </button>
     </div>
   );
 }

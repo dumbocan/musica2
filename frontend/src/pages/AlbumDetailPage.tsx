@@ -66,13 +66,8 @@ export function AlbumDetailPage() {
   const [trackFavoriteLoading, setTrackFavoriteLoading] = useState<Record<string, boolean>>({});
   const [youtubeAvailability, setYoutubeAvailability] = useState<Record<string, YoutubeAvailability>>({});
   const [streamState, setStreamState] = useState<Record<string, StreamUiState>>({});
-  const videoEmbedId = usePlayerStore((s) => s.videoEmbedId);
   const setVideoEmbedId = usePlayerStore((s) => s.setVideoEmbedId);
   const playbackMode = usePlayerStore((s) => s.playbackMode);
-  const setIsPlaying = usePlayerStore((s) => s.setIsPlaying);
-  const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
-  const setDuration = usePlayerStore((s) => s.setDuration);
-  const setStatusMessage = usePlayerStore((s) => s.setStatusMessage);
   const setNowPlaying = usePlayerStore((s) => s.setNowPlaying);
   const playByVideoId = usePlayerStore((s) => s.playByVideoId);
   const setQueue = usePlayerStore((s) => s.setQueue);
@@ -95,11 +90,7 @@ export function AlbumDetailPage() {
   const resolveTrackId = useCallback((track: Track) => track.spotify_id || track.id || '', []);
   const handleCloseVideo = useCallback(() => {
     setVideoEmbedId(null);
-    setIsPlaying(false);
-    setCurrentTime(0);
-    setDuration(0);
-    setStatusMessage('Video detenido');
-  }, [setCurrentTime, setDuration, setIsPlaying, setStatusMessage, setVideoEmbedId]);
+  }, [setVideoEmbedId]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -425,7 +416,7 @@ export function AlbumDetailPage() {
 
     const cached = youtubeAvailability[stateKey];
     if (cached?.status === 'available' && cached.videoId) {
-      setStream({ status: 'loading', message: playbackMode === 'audio' ? 'Abriendo audio...' : 'Abriendo YouTube...' });
+      setStream({ status: 'loading', message: 'Abriendo audio...' });
       const nextNowPlaying = {
         title: track.name,
         artist: artistName,
@@ -433,49 +424,6 @@ export function AlbumDetailPage() {
         spotifyTrackId: stateKey,
       };
       setNowPlaying(nextNowPlaying);
-      const idx = tracks.findIndex((t) => resolveTrackId(t) === stateKey);
-      if (idx >= 0) {
-        setCurrentIndex(idx);
-      }
-      if (playbackMode === 'audio') {
-        const result = await playByVideoId({
-          ...nextNowPlaying,
-          durationSec: track.duration_ms ? track.duration_ms / 1000 : undefined,
-        });
-        if (!result.ok) {
-          setStream({ status: 'error', message: 'Pulsa play otra vez para iniciar el audio' });
-          return;
-        }
-        setStream({ status: 'idle' });
-      } else {
-        setStream({ status: 'idle' });
-        setVideoEmbedId(cached.videoId);
-      }
-      return;
-    }
-
-    const info = await fetchYoutubeForTrack(track, stateKey);
-    if (!info || info.status !== 'available') {
-      const msg = autoSearchOnPlay ? 'Sin enlace de YouTube' : 'Sin enlace de YouTube (sin buscar)';
-      setStream({ status: 'error', message: msg });
-      return;
-    }
-
-    setStream({ status: 'loading', message: playbackMode === 'audio' ? 'Abriendo audio...' : 'Abriendo YouTube...' });
-    const nextNowPlaying = {
-      title: track.name,
-      artist: artistName,
-      videoId: info.videoId,
-      spotifyTrackId: stateKey,
-    };
-    setNowPlaying(nextNowPlaying);
-    if (playbackMode !== 'audio') {
-      const idx = tracks.findIndex((t) => resolveTrackId(t) === stateKey);
-      if (idx >= 0) {
-        setCurrentIndex(idx);
-      }
-    }
-    if (playbackMode === 'audio') {
       const idx = tracks.findIndex((t) => resolveTrackId(t) === stateKey);
       if (idx >= 0) {
         setCurrentIndex(idx);
@@ -489,8 +437,41 @@ export function AlbumDetailPage() {
         return;
       }
       setStream({ status: 'idle' });
-    } else {
-      setStream({ status: 'idle' });
+      if (playbackMode === 'video') {
+        setVideoEmbedId(cached.videoId);
+      }
+      return;
+    }
+
+    const info = await fetchYoutubeForTrack(track, stateKey);
+    if (!info || info.status !== 'available') {
+      const msg = autoSearchOnPlay ? 'Sin enlace de YouTube' : 'Sin enlace de YouTube (sin buscar)';
+      setStream({ status: 'error', message: msg });
+      return;
+    }
+
+    setStream({ status: 'loading', message: 'Abriendo audio...' });
+    const nextNowPlaying = {
+      title: track.name,
+      artist: artistName,
+      videoId: info.videoId,
+      spotifyTrackId: stateKey,
+    };
+    setNowPlaying(nextNowPlaying);
+    const idx = tracks.findIndex((t) => resolveTrackId(t) === stateKey);
+    if (idx >= 0) {
+      setCurrentIndex(idx);
+    }
+    const result = await playByVideoId({
+      ...nextNowPlaying,
+      durationSec: track.duration_ms ? track.duration_ms / 1000 : undefined,
+    });
+    if (!result.ok) {
+      setStream({ status: 'error', message: 'Pulsa play otra vez para iniciar el audio' });
+      return;
+    }
+    setStream({ status: 'idle' });
+    if (playbackMode === 'video') {
       setVideoEmbedId(info.videoId);
     }
   }, [album?.artists, youtubeAvailability, playbackMode, setNowPlaying, tracks, resolveTrackId, setCurrentIndex, playByVideoId, setVideoEmbedId, fetchYoutubeForTrack, autoSearchOnPlay]);

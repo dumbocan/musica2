@@ -49,13 +49,8 @@ export function TracksPage() {
   const setOnPlayTrack = usePlayerStore((s) => s.setOnPlayTrack);
   const playbackMode = usePlayerStore((s) => s.playbackMode);
   const lastDownloadedVideo = usePlayerStore((s) => s.lastDownloadedVideo);
-  const setNowPlaying = usePlayerStore((s) => s.setNowPlaying);
   const setVideoEmbedId = usePlayerStore((s) => s.setVideoEmbedId);
-  const setIsPlaying = usePlayerStore((s) => s.setIsPlaying);
-  const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
-  const setDuration = usePlayerStore((s) => s.setDuration);
   const setStatusMessage = usePlayerStore((s) => s.setStatusMessage);
-  const pauseAudio = usePlayerStore((s) => s.pauseAudio);
   const rowHeight = 64;
   const overscan = 8;
   const stickyTop = 84;
@@ -509,23 +504,6 @@ export function TracksPage() {
         }
         const state = usePlayerStore.getState();
         const nextDurationSec = item.durationMs ? Math.round(item.durationMs / 1000) : undefined;
-        if (state.playbackMode === 'video') {
-          state.pauseAudio();
-          state.setNowPlaying({
-            spotifyTrackId: item.spotifyTrackId,
-            title: item.title,
-            artist: item.artist,
-            videoId: item.videoId,
-            durationSec: nextDurationSec,
-          });
-          state.setCurrentTime(0);
-          if (nextDurationSec) {
-            state.setDuration(nextDurationSec);
-          }
-          state.setVideoEmbedId(item.videoId);
-          state.setIsPlaying(true);
-          return;
-        }
         void state.playByVideoId({
           spotifyTrackId: item.spotifyTrackId,
           title: item.title,
@@ -533,24 +511,10 @@ export function TracksPage() {
           videoId: item.videoId,
           durationSec: nextDurationSec,
         });
-      });
-      if (playbackMode === 'video') {
-        pauseAudio();
-        setNowPlaying({
-          spotifyTrackId: trackKey,
-          title: track.track_name || '—',
-          artist: track.artist_name || undefined,
-          videoId,
-          durationSec,
-        });
-        setCurrentTime(0);
-        if (durationSec) {
-          setDuration(durationSec);
+        if (state.playbackMode === 'video') {
+          state.setVideoEmbedId(item.videoId);
         }
-        setVideoEmbedId(videoId);
-        setIsPlaying(true);
-        return;
-      }
+      });
       await playByVideoId({
         spotifyTrackId: trackKey,
         title: track.track_name || '—',
@@ -558,6 +522,9 @@ export function TracksPage() {
         videoId,
         durationSec,
       });
+      if (playbackMode === 'video') {
+        setVideoEmbedId(videoId);
+      }
     },
     [
       buildQueueItems,
@@ -568,12 +535,7 @@ export function TracksPage() {
       setQueue,
       setStatusMessage,
       playbackMode,
-      setNowPlaying,
       setVideoEmbedId,
-      setIsPlaying,
-      setCurrentTime,
-      setDuration,
-      pauseAudio,
     ]
   );
 
