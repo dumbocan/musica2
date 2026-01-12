@@ -18,7 +18,13 @@ from .api.favorites import router as favorites_router
 from .api.images import router as images_router
 from .core.config import settings
 from .core.db import get_session
-from .core.maintenance import daily_refresh_loop
+from .core.maintenance import (
+    daily_refresh_loop,
+    genre_backfill_loop,
+    full_library_refresh_loop,
+    chart_scrape_loop,
+    chart_match_loop,
+)
 from .core.security import get_current_user_id_from_token
 from .models.base import User
 from sqlmodel import select
@@ -109,3 +115,7 @@ app.include_router(images_router)
 @app.on_event("startup")
 async def _start_maintenance():
     asyncio.create_task(daily_refresh_loop())
+    asyncio.create_task(genre_backfill_loop())
+    asyncio.create_task(full_library_refresh_loop())
+    asyncio.create_task(chart_scrape_loop())
+    asyncio.create_task(chart_match_loop())

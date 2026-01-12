@@ -3,7 +3,7 @@
 from sqlmodel import SQLModel, Field, Relationship
 from sqlalchemy import UniqueConstraint
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, date
 from enum import Enum
 
 # Musical Genre enum if needed
@@ -317,6 +317,73 @@ class PlayHistory(SQLModel, table=True):
     # Relationships
     user: User = Relationship(back_populates="play_history")
     track: Track = Relationship(back_populates="play_history")
+
+
+class ChartScanState(SQLModel, table=True):
+    """State for external chart backfill and refresh."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    chart_source: str = Field(max_length=50, index=True)
+    chart_name: str = Field(max_length=120, index=True)
+    last_scanned_date: Optional[date] = None  # Most recent chart date processed
+    backfill_complete: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("chart_source", "chart_name"),
+    )
+
+
+class ChartEntryRaw(SQLModel, table=True):
+    """Raw chart entries (top ranks only) stored independently of local tracks."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    chart_source: str = Field(max_length=50, index=True)
+    chart_name: str = Field(max_length=120, index=True)
+    chart_date: date = Field(index=True)
+    rank: int = Field(default=0)
+    title: str = Field(max_length=250)
+    artist: str = Field(max_length=250)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("chart_source", "chart_name", "chart_date", "rank"),
+    )
+
+
+class TrackChartEntry(SQLModel, table=True):
+    """Weekly chart entries for a track (dedupe per chart date)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    track_id: int = Field(foreign_key="track.id", ondelete="CASCADE", index=True)
+    chart_source: str = Field(max_length=50, index=True)
+    chart_name: str = Field(max_length=120, index=True)
+    chart_date: date = Field(index=True)
+    rank: int = Field(default=0)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("track_id", "chart_source", "chart_name", "chart_date"),
+    )
+
+
+class TrackChartStats(SQLModel, table=True):
+    """Aggregated chart stats per track and chart."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    track_id: int = Field(foreign_key="track.id", ondelete="CASCADE", index=True)
+    chart_source: str = Field(max_length=50, index=True)
+    chart_name: str = Field(max_length=120, index=True)
+    best_position: Optional[int] = None
+    weeks_on_chart: int = Field(default=0)
+    weeks_at_one: int = Field(default=0)
+    weeks_top5: int = Field(default=0)
+    weeks_top10: int = Field(default=0)
+    first_chart_date: Optional[date] = None
+    last_chart_date: Optional[date] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("track_id", "chart_source", "chart_name"),
+    )
 
 
 # Pydantic models for API responses (validation)

@@ -17,6 +17,15 @@ const filterLabels: Record<FilterTab, string> = {
   missingFile: 'Sin MP3 local'
 };
 
+const formatChartDate = (value?: string | null) => {
+  if (!value) return null;
+  const parts = value.split('-');
+  if (parts.length !== 3) return value;
+  const [year, month, day] = parts;
+  if (!day || !month || !year) return value;
+  return `${day}-${month}-${year}`;
+};
+
 export function TracksPage() {
   const [tracks, setTracks] = useState<TrackOverview[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -252,15 +261,18 @@ export function TracksPage() {
             (override && override.trackKey === trackKey ? override.videoId : undefined);
           if (!videoId) return null;
           return {
+            localTrackId: track.track_id,
             spotifyTrackId: trackKey,
             title: track.track_name || '—',
             artist: track.artist_name || undefined,
+            artistSpotifyId: track.artist_spotify_id || undefined,
             durationMs: track.duration_ms || undefined,
             videoId,
             rawTrack: track,
           };
         })
         .filter(Boolean) as Array<{
+        localTrackId?: number;
         spotifyTrackId: string;
         title: string;
         artist?: string;
@@ -505,9 +517,11 @@ export function TracksPage() {
         const state = usePlayerStore.getState();
         const nextDurationSec = item.durationMs ? Math.round(item.durationMs / 1000) : undefined;
         void state.playByVideoId({
+          localTrackId: item.localTrackId,
           spotifyTrackId: item.spotifyTrackId,
           title: item.title,
           artist: item.artist,
+          artistSpotifyId: item.artistSpotifyId,
           videoId: item.videoId,
           durationSec: nextDurationSec,
         });
@@ -516,9 +530,11 @@ export function TracksPage() {
         }
       });
       await playByVideoId({
+        localTrackId: track.track_id,
         spotifyTrackId: trackKey,
         title: track.track_name || '—',
         artist: track.artist_name || undefined,
+        artistSpotifyId: track.artist_spotify_id || undefined,
         videoId,
         durationSec,
       });
@@ -693,6 +709,10 @@ export function TracksPage() {
                   const linkLoading = linkState[trackKey]?.status === 'loading';
                   const canPlay = !linkLoading && (!!track.youtube_video_id || !!track.spotify_track_id);
                   const isFavorite = favoriteTrackIds.has(track.track_id);
+                  const chartBadge = track.chart_best_position
+                    ? `#${track.chart_best_position}`
+                    : null;
+                  const chartDate = formatChartDate(track.chart_best_position_date);
 
                   return (
                     <tr
@@ -722,6 +742,31 @@ export function TracksPage() {
                           }}
                         >
                           {track.track_name}
+                          {chartBadge ? (
+                            <span
+                              title={`Billboard ${track.chart_best_position}${chartDate ? ` · ${chartDate}` : ''}`}
+                              style={{
+                                marginLeft: 8,
+                                fontSize: 12,
+                                fontWeight: 700,
+                                color: '#facc15',
+                                textTransform: 'uppercase',
+                              }}
+                            >
+                              {chartBadge}
+                            </span>
+                          ) : null}
+                          {chartBadge && chartDate ? (
+                            <span
+                              style={{
+                                marginLeft: 6,
+                                fontSize: 11,
+                                color: 'var(--muted)',
+                              }}
+                            >
+                              {chartDate}
+                            </span>
+                          ) : null}
                         </button>
                       </td>
                   <td style={{ ...cellStyle, fontSize: 14 }}>{track.artist_name || '—'}</td>

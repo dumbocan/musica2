@@ -108,6 +108,36 @@ export const audio2Api = {
     api.get('/tracks/overview', { params, timeout: 60000 }),
   resolveTracks: (spotifyTrackIds: string[]) =>
     api.post('/tracks/resolve', { spotify_track_ids: spotifyTrackIds }),
+  getRecentlyAddedTracks: (params?: { limit?: number }) =>
+    api.get('/tracks/recently-added', { params }),
+  getMostPlayedTracks: (params?: { limit?: number }) =>
+    api.get('/tracks/most-played', { params }),
+  getRecentPlays: (params?: { limit?: number }) =>
+    api.get('/tracks/recent-plays', { params }),
+  getTrackRecommendations: (params: { seed_tracks?: string[]; seed_artists?: string[]; limit?: number }) =>
+    api.get('/tracks/recommendations', {
+      params: {
+        seed_tracks: params.seed_tracks?.join(','),
+        seed_artists: params.seed_artists?.join(','),
+        limit: params.limit,
+      },
+    }),
+  getTrackChartStats: (spotifyTrackIds: string[]) =>
+    api.get('/tracks/chart-stats', {
+      params: { spotify_ids: spotifyTrackIds.join(',') },
+    }),
+  recordTrackPlay: (trackId: number) => api.post(`/tracks/play/${trackId}`),
+
+  // Charts
+  getChartRaw: (params?: {
+    chart_source?: string;
+    chart_name?: string;
+    start_date?: string;
+    end_date?: string;
+    limit?: number;
+    offset?: number;
+    include_summary?: boolean;
+  }) => api.get('/charts/external/raw', { params }),
 
   // Playlists
   getAllPlaylists: () => api.get('/playlists/'),
@@ -119,6 +149,10 @@ export const audio2Api = {
     api.delete(`/favorites/${targetType}/${targetId}`, { params: { user_id: userId } }),
   listFavorites: (params: { user_id: number; target_type?: 'artist' | 'album' | 'track' }) =>
     api.get('/favorites', { params }),
+
+  // User learning
+  getUserRecommendations: (userId: number, limit?: number) =>
+    api.get(`/user-learning/recommendations/${userId}`, { params: { limit } }),
 
   // YouTube
   searchYoutubeMusic: (params: { artist: string; track: string; album?: string; max_results?: number }) =>

@@ -40,6 +40,12 @@ Secrets stay in `.env`; never hard-code tokens or client secrets. Honor the auth
 - The Tracks page (`frontend/src/pages/TracksPage.tsx`) expects fields like `youtube_status`, `youtube_url`, and `local_file_exists`. When updating backend schemas, keep those keys stable or update the UI in the same change.
 - Album link counters should combine DB data (`YouTubeDownload` joins) with downloaded track IDs. Make sure new features keep that dual-source logic intact, especially when introducing migrations or cleanup scripts.
 
+## Playback History & Charts
+- `POST /tracks/play/{track_id}` records plays in `PlayHistory`; UI counters should read from backend endpoints instead of local-only state.
+- `GET /tracks/most-played` and `GET /tracks/recent-plays` power the dashboard lists; they return `play_count` / `played_at` plus the same YouTube/cache fields as track lists.
+- Chart badges come from `GET /tracks/chart-stats` and `GET /tracks/overview` fields (`chart_best_position`, `chart_best_position_date`); keep those keys stable in frontend.
+- Billboard matches are computed from raw chart data via `TrackChartEntry` + `TrackChartStats`; the maintenance loop populates stats so the UI does not scrape external sites.
+
 ## Recent Troubleshooting Notes
 - YouTube quota 403/429 stops prefetch for 15 min; avoid extra loops and only search on album entry or explicit play.
 - “Sin enlace de YouTube” can appear if `download_status` is stale; normalize to `link_found` when `youtube_video_id` exists.

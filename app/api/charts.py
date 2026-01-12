@@ -6,7 +6,17 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Query
 
 from ..core.db import get_session
-from ..models.base import Track, Artist, Album, PlayHistory, Tag, TrackTag
+from ..models.base import (
+    Track,
+    Artist,
+    Album,
+    PlayHistory,
+    Tag,
+    TrackTag,
+    TrackChartStats,
+    ChartEntryRaw,
+    ChartScanState,
+)
 from sqlmodel import select, func, and_
 
 router = APIRouter(prefix="/charts", tags=["charts"])
@@ -366,6 +376,221 @@ def get_tag_popularity_chart(
                 "end_date": end.isoformat()
             },
             "results": chart_data
+        }
+    finally:
+        session.close()
+
+
+@router.get("/external/tracks")
+def get_external_chart_tracks(
+    scope: str = Query("auto", description="auto, global, or us"),
+    max_rank: int = Query(10, ge=1, le=200, description="Max chart position"),
+    limit: int = Query(50, ge=1, le=200, description="Number of tracks to return"),
+    sort_by: str = Query("best_position", description="best_position, weeks_at_one, weeks_on_chart"),
+):
+    """Get Billboard chart stats for library tracks."""
+    session = get_session()
+    try:
+        if scope not in {"auto", "global", "us"}:
+            raise HTTPException(status_code=400, detail="Invalid scope")
+
+        chart_source = "billboard"
+        global_chart = "billboard-global-200"
+        us_chart = "hot-100"
+
+        stats_by_track = {}
+        chart_name_by_track = {}
+
+        if scope in {"auto", "global"}:
+            stats = session.exec(
+                select(TrackChartStats).where(
+                    (TrackChartStats.chart_source == chart_source)
+                    & (TrackChartStats.chart_name == global_chart)
+                )
+            ).all()
+            for row in stats:
+                stats_by_track[row.track_id] = row
+                chart_name_by_track[row.track_id] = global_chart
+
+        if scope in {"auto", "us"}:
+            stats = session.exec(
+                select(TrackChartStats).where(
+                    (TrackChartStats.chart_source == chart_source)
+                    & (TrackChartStats.chart_name == us_chart)
+                )
+            ).all()
+            for row in stats:
+                if row.track_id not in stats_by_track:
+                    stats_by_track[row.track_id] = row
+                    chart_name_by_track[row.track_id] = us_chart
+
+        filtered_stats = [
+            row for row in stats_by_track.values()
+            if row.best_position is not None and row.best_position <= max_rank
+        ]
+
+        if sort_by == "best_position":
+            filtered_stats.sort(key=lambda item: item.best_position or 999)
+        elif sort_by == "weeks_at_one":
+            filtered_stats.sort(key=lambda item: item.weeks_at_one, reverse=True)
+        elif sort_by == "weeks_on_chart":
+            filtered_stats.sort(key=lambda item: item.weeks_on_chart, reverse=True)
+        else:
+            raise HTTPException(status_code=400, detail="Invalid sort_by")
+
+        limited_stats = filtered_stats[:limit]
+        track_ids = [row.track_id for row in limited_stats]
+        if not track_ids:
+            return {"results": []}
+
+        track_rows = session.exec(
+            select(Track, Artist.name)
+            .join(Artist, Artist.id == Track.artist_id)
+            .where(Track.id.in_(track_ids))
+        ).all()
+        track_map = {track.id: (track, artist_name) for track, artist_name in track_rows}
+
+        results = []
+        for rank, stat in enumerate(limited_stats, start=1):
+            track, artist_name = track_map.get(stat.track_id, (None, None))
+            if not track:
+                continue
+            results.append(
+                {
+                    "track": track.dict(),
+                    "artist_name": artist_name,
+                    "chart_source": chart_source,
+                    "chart_name": chart_name_by_track.get(stat.track_id),
+                    "best_position": stat.best_position,
+                    "weeks_on_chart": stat.weeks_on_chart,
+                    "weeks_at_one": stat.weeks_at_one,
+                    "weeks_top5": stat.weeks_top5,
+                    "weeks_top10": stat.weeks_top10,
+                    "first_chart_date": stat.first_chart_date.isoformat()
+                    if stat.first_chart_date
+                    else None,
+                    "last_chart_date": stat.last_chart_date.isoformat()
+                    if stat.last_chart_date
+                    else None,
+                    "rank": rank,
+                }
+            )
+
+        return {"results": results}
+    finally:
+        session.close()
+
+
+@router.get("/external/status")
+def get_external_chart_status() -> dict:
+    """Get backfill status for external chart scraping."""
+    session = get_session()
+    try:
+        states = session.exec(select(ChartScanState)).all()
+        raw_rows = session.exec(
+            select(
+                ChartEntryRaw.chart_source,
+                ChartEntryRaw.chart_name,
+                func.count(ChartEntryRaw.id),
+                func.max(ChartEntryRaw.chart_date),
+            )
+            .group_by(ChartEntryRaw.chart_source, ChartEntryRaw.chart_name)
+        ).all()
+        raw_map = {
+            (row[0], row[1]): {
+                "raw_count": int(row[2] or 0),
+                "latest_chart_date": row[3].isoformat() if row[3] else None,
+            }
+            for row in raw_rows
+        }
+
+        results = []
+        for state in states:
+            raw = raw_map.get(
+                (state.chart_source, state.chart_name),
+                {"raw_count": 0, "latest_chart_date": None},
+            )
+            results.append(
+                {
+                    "chart_source": state.chart_source,
+                    "chart_name": state.chart_name,
+                    "last_scanned_date": state.last_scanned_date.isoformat()
+                    if state.last_scanned_date
+                    else None,
+                    "backfill_complete": state.backfill_complete,
+                    "raw_count": raw["raw_count"],
+                    "latest_chart_date": raw["latest_chart_date"],
+                }
+            )
+
+        results.sort(key=lambda item: (item["chart_source"], item["chart_name"]))
+        return {"results": results}
+    finally:
+        session.close()
+
+
+@router.get("/external/raw")
+def get_external_chart_raw(
+    chart_source: str = Query("billboard", description="Chart source"),
+    chart_name: str | None = Query(None, description="Chart name, e.g. hot-100"),
+    start_date: str | None = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: str | None = Query(None, description="End date (YYYY-MM-DD)"),
+    limit: int = Query(200, ge=1, le=1000, description="Number of rows to return"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    include_summary: bool = Query(True, description="Include aggregate counts"),
+) -> dict:
+    """Return raw chart rows stored by the backfill."""
+    session = get_session()
+    try:
+        query = select(ChartEntryRaw).where(ChartEntryRaw.chart_source == chart_source)
+        if chart_name:
+            query = query.where(ChartEntryRaw.chart_name == chart_name)
+        if start_date:
+            query = query.where(ChartEntryRaw.chart_date >= datetime.fromisoformat(start_date).date())
+        if end_date:
+            query = query.where(ChartEntryRaw.chart_date <= datetime.fromisoformat(end_date).date())
+
+        items = session.exec(
+            query.order_by(ChartEntryRaw.chart_date.desc(), ChartEntryRaw.rank.asc())
+            .offset(offset)
+            .limit(limit)
+        ).all()
+
+        summary = None
+        if include_summary:
+            count_query = select(
+                func.count(ChartEntryRaw.id),
+                func.count(func.distinct(ChartEntryRaw.chart_date)),
+                func.count(func.distinct(ChartEntryRaw.title)),
+            ).where(ChartEntryRaw.chart_source == chart_source)
+            if chart_name:
+                count_query = count_query.where(ChartEntryRaw.chart_name == chart_name)
+            if start_date:
+                count_query = count_query.where(ChartEntryRaw.chart_date >= datetime.fromisoformat(start_date).date())
+            if end_date:
+                count_query = count_query.where(ChartEntryRaw.chart_date <= datetime.fromisoformat(end_date).date())
+            total_rows, distinct_dates, distinct_titles = session.exec(count_query).one()
+            summary = {
+                "total_rows": int(total_rows or 0),
+                "distinct_dates": int(distinct_dates or 0),
+                "distinct_titles": int(distinct_titles or 0),
+            }
+
+        return {
+            "items": [
+                {
+                    "chart_source": row.chart_source,
+                    "chart_name": row.chart_name,
+                    "chart_date": row.chart_date.isoformat(),
+                    "rank": row.rank,
+                    "title": row.title,
+                    "artist": row.artist,
+                }
+                for row in items
+            ],
+            "offset": offset,
+            "limit": limit,
+            "summary": summary,
         }
     finally:
         session.close()

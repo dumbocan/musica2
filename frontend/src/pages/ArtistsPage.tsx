@@ -273,13 +273,7 @@ export function ArtistsPage() {
 
       {!isLoading && !isArtistsLoading && (
         <div className="space-y-4">
-          <div
-            className="grid gap-6"
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
-            }}
-          >
+          <div className="artists-grid">
             {displayArtists.map((artist) => {
               const { imageUrl, genres } = getArtistAssets(artist);
               const disabled = !artist.spotify_id;
@@ -311,7 +305,8 @@ export function ArtistsPage() {
                     padding: '20px',
                     background: 'none',
                     border: 'none',
-                    outline: 'none'
+                    outline: 'none',
+                    height: 'var(--artist-card-height, 360px)'
                   }}
                 >
                   {imageUrl ? (
@@ -320,8 +315,8 @@ export function ArtistsPage() {
                       alt={artist.name}
                       loading="lazy"
                       style={{
-                        width: '200px',
-                        height: '200px',
+                        width: 'var(--artist-avatar-size, 200px)',
+                        height: 'var(--artist-avatar-size, 200px)',
                         borderRadius: '50%',
                         objectFit: 'cover',
                         display: 'block',
@@ -331,8 +326,8 @@ export function ArtistsPage() {
                   ) : (
                     <div
                       style={{
-                        width: '200px',
-                        height: '200px',
+                        width: 'var(--artist-avatar-size, 200px)',
+                        height: 'var(--artist-avatar-size, 200px)',
                         borderRadius: '50%',
                         border: '1px solid var(--border)',
                         display: 'flex',

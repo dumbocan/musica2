@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { audio2Api } from '@/lib/api';
 import { useApiStore } from '@/store/useApiStore';
-import type { SpotifyArtist, SpotifyTrackLite } from '@/types/api';
+import type { SpotifyArtist, SpotifyTrackLite, TrackChartStat } from '@/types/api';
 import { Music } from 'lucide-react';
 
 type ArtistInfo = {
@@ -31,6 +31,15 @@ type LastfmArtist = {
 
 type SearchMode = 'tag' | 'artist';
 
+const formatChartDate = (value?: string | null) => {
+  if (!value) return null;
+  const parts = value.split('-');
+  if (parts.length !== 3) return value;
+  const [year, month, day] = parts;
+  if (!day || !month || !year) return value;
+  return `${day}-${month}-${year}`;
+};
+
 export function SearchPage() {
   const [lastfmEnriched, setLastfmEnriched] = useState<LastfmArtist[]>([]);
   const [lastfmArtists, setLastfmArtists] = useState<LastfmArtist[]>([]);
@@ -44,6 +53,7 @@ export function SearchPage() {
   const [artistProfile, setArtistProfile] = useState<ArtistInfo | null>(null);
   const [artistSimilar, setArtistSimilar] = useState<ArtistInfo[]>([]);
   const [trackResults, setTrackResults] = useState<SpotifyTrackLite[]>([]);
+  const [chartStatsBySpotifyId, setChartStatsBySpotifyId] = useState<Record<string, TrackChartStat>>({});
 
   const {
     searchMainInfo,
@@ -203,6 +213,38 @@ export function SearchPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchTrigger]);
+
+  useEffect(() => {
+    const ids = Array.from(new Set(trackResults.map((track) => track.id).filter(Boolean)));
+    if (ids.length === 0) {
+      setChartStatsBySpotifyId({});
+      return;
+    }
+    let cancelled = false;
+    const loadStats = async () => {
+      try {
+        const response = await audio2Api.getTrackChartStats(ids);
+        const items: TrackChartStat[] = Array.isArray(response.data?.items) ? response.data.items : [];
+        const next: Record<string, TrackChartStat> = {};
+        items.forEach((item) => {
+          if (item.spotify_track_id) {
+            next[item.spotify_track_id] = item;
+          }
+        });
+        if (!cancelled) {
+          setChartStatsBySpotifyId(next);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setChartStatsBySpotifyId({});
+        }
+      }
+    };
+    void loadStats();
+    return () => {
+      cancelled = true;
+    };
+  }, [trackResults]);
 
   return (
     <div className="space-y-6">
@@ -514,6 +556,11 @@ export function SearchPage() {
             ).map(([albumId, t], idx) => {
               const albumImg = t.album?.images?.[0]?.url;
               const artistNames = (t.artists || []).map((a: { name: string }) => a.name).join(', ');
+              const chartStat = chartStatsBySpotifyId[t.id];
+              const chartBadge = chartStat?.chart_best_position
+                ? `#${chartStat.chart_best_position}`
+                : null;
+              const chartDate = formatChartDate(chartStat?.chart_best_position_date);
               return (
                 <div
                   key={albumId || `${t.name}-${idx}`}
@@ -540,6 +587,34 @@ export function SearchPage() {
                   <div style={{ overflow: 'hidden' }}>
                     <div className="font-semibold" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {t.album?.name || t.name}
+                    </div>
+                    <div className="text-xs text-muted-foreground" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      Cancion: {t.name}
+                      {chartBadge ? (
+                        <span
+                          title={`Billboard ${chartStat?.chart_best_position}${chartDate ? ` · ${chartDate}` : ''}`}
+                          style={{
+                            marginLeft: 8,
+                            fontSize: 12,
+                            fontWeight: 700,
+                            color: '#facc15',
+                            textTransform: 'uppercase',
+                          }}
+                        >
+                          {chartBadge}
+                        </span>
+                      ) : null}
+                      {chartBadge && chartDate ? (
+                        <span
+                          style={{
+                            marginLeft: 6,
+                            fontSize: 11,
+                            color: 'var(--muted)',
+                          }}
+                        >
+                          {chartDate}
+                        </span>
+                      ) : null}
                     </div>
                     <div className="text-xs text-muted-foreground" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {artistNames}

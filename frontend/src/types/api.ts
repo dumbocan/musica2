@@ -218,6 +218,19 @@ export interface HealthCheckResponse {
   database?: string;
 }
 
+export interface UserRecommendation {
+  artist: Artist;
+  reason?: string | null;
+  confidence?: number | null;
+}
+
+export interface UserRecommendationsResponse {
+  user_id: number;
+  recommendations: UserRecommendation[];
+  based_on_artists: string[];
+  recommendation_count: number;
+}
+
 // Form types
 export interface TrackRatingRequest {
   track_id: number;
@@ -266,4 +279,32 @@ export interface TrackOverview {
   youtube_url?: string | null;
   local_file_path?: string | null;
   local_file_exists: boolean;
+  chart_source?: string | null;
+  chart_name?: string | null;
+  chart_best_position?: number | null;
+  chart_best_position_date?: string | null;
+  chart_weeks_at_one?: number | null;
+  chart_weeks_top5?: number | null;
+  chart_weeks_top10?: number | null;
+}
+
+export interface TrackChartStat {
+  track_id: number;
+  spotify_track_id?: string | null;
+  chart_source?: string | null;
+  chart_name?: string | null;
+  chart_best_position?: number | null;
+  chart_best_position_date?: string | null;
+  chart_weeks_at_one?: number | null;
+  chart_weeks_top5?: number | null;
+  chart_weeks_top10?: number | null;
+}
+
+export interface TrackPlaySummary extends TrackOverview {
+  play_count: number;
+  last_played_at?: string | null;
+}
+
+export interface TrackRecentPlay extends TrackOverview {
+  played_at?: string | null;
 }

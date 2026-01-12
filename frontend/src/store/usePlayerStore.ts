@@ -19,17 +19,25 @@ export type VideoController = {
 export type VideoDownloadStatus = 'idle' | 'checking' | 'downloading' | 'downloaded' | 'missing' | 'error';
 
 export type PlayerTrack = {
+  localTrackId?: number;
   spotifyTrackId: string;
   title: string;
   artist?: string;
+  artistSpotifyId?: string;
   videoId: string;
   durationSec?: number;
 };
 
+export type RecentPlay = PlayerTrack & {
+  playedAt: number;
+};
+
 export type PlayerQueueItem = {
+  localTrackId?: number;
   spotifyTrackId: string;
   title: string;
   artist?: string;
+  artistSpotifyId?: string;
   durationMs?: number;
   videoId?: string;
   rawTrack?: unknown;
@@ -72,6 +80,8 @@ type PlayerStore = {
   setAudioDownloadState: (videoId: string | null, status: VideoDownloadStatus) => void;
   lastDownloadedVideo: { videoId: string; ts: number } | null;
   setLastDownloadedVideo: (videoId: string | null) => void;
+  recentPlays: RecentPlay[];
+  recordRecentPlay: (track: PlayerTrack) => void;
   playByVideoId: (payload: PlayerTrack) => Promise<{ ok: boolean; mode?: AudioSourceMode }>;
   tryUpgradeToFile: () => Promise<boolean>;
   resumeAudio: () => void;
@@ -89,6 +99,31 @@ const getFormats = (audio: HTMLAudioElement | null) => {
     fileFormat: canMp3 ? 'mp3' : 'm4a',
     streamFormat: canM4a ? 'm4a' : canWebm ? 'webm' : 'm4a',
   };
+};
+
+const RECENT_PLAYS_KEY = 'audio2_recent_plays';
+const MAX_RECENT_PLAYS = 20;
+
+const loadRecentPlays = (): RecentPlay[] => {
+  try {
+    const raw = localStorage.getItem(RECENT_PLAYS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item) =>
+      item && typeof item === 'object' && typeof item.videoId === 'string' && typeof item.title === 'string'
+    );
+  } catch {
+    return [];
+  }
+};
+
+const persistRecentPlays = (plays: RecentPlay[]) => {
+  try {
+    localStorage.setItem(RECENT_PLAYS_KEY, JSON.stringify(plays));
+  } catch {
+    // ignore storage errors
+  }
 };
 
 export const usePlayerStore = create<PlayerStore>((set, get) => ({
@@ -135,6 +170,18 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   lastDownloadedVideo: null,
   setLastDownloadedVideo: (videoId) =>
     set({ lastDownloadedVideo: videoId ? { videoId, ts: Date.now() } : null }),
+  recentPlays: loadRecentPlays(),
+  recordRecentPlay: (track) => {
+    const key = `${track.spotifyTrackId}|${track.videoId}`;
+    set((state) => {
+      const next = [
+        { ...track, playedAt: Date.now() },
+        ...state.recentPlays.filter((item) => `${item.spotifyTrackId}|${item.videoId}` !== key),
+      ].slice(0, MAX_RECENT_PLAYS);
+      persistRecentPlays(next);
+      return { recentPlays: next };
+    });
+  },
   playByVideoId: async (payload) => {
     const audio = get().audioEl;
     if (!audio) return { ok: false };
@@ -163,6 +210,23 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
     audio.load();
     try {
       await audio.play();
+      get().recordRecentPlay(payload);
+      const recordBackendPlay = async () => {
+        let trackId = payload.localTrackId;
+        if (!trackId && /^[A-Za-z0-9]{22}$/.test(payload.spotifyTrackId)) {
+          const resolved = await audio2Api
+            .resolveTracks([payload.spotifyTrackId])
+            .catch(() => null);
+          const resolvedId = resolved?.data?.items?.[0]?.track_id;
+          if (typeof resolvedId === 'number') {
+            trackId = resolvedId;
+          }
+        }
+        if (trackId) {
+          await audio2Api.recordTrackPlay(trackId).catch(() => null);
+        }
+      };
+      void recordBackendPlay();
       return { ok: true, mode: get().audioSourceMode };
     } catch {
       audio.src = '';

@@ -42,6 +42,16 @@ class Settings(BaseSettings):
     YOUTUBE_API_KEY: Optional[str] = None
     YOUTUBE_API_KEY_2: Optional[str] = None
 
+    # Chart scraping (Billboard)
+    CHART_BACKFILL_START_DATE: Optional[str] = "1960-01-01"
+    CHART_BACKFILL_YEARS: int = 5
+    CHART_MAX_WEEKS_PER_RUN: int = 20
+    CHART_REFRESH_INTERVAL_HOURS: int = 24
+    CHART_MATCH_REFRESH_INTERVAL_HOURS: int = 12
+    CHART_MAX_RANK: int = 5
+    CHART_REQUEST_MIN_DELAY_SECONDS: float = 0.8
+    CHART_REQUEST_MAX_DELAY_SECONDS: float = 1.8
+
     # Security
     ENVIRONMENT: str = "development"
     JWT_SECRET_KEY: str = "changeme-in-.env"

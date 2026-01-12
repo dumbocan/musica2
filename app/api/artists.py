@@ -26,6 +26,7 @@ from ..crud import (
 from ..core.db import get_session, SessionDep
 from ..models.base import Artist, Album, Track, YouTubeDownload
 from ..core.lastfm import lastfm_client
+from ..core.genre_backfill import derive_genres_from_tracks
 from ..core.auto_download import auto_download_service
 from ..core.data_freshness import data_freshness_manager
 from ..core.image_proxy import proxy_image_list
@@ -128,7 +129,7 @@ async def get_artist_albums(
     session: AsyncSession = Depends(SessionDep),
 ) -> List[dict]:
     """Get all albums for an artist via Spotify API."""
-    albums = await spotify_client.get_artist_albums(spotify_id)
+    albums = await spotify_client.get_artist_albums(spotify_id, include_groups="album,single")
     album_ids = [album.get("id") for album in albums if album.get("id")]
 
     counts: dict[str, int] = {}
@@ -229,7 +230,7 @@ async def sync_artist_discography(
         raise HTTPException(status_code=404, detail="Artist not saved locally")
 
     # Fetch all albums
-    albums_data = await spotify_client.get_artist_albums(spotify_id)
+    albums_data = await spotify_client.get_artist_albums(spotify_id, include_groups="album,single")
 
     from ..crud import save_album
     synced_albums = 0
@@ -251,7 +252,7 @@ async def get_full_discography(spotify_id: str = Path(..., description="Spotify 
         raise HTTPException(status_code=404, detail="Artist not found on Spotify")
 
     # Get albums
-    albums_data = await spotify_client.get_artist_albums(spotify_id)
+    albums_data = await spotify_client.get_artist_albums(spotify_id, include_groups="album,single")
 
     # For each album, get tracks
     discography = {
@@ -442,6 +443,27 @@ def _parse_images_field(raw) -> list:
             return []
 
 
+def _parse_genres_field(raw) -> list:
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [g.strip() for g in raw if isinstance(g, str) and g.strip()]
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [g.strip() for g in parsed if isinstance(g, str) and g.strip()]
+    except (json.JSONDecodeError, TypeError):
+        try:
+            parsed = ast.literal_eval(raw)
+            if isinstance(parsed, list):
+                return [g.strip() for g in parsed if isinstance(g, str) and g.strip()]
+        except (ValueError, SyntaxError):
+            return []
+    if isinstance(raw, str) and "," in raw:
+        return [g.strip() for g in raw.split(",") if g.strip()]
+    return []
+
+
 def _extract_url(entry) -> str | None:
     if isinstance(entry, dict):
         url = entry.get("url") or entry.get("#text")
@@ -456,6 +478,8 @@ def _is_proxied_images(images: list) -> bool:
     if not images:
         return False
     return all((_extract_url(img) or "").startswith("/images/proxy") for img in images)
+
+
 
 
 @router.get("/")
@@ -482,23 +506,52 @@ async def get_artists(
     needs_commit = False
     for artist in artists:
         stored_images = _parse_images_field(artist.images)
-        if _is_proxied_images(stored_images):
-            continue
-        proxied = proxy_image_list(stored_images, size=256)
-        if not proxied and artist.spotify_id:
-            try:
-                spotify_data = await spotify_client.get_artist(artist.spotify_id)
-                proxied = proxy_image_list(spotify_data.get("images", []), size=256)
-            except Exception as exc:
-                logger.warning("Failed to refresh artist %s images: %s", artist.spotify_id, exc)
-                proxied = []
-        if proxied:
-            artist.images = json.dumps(proxied)
-            session.add(artist)
-            needs_commit = True
+        needs_images_refresh = not _is_proxied_images(stored_images)
+        if needs_images_refresh:
+            proxied = proxy_image_list(stored_images, size=256)
+            if proxied:
+                artist.images = json.dumps(proxied)
+                session.add(artist)
+                needs_commit = True
     if needs_commit:
         await session.commit()
     return {"items": artists, "total": int(total)}
+
+
+@router.post("/refresh-genres")
+async def refresh_artist_genres(
+    limit: int = Query(50, ge=1, le=500, description="Artists to refresh"),
+    tracks_per_artist: int = Query(3, ge=1, le=10, description="Tracks to sample per artist"),
+    session: AsyncSession = Depends(SessionDep),
+) -> dict:
+    """Backfill missing genres using Last.fm track tags."""
+    from ..core.config import settings
+    if not settings.LASTFM_API_KEY:
+        raise HTTPException(status_code=503, detail="LASTFM_API_KEY not configured")
+    statement = select(Artist).order_by(desc(Artist.popularity), asc(Artist.id)).limit(limit)
+    artists = (await session.exec(statement)).all()
+    scanned = 0
+    updated = 0
+    for artist in artists:
+        scanned += 1
+        if _parse_genres_field(artist.genres):
+            continue
+        track_rows = (await session.exec(
+            select(Track.name)
+            .where(Track.artist_id == artist.id)
+            .order_by(desc(Track.popularity), asc(Track.id))
+            .limit(tracks_per_artist)
+        )).all()
+        track_names = [row[0] for row in track_rows if row and row[0]]
+        genres = await derive_genres_from_tracks(artist.name, track_names)
+        if not genres:
+            continue
+        artist.genres = json.dumps(genres)
+        session.add(artist)
+        updated += 1
+    if updated:
+        await session.commit()
+    return {"scanned": scanned, "updated": updated}
 
 
 @router.get("/hidden")
@@ -568,7 +621,7 @@ async def save_full_discography(spotify_id: str = Path(..., description="Spotify
     artist = await asyncio.to_thread(save_artist, artist_data)
 
     # Get albums
-    albums_data = await spotify_client.get_artist_albums(spotify_id)
+    albums_data = await spotify_client.get_artist_albums(spotify_id, include_groups="album,single")
 
     saved_albums = 0
     saved_tracks = 0

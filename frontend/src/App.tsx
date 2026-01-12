@@ -1,11 +1,13 @@
-import { BrowserRouter as Router, Navigate, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
+import { BrowserRouter as Router, Navigate, Routes, Route, useLocation, useNavigate, Link } from 'react-router-dom';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { YoutubeRequestCounter } from '@/components/YoutubeRequestCounter';
 import { PlayerFooter } from '@/components/PlayerFooter';
 import { useApiStore } from '@/store/useApiStore';
-import { LogOut, User, ChevronDown, Search } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { usePlayerStore } from '@/store/usePlayerStore';
+import { LogOut, User, ChevronDown, Search, Menu, Home, Music, ListMusic } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlbumDetailPage } from '@/pages/AlbumDetailPage';
+import { YouTubeOverlayPlayer } from '@/components/YouTubeOverlayPlayer';
 
 // Pages
 import { Dashboard } from '@/pages/Dashboard';
@@ -13,12 +15,11 @@ import { SearchPage } from '@/pages/SearchPage';
 import { ArtistsPage } from '@/pages/ArtistsPage';
 import { TracksPage } from '@/pages/TracksPage';
 import { PlaylistsPage } from '@/pages/PlaylistsPage';
-import { TagsPage } from '@/pages/TagsPage';
 import { DownloadsPage } from '@/pages/DownloadsPage';
 import { LoginPage } from '@/pages/LoginPage';
-import { HealthPage } from '@/pages/HealthPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { ArtistDiscographyPage } from '@/pages/ArtistDiscographyPage';
+import { HistoricalDbPage } from '@/pages/HistoricalDbPage';
 
 type JwtPayload = { exp?: number };
 
@@ -45,6 +46,13 @@ function AppShell() {
   const { setSidebarOpen, isAuthenticated, searchQuery, setSearchQuery, setSearchTrigger } = useApiStore();
   const token = useApiStore((s) => s.token);
   const logout = useApiStore((s) => s.logout);
+  const playbackMode = usePlayerStore((s) => s.playbackMode);
+  const nowPlaying = usePlayerStore((s) => s.nowPlaying);
+  const videoEmbedId = usePlayerStore((s) => s.videoEmbedId);
+  const videoDownloadVideoId = usePlayerStore((s) => s.videoDownloadVideoId);
+  const videoDownloadStatus = usePlayerStore((s) => s.videoDownloadStatus);
+  const audioDownloadVideoId = usePlayerStore((s) => s.audioDownloadVideoId);
+  const audioDownloadStatus = usePlayerStore((s) => s.audioDownloadStatus);
   const [menuOpen, setMenuOpen] = useState(false);
   const closeMenuTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useNavigate();
@@ -82,6 +90,39 @@ function AppShell() {
     closeMenuTimeout.current = setTimeout(() => setMenuOpen(false), 200);
   };
 
+  const audioDownloadLabel = useMemo(() => {
+    if (!nowPlaying?.videoId) return 'pendiente';
+    if (audioDownloadVideoId !== nowPlaying.videoId) return 'pendiente';
+    if (audioDownloadStatus === 'checking') return 'comprobando';
+    if (audioDownloadStatus === 'downloading') return 'descargando';
+    if (audioDownloadStatus === 'downloaded') return 'descargado';
+    if (audioDownloadStatus === 'error') return 'error';
+    return 'pendiente';
+  }, [audioDownloadStatus, audioDownloadVideoId, nowPlaying?.videoId]);
+  const audioDownloadActive =
+    !!nowPlaying?.videoId &&
+    audioDownloadVideoId === nowPlaying.videoId &&
+    audioDownloadStatus === 'downloading';
+  const videoDownloadLabel = useMemo(() => {
+    if (!videoEmbedId) return 'pendiente';
+    if (videoDownloadVideoId !== videoEmbedId) return 'pendiente';
+    if (videoDownloadStatus === 'checking') return 'comprobando';
+    if (videoDownloadStatus === 'downloading') return 'descargando';
+    if (videoDownloadStatus === 'downloaded') return 'descargado';
+    if (videoDownloadStatus === 'error') return 'error';
+    return 'pendiente';
+  }, [videoDownloadStatus, videoDownloadVideoId, videoEmbedId]);
+  const videoDownloadActive =
+    !!videoEmbedId &&
+    videoDownloadVideoId === videoEmbedId &&
+    videoDownloadStatus === 'downloading';
+
+  const mobileNavItems = [
+    { name: 'Dashboard', href: '/', icon: Home },
+    { name: 'Artistas', href: '/artists', icon: Music },
+    { name: 'Tracks', href: '/tracks', icon: ListMusic },
+  ];
+
   // Si no está autenticado, forzar login
   if (!isAuthenticated) {
     if (location.pathname !== '/login') {
@@ -104,27 +145,27 @@ function AppShell() {
       <div className="app-main">
         {/* Top bar */}
         <div className="topbar" style={{ width: '100%' }}>
-          <div
-            className="flex items-center w-full"
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'auto 1fr auto',
-              alignItems: 'center',
-              columnGap: 24,
-              width: '100%'
-            }}
-          >
-            <div className="badge" style={{ whiteSpace: 'nowrap' }}>🎵 Audio2 · Sesión activa</div>
+          <div className="topbar__layout">
+            <div className="topbar__left">
+              <button
+                className="topbar__menu-btn"
+                type="button"
+                aria-label="Abrir menu"
+                onClick={() => setMenuOpen((v) => !v)}
+              >
+                <Menu className="h-5 w-5" />
+              </button>
+              <div className="badge topbar__badge">🎵 Audio2 · Sesión activa</div>
+            </div>
 
-            <div className="flex-1 flex justify-center" style={{ padding: '0 24px' }}>
+            <div className="topbar__center">
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
                   setSearchTrigger(Date.now());
                   navigate('/search');
                 }}
-                className="search-form"
-                style={{ maxWidth: 560, minWidth: 260, width: '100%' }}
+                className="search-form topbar__search"
               >
                 <input
                   id="q-top"
@@ -146,9 +187,9 @@ function AppShell() {
               </form>
             </div>
 
-            <div className="flex items-center gap-3 text-sm" style={{ whiteSpace: 'nowrap' }}>
+            <div className="topbar__right">
               <div
-                className="relative"
+                className="topbar__user"
                 onMouseEnter={openMenu}
                 onMouseLeave={scheduleClose}
               >
@@ -162,44 +203,64 @@ function AppShell() {
                   <span>{useApiStore.getState().userEmail || 'Cuenta'}</span>
                   <ChevronDown className="h-4 w-4" />
                 </button>
-                {menuOpen && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      right: 0,
-                      top: '100%',
-                      background: 'var(--panel)',
-                      border: `1px solid var(--border)`,
-                      borderRadius: 10,
-                      minWidth: 180,
-                      boxShadow: '0 10px 30px rgba(0,0,0,0.3)',
-                      zIndex: 20
-                    }}
-                    onMouseEnter={openMenu}
-                    onMouseLeave={scheduleClose}
-                  >
-                    <a href="/settings" className="nav-item" style={{ marginBottom: 0 }}>
-                      ⚙️ Settings
-                    </a>
-                    <a href="/settings" className="nav-item" style={{ marginBottom: 0 }}>
-                      👤 Account
-                    </a>
-                    <button
-                      className="nav-item"
-                      style={{ width: '100%', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer' }}
-                      onClick={() => {
-                        useApiStore.getState().logout();
-                        setSidebarOpen(false);
-                      }}
-                    >
-                      <LogOut className="h-4 w-4" />
-                      <span>Logout</span>
-                    </button>
-                  </div>
-                )}
               </div>
+              {menuOpen && (
+                <div
+                  className="topbar__menu"
+                  onMouseEnter={openMenu}
+                  onMouseLeave={scheduleClose}
+                >
+                  <a href="/settings" className="nav-item" style={{ marginBottom: 0 }}>
+                    ⚙️ Settings
+                  </a>
+                  <a href="/settings" className="nav-item" style={{ marginBottom: 0 }}>
+                    👤 Account
+                  </a>
+                  <button
+                    className="nav-item"
+                    style={{ width: '100%', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer' }}
+                    onClick={() => {
+                      useApiStore.getState().logout();
+                      setSidebarOpen(false);
+                    }}
+                  >
+                    <LogOut className="h-4 w-4" />
+                    <span>Logout</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
+        </div>
+
+        <div className="mobile-now-playing">
+          {playbackMode === 'video' && videoEmbedId ? (
+            <div>
+              <div className="mobile-now-playing__label">Video en reproduccion</div>
+              <div className="mobile-now-playing__video">
+                <YouTubeOverlayPlayer videoId={videoEmbedId} />
+              </div>
+              <div className="mobile-now-playing__status">
+                <span
+                  className={`status-dot ${videoDownloadActive ? 'status-dot--active' : ''}`}
+                />
+                <span>Audio: {videoDownloadLabel}</span>
+              </div>
+            </div>
+          ) : nowPlaying ? (
+            <div>
+              <div className="mobile-now-playing__label">Audio en reproduccion</div>
+              <div className="mobile-now-playing__title">
+                {nowPlaying.title} · {nowPlaying.artist || ''}
+              </div>
+              <div className="mobile-now-playing__status">
+                <span
+                  className={`status-dot ${audioDownloadActive ? 'status-dot--active' : ''}`}
+                />
+                <span>Audio: {audioDownloadLabel}</span>
+              </div>
+            </div>
+          ) : null}
         </div>
 
         {/* Main content area */}
@@ -214,12 +275,28 @@ function AppShell() {
             <Route path="/artists" element={<ArtistsPage />} />
             <Route path="/tracks" element={<TracksPage />} />
             <Route path="/playlists" element={<PlaylistsPage />} />
-            <Route path="/tags" element={<TagsPage />} />
             <Route path="/downloads" element={<DownloadsPage />} />
-            <Route path="/health" element={<HealthPage />} />
+            <Route path="/bd-historico" element={<HistoricalDbPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>
         </main>
+
+        <nav className="mobile-bottom-nav">
+          {mobileNavItems.map((item) => {
+            const isActive = location.pathname === item.href;
+            const Icon = item.icon;
+            return (
+              <Link
+                key={item.name}
+                to={item.href}
+                className={`mobile-bottom-nav__item ${isActive ? 'is-active' : ''}`}
+              >
+                <Icon className="mobile-bottom-nav__icon" />
+                <span className="mobile-bottom-nav__label">{item.name}</span>
+              </Link>
+            );
+          })}
+        </nav>
       </div>
 
       <YoutubeRequestCounter />

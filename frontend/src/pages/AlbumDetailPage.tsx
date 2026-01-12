@@ -28,6 +28,17 @@ type ResolvedTrack = {
   spotify_track_id: string;
   track_id: number;
 };
+type TrackChartStat = {
+  track_id: number;
+  spotify_track_id?: string | null;
+  chart_source?: string | null;
+  chart_name?: string | null;
+  chart_best_position?: number | null;
+  chart_best_position_date?: string | null;
+  chart_weeks_at_one?: number | null;
+  chart_weeks_top5?: number | null;
+  chart_weeks_top10?: number | null;
+};
 type YoutubeAvailability =
   | { status: 'pending' }
   | { status: 'available'; videoId: string; videoUrl: string; title?: string }
@@ -48,6 +59,14 @@ type Album = {
   };
 };
 
+const formatChartDate = (value?: string | null) => {
+  if (!value) return null;
+  const parts = value.split('-');
+  if (parts.length !== 3) return value;
+  const [year, month, day] = parts;
+  if (!day || !month || !year) return value;
+  return `${day}-${month}-${year}`;
+};
 
 export function AlbumDetailPage() {
   const resolveImageUrl = (url?: string) => {
@@ -66,6 +85,7 @@ export function AlbumDetailPage() {
   const [trackFavoriteLoading, setTrackFavoriteLoading] = useState<Record<string, boolean>>({});
   const [youtubeAvailability, setYoutubeAvailability] = useState<Record<string, YoutubeAvailability>>({});
   const [streamState, setStreamState] = useState<Record<string, StreamUiState>>({});
+  const [chartStatsBySpotifyId, setChartStatsBySpotifyId] = useState<Record<string, TrackChartStat>>({});
   const setVideoEmbedId = usePlayerStore((s) => s.setVideoEmbedId);
   const playbackMode = usePlayerStore((s) => s.playbackMode);
   const setNowPlaying = usePlayerStore((s) => s.setNowPlaying);
@@ -169,11 +189,13 @@ export function AlbumDetailPage() {
   useEffect(() => {
     if (tracks.length === 0) {
       setTrackLocalIds({});
+      setChartStatsBySpotifyId({});
       return;
     }
     const spotifyTrackIds = tracks.map(resolveTrackId).filter(Boolean);
     if (spotifyTrackIds.length === 0) {
       setTrackLocalIds({});
+      setChartStatsBySpotifyId({});
       return;
     }
     let cancelled = false;
@@ -199,6 +221,40 @@ export function AlbumDetailPage() {
       cancelled = true;
     };
   }, [resolveTrackId, tracks, localAlbumId]);
+
+  useEffect(() => {
+    if (tracks.length === 0) {
+      setChartStatsBySpotifyId({});
+      return;
+    }
+    const spotifyTrackIds = tracks.map(resolveTrackId).filter(Boolean);
+    if (spotifyTrackIds.length === 0) {
+      setChartStatsBySpotifyId({});
+      return;
+    }
+    let cancelled = false;
+    const loadChartStats = async () => {
+      try {
+        const res = await audio2Api.getTrackChartStats(spotifyTrackIds);
+        if (cancelled) return;
+        const stats: Record<string, TrackChartStat> = {};
+        (res.data?.items || []).forEach((item: TrackChartStat) => {
+          if (item.spotify_track_id) {
+            stats[item.spotify_track_id] = item;
+          }
+        });
+        setChartStatsBySpotifyId(stats);
+      } catch {
+        if (!cancelled) {
+          setChartStatsBySpotifyId({});
+        }
+      }
+    };
+    loadChartStats();
+    return () => {
+      cancelled = true;
+    };
+  }, [resolveTrackId, tracks]);
 
   const ensureTrackLocalId = useCallback(
     async (spotifyTrackId: string): Promise<number | null> => {
@@ -415,13 +471,16 @@ export function AlbumDetailPage() {
     }
 
     const cached = youtubeAvailability[stateKey];
+    const localTrackId = trackLocalIds[stateKey];
     if (cached?.status === 'available' && cached.videoId) {
       setStream({ status: 'loading', message: 'Abriendo audio...' });
       const nextNowPlaying = {
         title: track.name,
         artist: artistName,
+        artistSpotifyId: track.artists?.[0]?.id,
         videoId: cached.videoId,
         spotifyTrackId: stateKey,
+        localTrackId,
       };
       setNowPlaying(nextNowPlaying);
       const idx = tracks.findIndex((t) => resolveTrackId(t) === stateKey);
@@ -451,12 +510,14 @@ export function AlbumDetailPage() {
     }
 
     setStream({ status: 'loading', message: 'Abriendo audio...' });
-    const nextNowPlaying = {
-      title: track.name,
-      artist: artistName,
-      videoId: info.videoId,
-      spotifyTrackId: stateKey,
-    };
+      const nextNowPlaying = {
+        title: track.name,
+        artist: artistName,
+        artistSpotifyId: track.artists?.[0]?.id,
+        videoId: info.videoId,
+        spotifyTrackId: stateKey,
+        localTrackId,
+      };
     setNowPlaying(nextNowPlaying);
     const idx = tracks.findIndex((t) => resolveTrackId(t) === stateKey);
     if (idx >= 0) {
@@ -474,7 +535,7 @@ export function AlbumDetailPage() {
     if (playbackMode === 'video') {
       setVideoEmbedId(info.videoId);
     }
-  }, [album?.artists, youtubeAvailability, playbackMode, setNowPlaying, tracks, resolveTrackId, setCurrentIndex, playByVideoId, setVideoEmbedId, fetchYoutubeForTrack, autoSearchOnPlay]);
+  }, [album?.artists, youtubeAvailability, playbackMode, setNowPlaying, tracks, resolveTrackId, setCurrentIndex, playByVideoId, setVideoEmbedId, fetchYoutubeForTrack, autoSearchOnPlay, trackLocalIds]);
 
   useEffect(() => {
     if (playbackMode !== 'video') {
@@ -489,14 +550,17 @@ export function AlbumDetailPage() {
         const spotifyTrackId = resolveTrackId(track);
         if (!spotifyTrackId) return null;
         return {
+          localTrackId: trackLocalIds[spotifyTrackId],
           spotifyTrackId,
           title: track.name,
           artist: track.artists?.[0]?.name || album?.artists?.[0]?.name,
+          artistSpotifyId: track.artists?.[0]?.id,
           durationMs: track.duration_ms,
           rawTrack: track,
         };
       })
       .filter(Boolean) as Array<{
+        localTrackId?: number;
         spotifyTrackId: string;
         title: string;
         artist?: string;
@@ -509,7 +573,7 @@ export function AlbumDetailPage() {
       void handleStreamTrack(item.rawTrack, item.spotifyTrackId);
     });
     return () => setOnPlayTrack(null);
-  }, [album?.artists, handleStreamTrack, resolveTrackId, setOnPlayTrack, setQueue, tracks]);
+  }, [album?.artists, handleStreamTrack, resolveTrackId, setOnPlayTrack, setQueue, tracks, trackLocalIds]);
 
   const wiki = album?.lastfm?.wiki || {};
   const wikiHtml = wiki.content || wiki.summary || '';
@@ -641,6 +705,11 @@ export function AlbumDetailPage() {
             const youtubeInfo = spotifyTrackId ? youtubeAvailability[spotifyTrackId] : undefined;
             const streamInfo = spotifyTrackId ? streamState[spotifyTrackId] : undefined;
             const trackLocalId = spotifyTrackId ? trackLocalIds[spotifyTrackId] : undefined;
+            const chartStat = spotifyTrackId ? chartStatsBySpotifyId[spotifyTrackId] : undefined;
+            const chartBadge = chartStat?.chart_best_position
+              ? `#${chartStat.chart_best_position}`
+              : null;
+            const chartDate = formatChartDate(chartStat?.chart_best_position_date);
             const isTrackFavorite = !!(trackLocalId && favoriteTrackIds.has(trackLocalId));
             const isTrackFavoriteLoading = !!(spotifyTrackId && trackFavoriteLoading[spotifyTrackId]);
             const streamDisabled = !spotifyTrackId || youtubeInfo?.status === 'pending' || streamInfo?.status === 'loading';
@@ -681,6 +750,31 @@ export function AlbumDetailPage() {
                     }}
                   >
                     {t.name}
+                    {chartBadge ? (
+                      <span
+                        title={`Billboard ${chartStat?.chart_best_position}${chartDate ? ` · ${chartDate}` : ''}`}
+                        style={{
+                          marginLeft: 8,
+                          fontSize: 12,
+                          fontWeight: 700,
+                          color: '#facc15',
+                          textTransform: 'uppercase',
+                        }}
+                      >
+                        {chartBadge}
+                      </span>
+                    ) : null}
+                    {chartBadge && chartDate ? (
+                      <span
+                        style={{
+                          marginLeft: 6,
+                          fontSize: 11,
+                          color: 'var(--muted)',
+                        }}
+                      >
+                        {chartDate}
+                      </span>
+                    ) : null}
                   </button>
                   {youtubeInfo?.status === 'available' && (
                     <span

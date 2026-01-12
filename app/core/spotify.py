@@ -57,10 +57,19 @@ class SpotifyClient:
             response.raise_for_status()
             return response.json()
 
-    async def get_recommendations(self, seed_artists: List[str] = None, seed_tracks: List[str] = None, seed_genres: List[str] = None, limit: int = 20) -> List[dict]:
+    async def get_recommendations(
+        self,
+        seed_artists: List[str] = None,
+        seed_tracks: List[str] = None,
+        seed_genres: List[str] = None,
+        limit: int = 20,
+        market: Optional[str] = "US",
+    ) -> List[dict]:
         """Get music recommendations based on seeds."""
         endpoint = "/recommendations"
         params = {"limit": limit}
+        if market:
+            params["market"] = market
         if seed_artists:
             params["seed_artists"] = ",".join(seed_artists)
         if seed_tracks:
@@ -112,7 +121,12 @@ class SpotifyClient:
         response = await self._make_request(endpoint)
         return response
 
-    async def get_artist_albums(self, artist_id: str, limit: int = 50, include_groups: str = "album") -> List[dict]:
+    async def get_artist_albums(
+        self,
+        artist_id: str,
+        limit: int = 50,
+        include_groups: str = "album,single",
+    ) -> List[dict]:
         """Get albums for an artist. include_groups: album, single, compilation, appears_on."""
         endpoint = f"/artists/{artist_id}/albums"
         params = {
@@ -134,6 +148,12 @@ class SpotifyClient:
         params = {"limit": limit}
         response = await self._make_request(endpoint, params)
         return response.get("items", [])
+
+    async def get_track(self, track_id: str) -> Optional[dict]:
+        """Get track details by ID."""
+        endpoint = f"/tracks/{track_id}"
+        response = await self._make_request(endpoint)
+        return response
 
     async def get_artist_top_tracks(self, artist_name: str, limit: int = 5) -> List[dict]:
         """

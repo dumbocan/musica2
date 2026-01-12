@@ -69,6 +69,12 @@ Se ha realizado una revisión exhaustiva del código del frontend para mejorar l
 - **Frontend renovado**: `frontend/src/pages/TracksPage.tsx` muestra métricas globales (cuántas pistas tienen link o MP3), buscador, filtros y accesos directos para abrir YouTube o descargar el MP3 desde `/youtube/download/{video_id}/file`.
 - **Uso recomendado**: abre `http://localhost:5173/tracks` para saber qué canciones ya están listas para streaming/descarga sin entrar álbum por álbum.
 
+## 📈 Charts & historial de reproduccion
+
+- **Billboard en BD**: la BD se rellena con historicos (Top 5 / #1) y se expone en `GET /charts/external/raw` para la vista “BD historico”.
+- **Badges en tracks**: `GET /tracks/chart-stats` y `GET /tracks/overview` devuelven `chart_best_position` + `chart_best_position_date` para mostrar `#1 (dd-mm-aaaa)` en Tracks/Album/Search.
+- **Historial real**: `POST /tracks/play/{track_id}` guarda reproducciones. El dashboard usa `GET /tracks/most-played` y `GET /tracks/recent-plays` para contadores reales.
+
 ## ✅ Tracks: problemas reales y soluciones aplicadas
 
 - **Desajuste “Con link YouTube”**: el total salía 106 pero solo aparecían 95. La causa fue `youtube_video_id` vacío en `YouTubeDownload`. Se filtró `youtube_video_id != ""` en `/tracks/overview`, y se prioriza el registro con video real cuando hay múltiples filas por track.
@@ -196,7 +202,11 @@ PY
 |----------|--------|-------------|
 | `/tracks/enrich/{track_id}` | POST | Add Last.fm data |
 | `/tracks/{track_id}/rate?rating=5` | POST | Rate track 1-5 |
+| `/tracks/play/{track_id}` | POST | Record a play for history |
 | `/tracks/overview` | GET | Track list with YouTube/cache status |
+| `/tracks/chart-stats` | GET | Chart badge stats for tracks |
+| `/tracks/most-played` | GET | Most played tracks (per user) |
+| `/tracks/recent-plays` | GET | Recent plays (per user) |
 
 ### � **Playlists & Smart Playlists**
 | Endpoint | Method | Description |

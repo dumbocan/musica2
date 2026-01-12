@@ -4,25 +4,21 @@ import { usePlayerStore } from '@/store/usePlayerStore';
 import { YouTubeOverlayPlayer } from '@/components/YouTubeOverlayPlayer';
 import {
   Home,
-  Search,
   Music,
   ListMusic,
   Download,
+  Database,
   Settings,
-  X,
-  Activity,
-  Tag
+  X
 } from 'lucide-react';
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: Home },
-  { name: 'Search', href: '/search', icon: Search },
   { name: 'Artists', href: '/artists', icon: Music },
   { name: 'Tracks', href: '/tracks', icon: Music },
   { name: 'Playlists', href: '/playlists', icon: ListMusic },
-  { name: 'Tags', href: '/tags', icon: Tag },
   { name: 'Downloads', href: '/downloads', icon: Download },
-  { name: 'Health', href: '/health', icon: Activity },
+  { name: 'BD historico', href: '/bd-historico', icon: Database },
   { name: 'Settings', href: '/settings', icon: Settings },
 ];
 
