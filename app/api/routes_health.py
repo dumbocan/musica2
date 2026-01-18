@@ -1,6 +1,6 @@
 from fastapi import APIRouter, status
 import httpx
-from datetime import datetime
+from ..core.time_utils import utc_now
 
 from ..core.db import get_session
 from sqlmodel import select
@@ -33,7 +33,7 @@ async def check_spotify_api() -> bool:
     if not settings.SPOTIFY_CLIENT_ID or not settings.SPOTIFY_CLIENT_SECRET:
         api_status_cache['spotify']['is_online'] = None
         api_status_cache['spotify']['last_error'] = "credentials not set"
-        api_status_cache['spotify']['last_checked'] = datetime.utcnow()
+        api_status_cache['spotify']['last_checked'] = utc_now()
         return False
 
     try:
@@ -47,7 +47,7 @@ async def check_spotify_api() -> bool:
         api_status_cache['spotify']['last_error'] = str(e)
         return False
     finally:
-        api_status_cache['spotify']['last_checked'] = datetime.utcnow()
+        api_status_cache['spotify']['last_checked'] = utc_now()
 
 async def check_lastfm_api() -> bool:
     """Check if Last.fm API is available; skip if no credentials."""
@@ -55,7 +55,7 @@ async def check_lastfm_api() -> bool:
     if not settings.LASTFM_API_KEY:
         api_status_cache['lastfm']['is_online'] = None
         api_status_cache['lastfm']['last_error'] = "credentials not set"
-        api_status_cache['lastfm']['last_checked'] = datetime.utcnow()
+        api_status_cache['lastfm']['last_checked'] = utc_now()
         return False
 
     try:
@@ -69,7 +69,7 @@ async def check_lastfm_api() -> bool:
         api_status_cache['lastfm']['last_error'] = str(e)
         return False
     finally:
-        api_status_cache['lastfm']['last_checked'] = datetime.utcnow()
+        api_status_cache['lastfm']['last_checked'] = utc_now()
 
 def check_database() -> bool:
     """Check if database is available."""
@@ -85,7 +85,7 @@ def check_database() -> bool:
         api_status_cache['database']['last_error'] = str(e)
         return False
     finally:
-        api_status_cache['database']['last_checked'] = datetime.utcnow()
+        api_status_cache['database']['last_checked'] = utc_now()
 
 @router.get("/health", status_code=status.HTTP_200_OK)
 async def health() -> dict:

@@ -48,6 +48,9 @@ def _cache_set(cache: dict[str, tuple[float, dict]], key: str, payload: dict) ->
 def _format_tracks(tracks: list[dict]) -> list[dict]:
     results = []
     for t in tracks or []:
+        album = t.get("album", {}) or {}
+        if album.get("images"):
+            album["images"] = proxy_image_list(album.get("images", []), size=384)
         results.append({
             "id": t.get("id"),
             "name": t.get("name"),
@@ -56,7 +59,7 @@ def _format_tracks(tracks: list[dict]) -> list[dict]:
             "explicit": t.get("explicit"),
             "duration_ms": t.get("duration_ms"),
             "artists": t.get("artists", []),
-            "album": t.get("album", {})
+            "album": album
         })
     return results
 
@@ -255,7 +258,7 @@ async def orchestrated_search(
                 imgs = json.loads(a.images) if a.images else []
             except Exception:
                 imgs = []
-            data["images"] = proxy_image_list(imgs, size=512)
+            data["images"] = proxy_image_list(imgs, size=384)
             artists_for_grid.append(data)
         payload = {
             "query": q,
@@ -308,7 +311,7 @@ async def orchestrated_search(
         if not best and sp_sorted:
             best = sp_sorted[0]
         if best:
-            best["images"] = proxy_image_list(best.get("images", []), size=512)
+            best["images"] = proxy_image_list(best.get("images", []), size=384)
         return {
             "name": name,
             "url": artist.get("url"),
@@ -396,7 +399,7 @@ async def orchestrated_search(
                 candidate = sp_candidates[0]
                 if _name_matches(name, candidate.get("name", "")):
                     spotify_match = candidate
-                    spotify_match["images"] = proxy_image_list(spotify_match.get("images", []), size=512)
+                    spotify_match["images"] = proxy_image_list(spotify_match.get("images", []), size=384)
             followers = (spotify_match or {}).get("followers", {}).get("total", 0)
             if followers < max(min_followers, 1_000_000):
                 return None

@@ -9,13 +9,17 @@ Key Features:
 """
 
 import asyncio
+import json
 import logging
 from typing import Dict, List
-from datetime import datetime, timedelta
+from datetime import timedelta
 from sqlmodel import select
 
 from .spotify import spotify_client
 from .lastfm import lastfm_client
+from .genre_backfill import extract_genres_from_lastfm_tags
+from .image_proxy import proxy_image_list
+from .time_utils import utc_now
 from .db import get_session
 from ..models.base import Artist, Album, Track, YouTubeDownload
 from ..crud import save_artist, save_album, save_track
@@ -50,7 +54,7 @@ class DataFreshnessManager:
         if not artist.updated_at:
             return True  # Legacy data needs update
 
-        age_hours = (datetime.utcnow() - artist.updated_at).total_seconds() / 3600
+        age_hours = (utc_now() - artist.updated_at).total_seconds() / 3600
         return age_hours > (self.artist_update_interval_hours)
 
     async def should_refresh_track(self, track: Track) -> bool:
@@ -60,7 +64,7 @@ class DataFreshnessManager:
         if not track.updated_at:
             return True  # Legacy data needs update
 
-        age_hours = (datetime.utcnow() - track.updated_at).total_seconds() / 3600
+        age_hours = (utc_now() - track.updated_at).total_seconds() / 3600
         return age_hours > (self.track_update_interval_hours)
 
     async def should_refresh_album(self, album: Album) -> bool:
@@ -70,7 +74,7 @@ class DataFreshnessManager:
         if not album.updated_at:
             return True  # Legacy data needs update
 
-        age_hours = (datetime.utcnow() - album.updated_at).total_seconds() / 3600
+        age_hours = (utc_now() - album.updated_at).total_seconds() / 3600
         return age_hours > (self.album_update_interval_hours)
 
     async def refresh_artist_data(self, spotify_id: str) -> bool:
@@ -79,6 +83,7 @@ class DataFreshnessManager:
 
         Returns True if data was updated.
         """
+        artist: Artist | None = None
         try:
             logger.info(f"🔄 Refreshing data for artist {spotify_id}")
 
@@ -92,21 +97,71 @@ class DataFreshnessManager:
             artist = save_artist(artist_data)
             logger.info(f"✅ Artist {artist.name} data updated")
 
-            # Update bio from Last.fm
-            try:
-                bio_data = await lastfm_client.get_artist_info(artist.name)
-                if bio_data:
-                    from ..crud import update_artist_bio
-                    update_artist_bio(artist.id, bio_data['summary'], bio_data['content'])
-                    logger.info(f"✅ Bio updated for {artist.name}")
-            except Exception as bio_error:
-                logger.warning(f"Could not update bio for {artist.name}: {str(bio_error)}")
-
             return True
 
         except Exception as e:
-            logger.error(f"Error refreshing artist {spotify_id}: {str(e)}")
-            return False
+            logger.error(
+                "Error refreshing artist %s: %r",
+                spotify_id,
+                e,
+                exc_info=True
+            )
+        finally:
+            if not artist:
+                with get_session() as session:
+                    artist = session.exec(
+                        select(Artist).where(Artist.spotify_id == spotify_id)
+                    ).first()
+
+            if artist:
+                try:
+                    bio_data = await lastfm_client.get_artist_info(artist.name)
+                    if bio_data:
+                        from ..crud import update_artist_bio
+                        update_artist_bio(artist.id, bio_data['summary'], bio_data['content'])
+                        logger.info(f"✅ Bio updated for {artist.name}")
+                        if not artist.genres or artist.genres.strip() in {"", "[]"}:
+                            tags = bio_data.get("tags")
+                            genres = extract_genres_from_lastfm_tags(tags, artist_name=artist.name)
+                            if genres:
+                                with get_session() as session:
+                                    target = session.exec(select(Artist).where(Artist.id == artist.id)).first()
+                                    if target and (not target.genres or target.genres.strip() in {"", "[]"}):
+                                        now = utc_now()
+                                        target.genres = json.dumps(genres)
+                                        target.updated_at = now
+                                        target.last_refreshed_at = now
+                                        session.add(target)
+                                        session.commit()
+                                        logger.info(
+                                            "✅ Genres updated from Last.fm for %s",
+                                            artist.name
+                                        )
+                        if not artist.images or artist.images.strip() in {"", "[]"}:
+                            images = bio_data.get("images")
+                            proxied = proxy_image_list(images, size=384)
+                            if proxied:
+                                with get_session() as session:
+                                    target = session.exec(select(Artist).where(Artist.id == artist.id)).first()
+                                    if target and (not target.images or target.images.strip() in {"", "[]"}):
+                                        now = utc_now()
+                                        target.images = json.dumps(proxied)
+                                        target.updated_at = now
+                                        target.last_refreshed_at = now
+                                        session.add(target)
+                                        session.commit()
+                                        logger.info(
+                                            "✅ Images updated from Last.fm for %s",
+                                            artist.name
+                                        )
+                except Exception as bio_error:
+                    logger.warning(
+                        "Could not update bio for %s: %r",
+                        artist.name,
+                        bio_error,
+                        exc_info=True
+                    )
+        return bool(artist)
 
     async def check_for_new_artist_content(self, spotify_id: str) -> Dict[str, int]:
         """
@@ -260,7 +315,7 @@ class DataFreshnessManager:
         session = get_session()
         try:
             # Get artists needing refresh
-            cutoff_time = datetime.utcnow() - timedelta(days=self.max_artist_age_days)
+            cutoff_time = utc_now() - timedelta(days=self.max_artist_age_days)
 
             stale_artists = session.exec(
                 select(Artist).where(
@@ -635,7 +690,7 @@ class DataFreshnessManager:
         """
         session = get_session()
         try:
-            now = datetime.utcnow()
+            now = utc_now()
 
             # Artist freshness
             artist_stats = session.exec(

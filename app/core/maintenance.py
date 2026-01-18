@@ -5,7 +5,7 @@ import asyncio
 import logging
 import json
 import random
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 from sqlmodel import select
 
@@ -17,7 +17,13 @@ from ..services.data_quality import collect_artist_quality_report
 from ..core.lastfm import lastfm_client
 from ..core.spotify import spotify_client
 from ..core.data_freshness import data_freshness_manager
-from ..core.genre_backfill import derive_genres_from_tracks
+from ..core.image_proxy import proxy_image_list
+from ..core.genre_backfill import (
+    derive_genres_from_artist_tags,
+    derive_genres_from_tracks,
+    extract_genres_from_lastfm_tags,
+)
+from ..core.time_utils import utc_now
 from ..models.base import (
     Artist,
     Track,
@@ -204,7 +210,7 @@ def _apply_chart_entries(
             if not stats.last_chart_date
             else max(stats.last_chart_date, chart_date)
         )
-        stats.updated_at = datetime.utcnow()
+        stats.updated_at = utc_now()
         session.add(stats)
         updated += 1
     if updated:
@@ -229,27 +235,64 @@ async def daily_refresh_loop():
             # After refreshing favorites, enrich artists missing metadata
             missing_report = collect_artist_quality_report()
             for entry in missing_report:
-                try:
-                    spotify_id = entry["spotify_id"]
-                    if spotify_id:
+                spotify_id = entry["spotify_id"]
+                if spotify_id:
+                    try:
                         data = await spotify_client.get_artist(spotify_id)
                         if data:
                             save_artist(data)
-                    if "bio" in entry["missing"] and entry["name"]:
+                    except Exception as exc:
+                        logger.warning(
+                            "[maintenance] Spotify refresh failed for %s: %r",
+                            entry.get("name") or spotify_id,
+                            exc,
+                            exc_info=True
+                        )
+                missing_fields = set((entry.get("missing") or "").split(","))
+                if ({"bio", "genres", "image"} & missing_fields) and entry.get("name"):
+                    try:
                         lastfm = await lastfm_client.get_artist_info(entry["name"])
                         summary = lastfm.get("summary")
-                        if summary:
-                            with get_session() as session:
-                                artist = session.exec(select(Artist).where(Artist.id == entry["id"])).first()
-                                if artist:
+                        tags = lastfm.get("tags")
+                        images = lastfm.get("images")
+                        with get_session() as session:
+                            artist = session.exec(select(Artist).where(Artist.id == entry["id"])).first()
+                            if artist:
+                                needs_commit = False
+                                if "bio" in missing_fields and summary:
                                     artist.bio_summary = summary
                                     artist.bio_content = lastfm.get("content", artist.bio_content)
+                                    needs_commit = True
+                                if "genres" in missing_fields and tags:
+                                    genres = extract_genres_from_lastfm_tags(tags, artist_name=entry["name"])
+                                    if genres:
+                                        artist.genres = json.dumps(genres)
+                                        needs_commit = True
+                                if "image" in missing_fields and images:
+                                    proxied = proxy_image_list(images, size=384)
+                                    if proxied:
+                                        artist.images = json.dumps(proxied)
+                                        needs_commit = True
+                                if needs_commit:
+                                    now = utc_now()
+                                    artist.updated_at = now
+                                    artist.last_refreshed_at = now
                                     session.add(artist)
                                     session.commit()
-                except Exception as exc:
-                    logger.warning("[maintenance] enrichment failed for %s: %s", entry.get("name"), exc)
+                                    if "genres" in missing_fields and artist.genres:
+                                        logger.info(
+                                            "[maintenance] genres updated from Last.fm for %s",
+                                            entry.get("name")
+                                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "[maintenance] Last.fm enrichment failed for %s: %r",
+                            entry.get("name"),
+                            exc,
+                            exc_info=True
+                        )
         except Exception as exc:
-            logger.error("[maintenance] daily refresh failed: %s", exc)
+            logger.error("[maintenance] daily refresh failed: %r", exc, exc_info=True)
         await asyncio.sleep(24 * 60 * 60)
 
 
@@ -282,7 +325,11 @@ async def genre_backfill_loop():
                     ).all()
                     track_samples[artist.id] = [row[0] for row in track_rows if row and row[0]]
         except Exception as exc:
-            logger.warning("[maintenance] genre backfill load failed: %s", exc)
+            logger.warning(
+                "[maintenance] genre backfill load failed: %r",
+                exc,
+                exc_info=True
+            )
             await asyncio.sleep(2 * 60 * 60)
             continue
 
@@ -293,12 +340,17 @@ async def genre_backfill_loop():
         updated = 0
         for artist in artists:
             track_names = track_samples.get(artist.id) or []
-            if not track_names:
-                continue
             try:
-                genres = await derive_genres_from_tracks(artist.name, track_names)
+                genres = await derive_genres_from_tracks(artist.name, track_names) if track_names else []
+                if not genres:
+                    genres = await derive_genres_from_artist_tags(artist.name)
             except Exception as exc:
-                logger.warning("[maintenance] genre backfill failed for %s: %s", artist.name, exc)
+                logger.warning(
+                    "[maintenance] genre backfill failed for %s: %r",
+                    artist.name,
+                    exc,
+                    exc_info=True
+                )
                 continue
             if not genres:
                 continue
@@ -306,7 +358,10 @@ async def genre_backfill_loop():
                 target = session.exec(select(Artist).where(Artist.id == artist.id)).first()
                 if not target:
                     continue
+                now = utc_now()
                 target.genres = json.dumps(genres)
+                target.updated_at = now
+                target.last_refreshed_at = now
                 session.add(target)
                 session.commit()
                 updated += 1
@@ -419,7 +474,7 @@ async def chart_scrape_loop():
                             if target:
                                 target.backfill_complete = next_backfill_complete
                                 target.last_scanned_date = next_last_scanned
-                                target.updated_at = datetime.utcnow()
+                                target.updated_at = utc_now()
                                 session.add(target)
                                 session.commit()
                     continue
@@ -475,7 +530,7 @@ async def chart_scrape_loop():
                     if target:
                         target.backfill_complete = next_backfill_complete
                         target.last_scanned_date = next_last_scanned
-                        target.updated_at = datetime.utcnow()
+                        target.updated_at = utc_now()
                         session.add(target)
                         session.commit()
                 logger.info(

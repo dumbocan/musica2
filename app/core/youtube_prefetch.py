@@ -4,13 +4,14 @@ Background loop that keeps the YouTube link cache populated.
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from fastapi import HTTPException
 from sqlalchemy import and_, or_
 from sqlmodel import select
 
 from .db import get_session
+from .time_utils import utc_now
 from ..crud import save_youtube_download
 from ..models.base import Track, Artist, Album, YouTubeDownload
 from ..core.youtube import youtube_client
@@ -27,13 +28,13 @@ async def youtube_prefetch_loop(poll_interval: int = 60):
     cooldown_until = None
 
     while True:
-        if cooldown_until and datetime.utcnow() < cooldown_until:
+        if cooldown_until and utc_now() < cooldown_until:
             await asyncio.sleep(5)
             continue
 
         target_track = target_artist = target_album = None
-        cutoff_error = datetime.utcnow() - ERROR_COOLDOWN
-        cutoff_not_found = datetime.utcnow() - NOT_FOUND_COOLDOWN
+        cutoff_error = utc_now() - ERROR_COOLDOWN
+        cutoff_not_found = utc_now() - NOT_FOUND_COOLDOWN
 
         with get_session() as session:
             row = session.exec(
@@ -85,7 +86,7 @@ async def youtube_prefetch_loop(poll_interval: int = 60):
                 target_track.name,
             )
 
-            start = datetime.utcnow()
+            start = utc_now()
             videos = await youtube_client.search_music_videos(
                 artist=artist_name,
                 track=target_track.name,
@@ -106,7 +107,7 @@ async def youtube_prefetch_loop(poll_interval: int = 60):
                     "[youtube_prefetch] Cached %s - %s in %.1fs",
                     artist_name,
                     target_track.name,
-                    (datetime.utcnow() - start).total_seconds(),
+                    (utc_now() - start).total_seconds(),
                 )
             else:
                 save_youtube_download({
@@ -121,7 +122,7 @@ async def youtube_prefetch_loop(poll_interval: int = 60):
                     "[youtube_prefetch] No video for %s - %s (%.1fs)",
                     artist_name,
                     target_track.name,
-                    (datetime.utcnow() - start).total_seconds(),
+                    (utc_now() - start).total_seconds(),
                 )
 
             await asyncio.sleep(youtube_client.min_interval_seconds)
@@ -135,7 +136,7 @@ async def youtube_prefetch_loop(poll_interval: int = 60):
                 "error_message": str(exc.detail) if hasattr(exc, "detail") else str(exc),
             })
             if exc.status_code in (403, 429):
-                cooldown_until = datetime.utcnow() + timedelta(minutes=15)
+                cooldown_until = utc_now() + timedelta(minutes=15)
                 logger.warning("[youtube_prefetch] API quota hit (%s). Cooling down 15 minutes.", exc.status_code)
             await asyncio.sleep(poll_interval)
         except Exception as err:

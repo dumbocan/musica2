@@ -15,7 +15,8 @@ from .models.base import (
 )
 from .core.db import get_session
 from .core.image_proxy import proxy_image_list
-from datetime import datetime
+from .core.image_cache import schedule_warm_cache_images
+from .core.time_utils import utc_now
 
 
 def normalize_name(name: str) -> str:
@@ -41,17 +42,22 @@ def save_artist(artist_data: dict) -> Artist:
     artist = get_artist_by_spotify_id(spotify_id)
     session = get_session()
     try:
+        now = utc_now()
         images_data = artist_data.get('images', []) or []
-        proxied_images = proxy_image_list(images_data, size=512)
+        proxied_images = proxy_image_list(images_data, size=384)
         serialized_images = json.dumps(proxied_images)
+        needs_warm_cache = False
         if artist:
             artist.name = artist_data['name']
             artist.normalized_name = normalize_name(artist_data['name'])
             artist.genres = str(artist_data.get('genres', []))
+            if artist.images != serialized_images:
+                needs_warm_cache = True
             artist.images = serialized_images
             artist.popularity = artist_data.get('popularity', 0)
             artist.followers = artist_data.get('followers', {}).get('total', 0)
-            artist.updated_at = datetime.utcnow()  # Update timestamp
+            artist.updated_at = now  # Update timestamp
+            artist.last_refreshed_at = now
             session.add(artist)
         else:
             normalized = normalize_name(artist_data['name'])
@@ -64,12 +70,16 @@ def save_artist(artist_data: dict) -> Artist:
                 existing_artist.name = artist_data['name']
                 existing_artist.normalized_name = normalized
                 existing_artist.genres = str(artist_data.get('genres', []))
+                if existing_artist.images != serialized_images:
+                    needs_warm_cache = True
                 existing_artist.images = serialized_images
                 existing_artist.popularity = artist_data.get('popularity', 0)
                 existing_artist.followers = artist_data.get('followers', {}).get('total', 0)
-                existing_artist.updated_at = datetime.utcnow()  # Update timestamp
+                existing_artist.updated_at = now  # Update timestamp
+                existing_artist.last_refreshed_at = now
                 artist = existing_artist
             else:
+                needs_warm_cache = True
                 artist = Artist(
                     spotify_id=spotify_id,
                     name=artist_data['name'],
@@ -77,11 +87,14 @@ def save_artist(artist_data: dict) -> Artist:
                     genres=str(artist_data.get('genres', [])),
                     images=serialized_images,
                     popularity=artist_data.get('popularity', 0),
-                    followers=artist_data.get('followers', {}).get('total', 0)
+                    followers=artist_data.get('followers', {}).get('total', 0),
+                    last_refreshed_at=now
                 )
                 session.add(artist)
         session.commit()
         session.refresh(artist)
+        if needs_warm_cache and images_data:
+            schedule_warm_cache_images(images_data, size=384)
         return artist
     finally:
         session.close()
@@ -102,12 +115,21 @@ def save_album(album_data: dict) -> Album:
     album = get_album_by_spotify_id(spotify_id)
     session = get_session()
     try:
+        now = utc_now()
+        images_data = album_data.get('images', []) or []
+        proxied_images = proxy_image_list(images_data, size=384)
+        serialized_images = json.dumps(proxied_images)
+        needs_warm_cache = False
         if album:
             album.name = album_data['name']
             album.release_date = album_data['release_date']
             album.total_tracks = album_data['total_tracks']
-            album.images = str(album_data.get('images', []))
+            if album.images != serialized_images:
+                needs_warm_cache = True
+            album.images = serialized_images
             album.label = album_data.get('label')
+            album.updated_at = now
+            album.last_refreshed_at = now
             session.add(album)
         else:
             # Save artist if not exists
@@ -117,18 +139,22 @@ def save_album(album_data: dict) -> Album:
             if not artist and artist_data:
                 artist = save_artist(artist_data)  # This opens/closes its own session
             artist_id = artist.id if artist else None
+            needs_warm_cache = True
             album = Album(
                 spotify_id=spotify_id,
                 name=album_data['name'],
                 artist_id=artist_id,
                 release_date=album_data['release_date'],
                 total_tracks=album_data['total_tracks'],
-                images=str(album_data.get('images', [])),
-                label=album_data.get('label')
+                images=serialized_images,
+                label=album_data.get('label'),
+                last_refreshed_at=now
             )
             session.add(album)
         session.commit()
         session.refresh(album)
+        if needs_warm_cache and images_data:
+            schedule_warm_cache_images(images_data, size=384)
         return album
     finally:
         session.close()
@@ -149,6 +175,7 @@ def save_track(track_data: dict, album_id: Optional[int] = None, artist_id: Opti
     track = get_track_by_spotify_id(spotify_id)
     session = get_session()
     try:
+        now = utc_now()
         if track:
             track.name = track_data['name']
             track.duration_ms = track_data['duration_ms']
@@ -156,6 +183,8 @@ def save_track(track_data: dict, album_id: Optional[int] = None, artist_id: Opti
             track.preview_url = track_data.get('preview_url')
             track.external_url = track_data['external_urls']['spotify']
             track.album_id = album_id
+            track.updated_at = now
+            track.last_refreshed_at = now
             session.add(track)
         else:
             track = Track(
@@ -166,7 +195,8 @@ def save_track(track_data: dict, album_id: Optional[int] = None, artist_id: Opti
                 duration_ms=track_data['duration_ms'],
                 popularity=track_data.get('popularity', 0),
                 preview_url=track_data.get('preview_url'),
-                external_url=track_data['external_urls']['spotify']
+                external_url=track_data['external_urls']['spotify'],
+                last_refreshed_at=now
             )
             session.add(track)
         session.commit()
@@ -184,7 +214,9 @@ def update_track_lastfm(track_id: int, listeners: int, playcount: int):
         if track:
             track.lastfm_listeners = listeners
             track.lastfm_playcount = playcount
-            track.updated_at = datetime.utcnow()  # Update timestamp
+            now = utc_now()
+            track.updated_at = now  # Update timestamp
+            track.last_refreshed_at = now
             session.commit()
         return track
     finally:
@@ -202,7 +234,9 @@ def update_track_spotify_data(track_id: int, spotify_data: dict):
             track.popularity = spotify_data.get('popularity', track.popularity)
             track.preview_url = spotify_data.get('preview_url', track.preview_url)
             track.external_url = spotify_data.get('external_urls', {}).get('spotify', track.external_url)
-            track.updated_at = datetime.utcnow()  # Update timestamp
+            now = utc_now()
+            track.updated_at = now  # Update timestamp
+            track.last_refreshed_at = now
             session.commit()
         return track
     finally:
@@ -365,7 +399,7 @@ def update_album_spotify_data(album_id: int, spotify_data: dict):
             album.total_tracks = spotify_data.get('total_tracks', album.total_tracks)
             album.images = str(spotify_data.get('images', []))
             album.label = spotify_data.get('label', album.label)
-            album.updated_at = datetime.utcnow()  # Update timestamp
+            album.updated_at = utc_now()  # Update timestamp
             session.commit()
         return album
     finally:
@@ -406,7 +440,9 @@ def update_artist_bio(artist_id: int, bio_summary: str, bio_content: str, lastfm
         if artist:
             artist.bio_summary = bio_summary
             artist.bio_content = bio_content
-            artist.updated_at = datetime.utcnow()  # Update timestamp for fresh data
+            now = utc_now()
+            artist.updated_at = now  # Update timestamp for fresh data
+            artist.last_refreshed_at = now
             # Optionally add lastfm counts if added to model
             session.commit()
         return artist
@@ -510,7 +546,7 @@ def save_youtube_download(youtube_data: dict):
                 existing.error_message = None
             else:
                 existing.error_message = youtube_data.get('error_message', existing.error_message)
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = utc_now()
             session.add(existing)
             result = existing
         else:
@@ -767,7 +803,7 @@ def record_play(track_id: int, user_id: int = 1) -> Optional[PlayHistory]:
             play_history = PlayHistory(
                 track_id=track_id,
                 user_id=user_id,
-                played_at=datetime.utcnow()
+                played_at=utc_now()
             )
             session.add(play_history)
             session.commit()
@@ -850,7 +886,7 @@ def record_artist_search(user_id: int, artist_name: str):
         if existing:
             # Update existing record
             existing.times_searched += 1
-            existing.last_searched = datetime.utcnow()
+            existing.last_searched = utc_now()
             session.add(existing)
         else:
             # Create new learning record
@@ -858,8 +894,8 @@ def record_artist_search(user_id: int, artist_name: str):
                 user_id=user_id,
                 artist_name=artist_name,
                 times_searched=1,
-                first_searched=datetime.utcnow(),
-                last_searched=datetime.utcnow(),
+                first_searched=utc_now(),
+                last_searched=utc_now(),
                 compatibility_score=0.5  # Default neutral score
             )
             session.add(learning)
@@ -895,7 +931,7 @@ def update_artist_rating(user_id: int, artist_name: str, rating: int):
 
         if learning:
             learning.user_rating = rating
-            learning.last_searched = datetime.utcnow()
+            learning.last_searched = utc_now()
             
             # Update algorithm weights based on rating
             if rating >= 4:
@@ -913,8 +949,8 @@ def update_artist_rating(user_id: int, artist_name: str, rating: int):
                 artist_name=artist_name,
                 user_rating=rating,
                 times_searched=1,
-                first_searched=datetime.utcnow(),
-                last_searched=datetime.utcnow(),
+                first_searched=utc_now(),
+                last_searched=utc_now(),
                 compatibility_score=0.7 if rating >= 4 else (0.3 if rating <= 2 else 0.5)
             )
             session.add(learning)
@@ -935,7 +971,7 @@ def mark_artist_as_favorite(user_id: int, artist_name: str, is_favorite: bool = 
 
         if learning:
             learning.is_favorite = is_favorite
-            learning.last_searched = datetime.utcnow()
+            learning.last_searched = utc_now()
             
             # Boost compatibility score for favorites
             if is_favorite:
@@ -951,8 +987,8 @@ def mark_artist_as_favorite(user_id: int, artist_name: str, is_favorite: bool = 
                 artist_name=artist_name,
                 is_favorite=is_favorite,
                 times_searched=1,
-                first_searched=datetime.utcnow(),
-                last_searched=datetime.utcnow(),
+                first_searched=utc_now(),
+                last_searched=utc_now(),
                 compatibility_score=0.8 if is_favorite else 0.5
             )
             session.add(learning)

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Query
 
 from ..core.db import get_session
+from ..core.time_utils import utc_now
 from ..models.base import (
     Track,
     Artist,
@@ -23,7 +24,7 @@ router = APIRouter(prefix="/charts", tags=["charts"])
 
 def get_date_range(days: int = None, start_date: str = None, end_date: str = None) -> tuple:
     """Get date range for chart filtering."""
-    end = datetime.utcnow()
+    end = utc_now()
     start = end - timedelta(days=days) if days else None
 
     if start_date:
@@ -264,7 +265,7 @@ def get_play_trends_chart(
     """Get play trends over time."""
     session = get_session()
     try:
-        end = datetime.utcnow()
+        end = utc_now()
         start = end - timedelta(days=days)
 
         if interval == "daily":

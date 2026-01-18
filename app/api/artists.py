@@ -26,10 +26,16 @@ from ..crud import (
 from ..core.db import get_session, SessionDep
 from ..models.base import Artist, Album, Track, YouTubeDownload
 from ..core.lastfm import lastfm_client
-from ..core.genre_backfill import derive_genres_from_tracks
+from ..core.genre_backfill import (
+    derive_genres_from_artist_tags,
+    derive_genres_from_tracks,
+    extract_genres_from_lastfm_tags,
+)
+from ..core.time_utils import utc_now
 from ..core.auto_download import auto_download_service
 from ..core.data_freshness import data_freshness_manager
 from ..core.image_proxy import proxy_image_list
+from ..services.data_quality import collect_artist_quality_report
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +187,7 @@ async def get_artist_albums(
         album_id = album.get("id")
         if not album_id:
             continue
+        album["images"] = proxy_image_list(album.get("images", []), size=384)
 
         current_count = counts.get(album_id, 0)
 
@@ -545,13 +552,115 @@ async def refresh_artist_genres(
         track_names = [row[0] for row in track_rows if row and row[0]]
         genres = await derive_genres_from_tracks(artist.name, track_names)
         if not genres:
+            genres = await derive_genres_from_artist_tags(artist.name)
+        if not genres:
             continue
         artist.genres = json.dumps(genres)
+        artist.last_refreshed_at = utc_now()
         session.add(artist)
         updated += 1
     if updated:
         await session.commit()
     return {"scanned": scanned, "updated": updated}
+
+
+@router.post("/refresh-missing")
+async def refresh_missing_artist_metadata(
+    limit: int = Query(50, ge=1, le=500, description="Artists to scan for missing data"),
+    use_spotify: bool = Query(True, description="Attempt Spotify refresh when IDs exist"),
+    use_lastfm: bool = Query(True, description="Fill missing bio/genres/images from Last.fm"),
+) -> dict:
+    """Backfill missing artist metadata (bio/genres/images) and refresh from Spotify when possible."""
+    missing_report = collect_artist_quality_report(limit=limit)
+    spotify_updated = 0
+    lastfm_updated = 0
+    skipped = 0
+
+    for entry in missing_report:
+        spotify_id = entry.get("spotify_id")
+        if use_spotify and spotify_id:
+            try:
+                data = await spotify_client.get_artist(spotify_id)
+                if data:
+                    save_artist(data)
+                    spotify_updated += 1
+            except Exception as exc:
+                logger.warning(
+                    "[refresh-missing] Spotify refresh failed for %s: %r",
+                    entry.get("name") or spotify_id,
+                    exc,
+                    exc_info=True
+                )
+
+        if not use_lastfm or not entry.get("name"):
+            skipped += 1
+            continue
+
+        with get_session() as session:
+            artist = session.exec(select(Artist).where(Artist.id == entry["id"])).first()
+        if not artist:
+            skipped += 1
+            continue
+
+        missing_fields = set()
+        if not artist.bio_summary:
+            missing_fields.add("bio")
+        if not artist.genres or artist.genres.strip() in {"", "[]"}:
+            missing_fields.add("genres")
+        if not artist.images or artist.images.strip() in {"", "[]"}:
+            missing_fields.add("image")
+
+        if not missing_fields:
+            skipped += 1
+            continue
+
+        try:
+            lastfm = await lastfm_client.get_artist_info(entry["name"])
+        except Exception as exc:
+            logger.warning(
+                "[refresh-missing] Last.fm fetch failed for %s: %r",
+                entry.get("name"),
+                exc,
+                exc_info=True
+            )
+            continue
+
+        summary = lastfm.get("summary")
+        tags = lastfm.get("tags")
+        images = lastfm.get("images")
+        needs_commit = False
+        with get_session() as session:
+            target = session.exec(select(Artist).where(Artist.id == entry["id"])).first()
+            if not target:
+                continue
+            if "bio" in missing_fields and summary:
+                target.bio_summary = summary
+                target.bio_content = lastfm.get("content", target.bio_content)
+                needs_commit = True
+            if "genres" in missing_fields and tags:
+                genres = extract_genres_from_lastfm_tags(tags, artist_name=entry["name"])
+                if genres:
+                    target.genres = json.dumps(genres)
+                    needs_commit = True
+            if "image" in missing_fields and images:
+                proxied = proxy_image_list(images, size=384)
+                if proxied:
+                    target.images = json.dumps(proxied)
+                    needs_commit = True
+            if needs_commit:
+                now = utc_now()
+                target.updated_at = now
+                target.last_refreshed_at = now
+                session.add(target)
+                session.commit()
+                lastfm_updated += 1
+
+    return {
+        "scanned": len(missing_report),
+        "spotify_updated": spotify_updated,
+        "lastfm_updated": lastfm_updated,
+        "skipped": skipped
+    }
 
 
 @router.get("/hidden")

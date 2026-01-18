@@ -35,6 +35,19 @@ Secrets stay in `.env`; never hard-code tokens or client secrets. Honor the auth
 - When debugging or documenting, instruct the user to redirect logs (`uvicorn app.main:app --reload > uvicorn.log 2>&1`) and tail for `[youtube_prefetch]` to monitor progress.
 - Always remind contributors to set `YOUTUBE_API_KEY` in `.env`; without it, `/youtube/...` endpoints return errors and the frontend surfaces warnings.
 
+## Future Storage & Offline Roadmap
+- Dev/testing stores audio under the local `downloads/` folder (see `app/core/youtube.py`).
+- Future work should support external disks and/or torrent-managed folders, so avoid hardcoding paths and keep download storage configurable.
+- Production goal: allow user-selected offline downloads for web and Android with explicit sync/permissions behavior.
+- Add an offline mode toggle that disables external API calls and background refresh loops, serving only from DB/downloads.
+
+## Future Data Enhancements
+- Add anonymous download counters per track (aggregated, not per-user).
+- Normalize and expose a genre catalog for browse/filter endpoints.
+- Make YouTube DB-first: read cached `YouTubeDownload` rows first and only hit YouTube when link/status is missing.
+- Prefer local playback for `/youtube/stream` by checking `download_path` (mp3/m4a) before hitting YouTube.
+- Add per-user hide/delete for albums and tracks (non-destructive, data remains for other users).
+
 ## Tracks Overview Workflow
 - The route `GET /tracks/overview` is the canonical way to expose track/YouTube/cache status. Any frontend widget that needs link/file info should consume this endpoint instead of hitting `/youtube/track/...` en masa.
 - The Tracks page (`frontend/src/pages/TracksPage.tsx`) expects fields like `youtube_status`, `youtube_url`, and `local_file_exists`. When updating backend schemas, keep those keys stable or update the UI in the same change.

@@ -4,6 +4,7 @@ from sqlmodel import SQLModel, Field, Relationship
 from sqlalchemy import UniqueConstraint
 from typing import Optional, List
 from datetime import datetime, date
+from app.core.time_utils import utc_now
 from enum import Enum
 
 # Musical Genre enum if needed
@@ -34,8 +35,8 @@ class User(SQLModel, table=True):
     storage_used_mb: int = Field(default=0)
     max_storage_mb: int = Field(default=2000)  # 2GB default
 
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
     # Relationships
     profile: Optional["UserProfile"] = Relationship(back_populates="user")
@@ -57,8 +58,8 @@ class Artist(SQLModel, table=True):
     followers: int = Field(default=0)
     bio_summary: Optional[str] = None  # Last.fm bio summary
     bio_content: Optional[str] = None  # Last.fm full bio
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)  # Last metadata update
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)  # Last metadata update
     last_refreshed_at: Optional[datetime] = None  # For maintenance jobs
 
     # Relationships
@@ -77,8 +78,8 @@ class Album(SQLModel, table=True):
     total_tracks: int = Field(default=0)
     images: Optional[str] = None  # JSON
     label: Optional[str] = Field(max_length=150)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)  # Last metadata update
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)  # Last metadata update
     last_refreshed_at: Optional[datetime] = None
 
     # Relationships
@@ -112,8 +113,8 @@ class Track(SQLModel, table=True):
     lyrics_source: Optional[str] = None
     lyrics_language: Optional[str] = None
     last_refreshed_at: Optional[datetime] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)  # Last metadata update
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)  # Last metadata update
 
     # Relationships
     artist: Artist = Relationship(back_populates="tracks")
@@ -132,8 +133,8 @@ class Playlist(SQLModel, table=True):
     external_source: Optional[str] = Field(default=None, max_length=50)  # e.g., 'spotify'
     external_id: Optional[str] = Field(default=None, max_length=120)  # playlist id on source
     imported_at: Optional[datetime] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
     # Relationships
     user: User = Relationship(back_populates="playlists")
@@ -145,7 +146,7 @@ class PlaylistTrack(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     playlist_id: int = Field(foreign_key="playlist.id", ondelete="CASCADE")
     track_id: int = Field(foreign_key="track.id")
-    added_at: datetime = Field(default_factory=datetime.utcnow)
+    added_at: datetime = Field(default_factory=utc_now)
     order: int = Field(default=0)  # Position in playlist
 
     playlist: Playlist = Relationship(back_populates="tracks")
@@ -160,7 +161,7 @@ class UserFavorite(SQLModel, table=True):
     artist_id: Optional[int] = Field(default=None, foreign_key="artist.id", index=True)
     album_id: Optional[int] = Field(default=None, foreign_key="album.id", index=True)
     track_id: Optional[int] = Field(default=None, foreign_key="track.id", index=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
     user: User = Relationship(back_populates="favorites")
     artist: Optional[Artist] = Relationship(back_populates="favorites")
@@ -179,7 +180,7 @@ class UserHiddenArtist(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id", ondelete="CASCADE")
     artist_id: int = Field(foreign_key="artist.id", ondelete="CASCADE")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
     user: User = Relationship()
     artist: Artist = Relationship()
@@ -199,8 +200,8 @@ class YouTubeDownload(SQLModel, table=True):
     file_size: Optional[int] = None
     format_type: str = Field(default="mp3")
     duration_seconds: Optional[int] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
     error_message: Optional[str] = None
 
     @property
@@ -216,7 +217,7 @@ class Tag(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(max_length=50, unique=True)
     color: Optional[str] = Field(max_length=20, default="#666666")  # Hex color code
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
     # Relationships
     tracks: Optional[List["TrackTag"]] = Relationship(back_populates="tag")
@@ -226,7 +227,7 @@ class TrackTag(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     track_id: int = Field(foreign_key="track.id", ondelete="CASCADE")
     tag_id: int = Field(foreign_key="tag.id", ondelete="CASCADE")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
     track: Track = Relationship(back_populates="tags")
     tag: Tag = Relationship(back_populates="tracks")
@@ -256,8 +257,8 @@ class UserProfile(SQLModel, table=True):
     algorithm_confidence: float = Field(default=0.5)  # 0-1 how confident algorithm is
 
     # Timestamps
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
     last_algorithm_training: Optional[datetime] = None
 
     # Relationships
@@ -287,8 +288,8 @@ class AlgorithmLearning(SQLModel, table=True):
     user_feedback_weight: float = Field(default=1.0)
 
     # Timestamps
-    first_searched: datetime = Field(default_factory=datetime.utcnow)
-    last_searched: datetime = Field(default_factory=datetime.utcnow)
+    first_searched: datetime = Field(default_factory=utc_now)
+    last_searched: datetime = Field(default_factory=utc_now)
 
     # Relationships
     user: User = Relationship(back_populates="learned_artists")
@@ -301,7 +302,7 @@ class PlayHistory(SQLModel, table=True):
     track_id: int = Field(foreign_key="track.id", ondelete="CASCADE")
 
     # Play details
-    played_at: datetime = Field(default_factory=datetime.utcnow)
+    played_at: datetime = Field(default_factory=utc_now)
     duration_played_seconds: int = Field(default=0)  # How much was actually listened
     platform: str = Field(default="local")  # 'local', 'web', 'mobile'
     device_info: Optional[str] = Field(default=None)  # Browser/OS info
@@ -326,8 +327,8 @@ class ChartScanState(SQLModel, table=True):
     chart_name: str = Field(max_length=120, index=True)
     last_scanned_date: Optional[date] = None  # Most recent chart date processed
     backfill_complete: bool = Field(default=False)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
     __table_args__ = (
         UniqueConstraint("chart_source", "chart_name"),
@@ -343,7 +344,7 @@ class ChartEntryRaw(SQLModel, table=True):
     rank: int = Field(default=0)
     title: str = Field(max_length=250)
     artist: str = Field(max_length=250)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
     __table_args__ = (
         UniqueConstraint("chart_source", "chart_name", "chart_date", "rank"),
@@ -358,7 +359,7 @@ class TrackChartEntry(SQLModel, table=True):
     chart_name: str = Field(max_length=120, index=True)
     chart_date: date = Field(index=True)
     rank: int = Field(default=0)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
     __table_args__ = (
         UniqueConstraint("track_id", "chart_source", "chart_name", "chart_date"),
@@ -378,8 +379,8 @@ class TrackChartStats(SQLModel, table=True):
     weeks_top10: int = Field(default=0)
     first_chart_date: Optional[date] = None
     last_chart_date: Optional[date] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
     __table_args__ = (
         UniqueConstraint("track_id", "chart_source", "chart_name"),

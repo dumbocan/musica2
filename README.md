@@ -124,7 +124,7 @@ Se ha realizado una revisión exhaustiva del código del frontend para mejorar l
 ```bash
 git clone https://github.com/dumbocan/musica2.git
 cd audio2
-python -m venv venv
+python3 -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 ```
 
@@ -137,6 +137,7 @@ pip install -r requirements.txt
 ```bash
 # Copy and edit .env
 cp .env.example .env
+# Only run the copy the first time; it overwrites an existing .env.
 # Edit .env with your database and API credentials
 # Add Spotify/Last.fm/Youtube keys only if you will hit those endpoints.
 # IMPORTANT: set YOUTUBE_API_KEY before visiting album/track pages; otherwise the UI will warn about missing streaming links.
@@ -187,6 +188,7 @@ PY
 | `/artists/id/{local_id}/discography` | GET | Full discography (local DB) |
 | `/artists/save/{spotify_id}` | POST | Save artist to DB |
 | `/artists/{spotify_id}/full-discography` | POST | **Save complete discography** |
+| `/artists/refresh-missing` | POST | Backfill missing bio/genres/images (Spotify + Last.fm) |
 | `/artists/hidden?user_id=1` | GET | List artists hidden by the user |
 | `/artists/id/{artist_id}/hide?user_id=1` | POST | Hide artist from the user's library |
 | `/artists/id/{artist_id}/hide?user_id=1` | DELETE | Unhide artist for the user |
@@ -354,6 +356,7 @@ most_played = api.get_most_played(user_id)
 - `storage/music_downloads` → audio descargado/local.
 - `cache/images` → caché WebP generada por `/images/proxy`.
 - `downloads/` (histórico) y `cache/` se pueden limpiar si necesitas espacio; los favoritos bloquean borrados de registros en BD.
+- En pruebas, las descargas se guardan localmente en `downloads/`; a futuro se planea soportar discos externos y/o carpetas gestionadas por torrents, por lo que las rutas deben mantenerse configurables.
 
 ## 🧪 Tests rápidos + cómo ver la base de datos
 - **Smoke de expansión y favoritos**: `python test_library_expansion.py` (requiere `SPOTIFY_CLIENT_ID/SECRET` y `LASTFM_API_KEY` en `.env`). Verifica que artistas/albums/tracks se guarden con campos nuevos (`download_status`, `lyrics_*`, `last_refreshed_at`, etc.).
@@ -480,6 +483,26 @@ Current Status
   - User permissions and access control
   - Collaborative playlist creation
   - Social features (likes, comments, sharing)
+- [ ] **📥 Offline Downloads (Web/Android)** - Seleccionar pistas para uso sin red
+  - Sincronización explícita y permisos por usuario
+  - Compatibilidad con almacenamiento externo cuando exista
+- [ ] **🛑 Offline Mode** - Ejecutar sin llamadas externas
+  - Desactivar refresh loops y consultas a Spotify/Last.fm/YouTube
+  - Servir solo desde BD y descargas locales
+- [ ] **🧭 Per-user Library Hiding** - Ocultar artistas/albums/tracks por usuario
+  - No borra datos globales; solo filtra la vista personal
+  - Endpoints dedicados para hide/unhide
+- [ ] **⬇️ Download Metrics (anonimo)** - Contador de descargas por pista
+  - Sin asociar al usuario; solo agregados globales
+  - Visible en vistas de Tracks/Albumes como dato informativo
+- [ ] **🏷️ Catalogo de generos** - Normalizacion y browse de generos
+  - Consolidar generos de Spotify/Last.fm en una taxonomia unica
+  - Endpoints dedicados para explorar y filtrar por genero
+- [ ] **📺 YouTube DB-first** - Evitar llamadas externas si hay cache
+  - Consultar `YouTubeDownload` antes de buscar en YouTube
+  - Solo buscar cuando falte link/estado en BD
+- [ ] **🎧 Local-first Streaming** - Reproducir desde `download_path` si existe
+  - Reutilizar mp3/m4a ya descargados antes de streamear
 - [ ] **📊 Analytics Dashboard** - Usage statistics and insights
   - Listening habits analysis
   - Genre preference evolution tracking

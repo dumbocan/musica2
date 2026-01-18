@@ -2,7 +2,9 @@
 Spotify API client using Client Credentials flow.
 """
 
+import asyncio
 import base64
+import time
 from typing import Optional, List
 
 import httpx
@@ -17,6 +19,97 @@ class SpotifyClient:
         self.token_url = "https://accounts.spotify.com/api/token"
         self.base_url = "https://api.spotify.com/v1"
         self.access_token: Optional[str] = None
+        self.default_timeout_seconds = 8.0
+        self.token_timeout_seconds = 10.0
+        self.max_retries = 2
+        self.retry_backoff_seconds = 2.0
+        self.min_interval_seconds = 1.0
+        self.cooldown_base_seconds = 10.0
+        self._rate_lock = asyncio.Lock()
+        self._last_request_time = 0.0
+        self._cooldown_until = 0.0
+        self._cooldown_lock = asyncio.Lock()
+
+    async def _throttle(self) -> None:
+        async with self._rate_lock:
+            now = time.monotonic()
+            wait_time = self.min_interval_seconds - (now - self._last_request_time)
+            if wait_time > 0:
+                await asyncio.sleep(wait_time)
+            self._last_request_time = time.monotonic()
+
+    async def _respect_cooldown(self) -> None:
+        async with self._cooldown_lock:
+            now = time.monotonic()
+            wait_time = self._cooldown_until - now
+            if wait_time > 0:
+                await asyncio.sleep(wait_time)
+
+    async def _set_cooldown(self, delay_seconds: float) -> None:
+        async with self._cooldown_lock:
+            target = time.monotonic() + max(delay_seconds, 0.0)
+            if target > self._cooldown_until:
+                self._cooldown_until = target
+
+    @staticmethod
+    def _parse_retry_after(value: Optional[str]) -> Optional[float]:
+        if not value:
+            return None
+        try:
+            return float(value)
+        except ValueError:
+            return None
+
+    async def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Optional[dict] = None,
+        params: Optional[dict] = None,
+        data: Optional[dict] = None,
+        timeout: Optional[float] = None,
+    ) -> httpx.Response:
+        timeout = timeout or self.default_timeout_seconds
+        last_exc: Exception | None = None
+        retriable_statuses = {429, 500, 502, 503, 504}
+        for attempt in range(self.max_retries + 1):
+            try:
+                await self._respect_cooldown()
+                await self._throttle()
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.request(
+                        method,
+                        url,
+                        headers=headers,
+                        params=params,
+                        data=data,
+                    )
+                if response.status_code == 429:
+                    retry_after = self._parse_retry_after(response.headers.get("Retry-After"))
+                    delay = retry_after or max(
+                        self.retry_backoff_seconds * (attempt + 1),
+                        self.cooldown_base_seconds
+                    )
+                    await self._set_cooldown(delay)
+                    await response.aclose()
+                    if attempt < self.max_retries:
+                        await asyncio.sleep(delay)
+                        continue
+                    return response
+                if response.status_code in retriable_statuses and attempt < self.max_retries:
+                    await response.aclose()
+                    await asyncio.sleep(self.retry_backoff_seconds * (attempt + 1))
+                    continue
+                return response
+            except httpx.HTTPError as exc:
+                last_exc = exc
+                if attempt >= self.max_retries:
+                    raise
+                await asyncio.sleep(self.retry_backoff_seconds * (attempt + 1))
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("Spotify request failed")
 
     async def get_access_token(self):
         """Obtain access token from Spotify."""
@@ -34,11 +127,16 @@ class SpotifyClient:
 
         data = {"grant_type": "client_credentials"}
 
-        async with httpx.AsyncClient() as client:
-            response = await client.post(self.token_url, headers=headers, data=data)
-            response.raise_for_status()
-            token_data = response.json()
-            self.access_token = token_data["access_token"]
+        response = await self._request(
+            "POST",
+            self.token_url,
+            headers=headers,
+            data=data,
+            timeout=self.token_timeout_seconds,
+        )
+        response.raise_for_status()
+        token_data = response.json()
+        self.access_token = token_data["access_token"]
 
     async def _make_request(self, endpoint: str, params: Optional[dict] = None) -> dict:
         """Make authenticated request to Spotify API."""
@@ -47,15 +145,26 @@ class SpotifyClient:
 
         headers = {"Authorization": f"Bearer {self.access_token}"}
 
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{self.base_url}{endpoint}", headers=headers, params=params)
-            # If token expired, refresh once
-            if response.status_code == 401:
-                await self.get_access_token()
-                headers["Authorization"] = f"Bearer {self.access_token}"
-                response = await client.get(f"{self.base_url}{endpoint}", headers=headers, params=params)
-            response.raise_for_status()
-            return response.json()
+        response = await self._request(
+            "GET",
+            f"{self.base_url}{endpoint}",
+            headers=headers,
+            params=params,
+            timeout=self.default_timeout_seconds,
+        )
+        # If token expired, refresh once
+        if response.status_code == 401:
+            await self.get_access_token()
+            headers["Authorization"] = f"Bearer {self.access_token}"
+            response = await self._request(
+                "GET",
+                f"{self.base_url}{endpoint}",
+                headers=headers,
+                params=params,
+                timeout=self.default_timeout_seconds,
+            )
+        response.raise_for_status()
+        return response.json()
 
     async def get_recommendations(
         self,

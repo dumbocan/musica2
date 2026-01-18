@@ -29,6 +29,7 @@ from ..models.base import (
 from ..crud import update_track_lastfm, update_track_spotify_data, record_play
 from ..core.lastfm import lastfm_client
 from ..core.spotify import spotify_client
+from ..core.time_utils import utc_now
 from ..services.billboard import (
     extract_primary_artist,
     normalize_artist_name,
@@ -184,7 +185,7 @@ def _compute_chart_stats_from_raw(
         stats.weeks_top10 = computed["weeks_top10"]
         stats.first_chart_date = computed["first_chart_date"]
         stats.last_chart_date = computed["last_chart_date"]
-        stats.updated_at = datetime.utcnow()
+        stats.updated_at = utc_now()
         session.add(stats)
         stats_rows.append(stats)
 
