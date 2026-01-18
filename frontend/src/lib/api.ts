@@ -13,6 +13,35 @@ const api = axios.create({
   },
 });
 
+const healthClient = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: 8000,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+const HEALTH_CHECK_COOLDOWN_MS = 120000;
+let lastHealthCheckAt = 0;
+let healthCheckInFlight: Promise<void> | null = null;
+
+const refreshServiceStatus = () => {
+  const token = localStorage.getItem('token');
+  if (!token) return;
+  const now = Date.now();
+  if (healthCheckInFlight || now - lastHealthCheckAt < HEALTH_CHECK_COOLDOWN_MS) return;
+  lastHealthCheckAt = now;
+  healthCheckInFlight = healthClient
+    .get('/health/detailed', { headers: { Authorization: `Bearer ${token}` } })
+    .then((res) => {
+      useApiStore.getState().setServiceStatus(res.data?.services ?? null);
+    })
+    .catch(() => {})
+    .finally(() => {
+      healthCheckInFlight = null;
+    });
+};
+
 // Attach token if present
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
@@ -29,6 +58,11 @@ api.interceptors.response.use(
   (error) => {
     const status = error.response?.status;
     const store = useApiStore.getState();
+    const isTimeout = error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT';
+    const isNetwork = error.code === 'ERR_NETWORK' || !error.response;
+    if (isTimeout || isNetwork || (status && status >= 500)) {
+      refreshServiceStatus();
+    }
     if (status === 401) {
       if (store.isAuthenticated) {
         store.logout();

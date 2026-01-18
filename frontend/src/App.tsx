@@ -2,10 +2,11 @@ import { BrowserRouter as Router, Navigate, Routes, Route, useLocation, useNavig
 import { Sidebar } from '@/components/layout/Sidebar';
 import { YoutubeRequestCounter } from '@/components/YoutubeRequestCounter';
 import { PlayerFooter } from '@/components/PlayerFooter';
+import { audio2Api } from '@/lib/api';
 import { useApiStore } from '@/store/useApiStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import { LogOut, User, ChevronDown, Search, Menu, Home, Music, ListMusic } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { AlbumDetailPage } from '@/pages/AlbumDetailPage';
 import { YouTubeOverlayPlayer } from '@/components/YouTubeOverlayPlayer';
 
@@ -22,6 +23,28 @@ import { ArtistDiscographyPage } from '@/pages/ArtistDiscographyPage';
 import { HistoricalDbPage } from '@/pages/HistoricalDbPage';
 
 type JwtPayload = { exp?: number };
+type ServiceStatus = {
+  status?: string | null;
+  last_error?: string | null;
+};
+type ServiceStatusMap = {
+  spotify?: ServiceStatus;
+  lastfm?: ServiceStatus;
+};
+
+function ServiceDot({ label, color, status, lastError }: { label: string; color: string; status?: string | null; lastError?: string | null }) {
+  const isOnline = status === 'online';
+  const state = status ?? 'unknown';
+  const title = lastError ? `${label}: ${state} · ${lastError}` : `${label}: ${state}`;
+  const style = { '--dot-color': color } as CSSProperties;
+
+  return (
+    <div className="service-dot" style={style} title={title}>
+      <span className={`service-dot__circle${isOnline ? ' service-dot__circle--online' : ''}`} />
+      <span className="service-dot__text">{label}</span>
+    </div>
+  );
+}
 
 const decodeJwtPayload = (token: string): JwtPayload | null => {
   try {
@@ -44,6 +67,7 @@ const getTokenExpiryMs = (token: string): number | null => {
 
 function AppShell() {
   const { setSidebarOpen, isAuthenticated, searchQuery, setSearchQuery, setSearchTrigger } = useApiStore();
+  const setServiceStatus = useApiStore((s) => s.setServiceStatus);
   const token = useApiStore((s) => s.token);
   const logout = useApiStore((s) => s.logout);
   const playbackMode = usePlayerStore((s) => s.playbackMode);
@@ -54,6 +78,7 @@ function AppShell() {
   const audioDownloadVideoId = usePlayerStore((s) => s.audioDownloadVideoId);
   const audioDownloadStatus = usePlayerStore((s) => s.audioDownloadStatus);
   const [menuOpen, setMenuOpen] = useState(false);
+  const serviceStatus = useApiStore((s) => s.serviceStatus);
   const closeMenuTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
@@ -79,6 +104,27 @@ function AppShell() {
     const timeout = setTimeout(() => logout(), remainingMs);
     return () => clearTimeout(timeout);
   }, [logout, token]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let cancelled = false;
+    const loadStatus = async () => {
+      try {
+        const res = await audio2Api.healthDetailed?.();
+        if (!cancelled) {
+          setServiceStatus(res?.data?.services ?? null);
+        }
+      } catch {
+        if (!cancelled) {
+          setServiceStatus((prev) => prev ?? null);
+        }
+      }
+    };
+    loadStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, setServiceStatus]);
 
   const openMenu = () => {
     if (closeMenuTimeout.current) clearTimeout(closeMenuTimeout.current);
@@ -155,7 +201,20 @@ function AppShell() {
               >
                 <Menu className="h-5 w-5" />
               </button>
-              <div className="badge topbar__badge">🎵 Audio2 · Sesión activa</div>
+              <div className="topbar__services">
+                <ServiceDot
+                  label="Spotify"
+                  color="#1DB954"
+                  status={serviceStatus?.spotify?.status}
+                  lastError={serviceStatus?.spotify?.last_error}
+                />
+                <ServiceDot
+                  label="Last.fm"
+                  color="#f59e0b"
+                  status={serviceStatus?.lastfm?.status}
+                  lastError={serviceStatus?.lastfm?.last_error}
+                />
+              </div>
             </div>
 
             <div className="topbar__center">

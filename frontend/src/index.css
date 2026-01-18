@@ -272,6 +272,10 @@ a {
     display: none;
   }
 
+  .topbar__services {
+    display: none;
+  }
+
   .topbar__menu-btn {
     display: inline-flex;
   }
@@ -463,6 +467,34 @@ a {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.topbar__services {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.service-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.service-dot__circle {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  border: 2px solid var(--dot-color);
+  background: var(--panel);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+.service-dot__circle--online {
+  background: var(--dot-color);
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.2);
 }
 
 .topbar__center {

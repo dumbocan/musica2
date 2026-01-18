@@ -202,7 +202,7 @@ export function ArtistDiscographyPage() {
           >
             {album.images?.[0]?.url && (
               <img
-                src={album.images[0].url}
+                src={resolveImageUrl(album.images[0].url)}
                 alt={album.name}
                 style={{ width: '100%', borderRadius: 8, marginBottom: 8 }}
               />
@@ -250,6 +250,11 @@ function parseStoredImages(raw?: string | null): string[] {
     .replace(/True/g, 'true')
     .replace(/False/g, 'false');
   return tryParse(normalized);
+}
+
+function resolveImageUrl(url?: string) {
+  if (!url) return '';
+  return url.startsWith('/') ? `${API_BASE_URL}${url}` : url;
 }
 
 function ArtistPhoto({ name, remoteUrl, localImage }: { name: string; remoteUrl?: string; localImage?: string | null }) {

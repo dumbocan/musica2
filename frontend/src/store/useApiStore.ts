@@ -17,6 +17,16 @@ interface ApiStore {
   isHealthLoading: boolean;
   setHealth: (health: HealthCheckResponse | null) => void;
   setHealthLoading: (loading: boolean) => void;
+  serviceStatus: {
+    spotify?: { status?: string | null; last_error?: string | null };
+    lastfm?: { status?: string | null; last_error?: string | null };
+  } | null;
+  setServiceStatus: (
+    status: {
+      spotify?: { status?: string | null; last_error?: string | null };
+      lastfm?: { status?: string | null; last_error?: string | null };
+    } | null
+  ) => void;
 
   // Artists state
   artists: Artist[];
@@ -101,6 +111,8 @@ export const useApiStore = create<ApiStore>()(
       isHealthLoading: false,
       setHealth: (health) => set({ health }),
       setHealthLoading: (loading) => set({ isHealthLoading: loading }),
+      serviceStatus: null,
+      setServiceStatus: (serviceStatus) => set({ serviceStatus }),
 
       // Artists
       artists: [],

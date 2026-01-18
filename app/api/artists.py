@@ -135,7 +135,39 @@ async def get_artist_albums(
     session: AsyncSession = Depends(SessionDep),
 ) -> List[dict]:
     """Get all albums for an artist via Spotify API."""
-    albums = await spotify_client.get_artist_albums(spotify_id, include_groups="album,single")
+    try:
+        albums = await asyncio.wait_for(
+            spotify_client.get_artist_albums(spotify_id, include_groups="album,single"),
+            timeout=6.0,
+        )
+    except Exception as exc:
+        logger.warning("Spotify albums fetch failed for %s: %r", spotify_id, exc, exc_info=True)
+        albums = []
+
+    if not albums:
+        artist = (await session.exec(
+            select(Artist).where(Artist.spotify_id == spotify_id)
+        )).first()
+        if artist:
+            local_albums = (await session.exec(
+                select(Album)
+                .where(Album.artist_id == artist.id)
+                .order_by(desc(Album.release_date), asc(Album.id))
+            )).all()
+            albums = []
+            for album in local_albums:
+                if not album.spotify_id:
+                    continue
+                images = _parse_images_field(album.images)
+                albums.append({
+                    "id": album.spotify_id,
+                    "name": album.name,
+                    "release_date": album.release_date,
+                    "total_tracks": album.total_tracks,
+                    "images": proxy_image_list(images, size=384),
+                    "label": album.label,
+                    "artists": [{"id": artist.spotify_id, "name": artist.name}] if artist.spotify_id else [{"name": artist.name}],
+                })
     album_ids = [album.get("id") for album in albums if album.get("id")]
 
     counts: dict[str, int] = {}
@@ -193,23 +225,12 @@ async def get_artist_albums(
 
         if downloaded_tracks and current_count < len(downloaded_tracks):
             track_ids = local_tracks.get(album_id)
-            if track_ids is None:
-                track_ids = set()
-                try:
-                    album_tracks = await spotify_client.get_album_tracks(album_id)
-                    for track in album_tracks:
-                        tid = track.get("id")
-                        if tid:
-                            track_ids.add(tid)
-                except Exception as exc:
-                    logger.warning("Failed to fetch tracks for album %s: %s", album_id, exc)
-                local_tracks[album_id] = track_ids
-
-            if track_ids:
-                matched = sum(1 for tid in track_ids if tid in downloaded_tracks)
-                if matched > current_count:
-                    current_count = matched
-                    counts[album_id] = matched
+            if not track_ids:
+                continue
+            matched = sum(1 for tid in track_ids if tid in downloaded_tracks)
+            if matched > current_count:
+                current_count = matched
+                counts[album_id] = matched
 
         album["youtube_links_available"] = current_count
 
@@ -276,19 +297,43 @@ async def get_full_discography(spotify_id: str = Path(..., description="Spotify 
     return discography
 
 @router.get("/{spotify_id}/info")
-async def get_artist_info(spotify_id: str = Path(..., description="Spotify artist ID")):
+async def get_artist_info(
+    spotify_id: str = Path(..., description="Spotify artist ID"),
+    session: AsyncSession = Depends(SessionDep),
+):
     """Get artist info from Spotify + Last.fm bio/tags/listeners (no DB write)."""
     from ..core.lastfm import lastfm_client
     from ..services.library_expansion import save_artist_discography
 
-    spotify_data = await spotify_client.get_artist(spotify_id)
-    if not spotify_data:
-        raise HTTPException(status_code=404, detail="Artist not found on Spotify")
-    # Proxy images
+    spotify_data = None
     try:
-        spotify_data["images"] = proxy_image_list(spotify_data.get("images", []), size=512)
-    except Exception:
-        pass
+        spotify_data = await asyncio.wait_for(
+            spotify_client.get_artist(spotify_id),
+            timeout=6.0,
+        )
+    except Exception as exc:
+        logger.warning("Spotify artist fetch failed for %s: %r", spotify_id, exc, exc_info=True)
+
+    if not spotify_data:
+        local_artist = (await session.exec(
+            select(Artist).where(Artist.spotify_id == spotify_id)
+        )).first()
+        if not local_artist:
+            raise HTTPException(status_code=404, detail="Artist not found on Spotify")
+        spotify_data = {
+            "id": local_artist.spotify_id,
+            "name": local_artist.name,
+            "images": proxy_image_list(_parse_images_field(local_artist.images), size=384),
+            "followers": {"total": local_artist.followers or 0},
+            "popularity": local_artist.popularity or 0,
+            "genres": _parse_genres_field(local_artist.genres),
+        }
+    else:
+        # Proxy images
+        try:
+            spotify_data["images"] = proxy_image_list(spotify_data.get("images", []), size=384)
+        except Exception:
+            pass
 
     lastfm_data = {}
     try:

@@ -1,4 +1,6 @@
 from fastapi import APIRouter, status
+import asyncio
+import base64
 import httpx
 from ..core.time_utils import utc_now
 
@@ -13,12 +15,14 @@ api_status_cache = {
     'spotify': {
         'last_checked': None,
         'is_online': None,
-        'last_error': None
+        'last_error': None,
+        'last_success': None
     },
     'lastfm': {
         'last_checked': None,
         'is_online': None,
-        'last_error': None
+        'last_error': None,
+        'last_success': None
     },
     'database': {
         'last_checked': None,
@@ -26,6 +30,18 @@ api_status_cache = {
         'last_error': None
     }
 }
+
+RECENT_SUCCESS_SECONDS = 15 * 60
+
+def _is_recent(last_checked, max_age_seconds: int = 60) -> bool:
+    if not last_checked:
+        return False
+    return (utc_now() - last_checked).total_seconds() < max_age_seconds
+
+def _has_recent_success(last_success) -> bool:
+    if not last_success:
+        return False
+    return (utc_now() - last_success).total_seconds() < RECENT_SUCCESS_SECONDS
 
 async def check_spotify_api() -> bool:
     """Check if Spotify API is available; skip if no credentials."""
@@ -35,14 +51,47 @@ async def check_spotify_api() -> bool:
         api_status_cache['spotify']['last_error'] = "credentials not set"
         api_status_cache['spotify']['last_checked'] = utc_now()
         return False
+    if _is_recent(api_status_cache['spotify']['last_checked']):
+        cached = api_status_cache['spotify']['is_online']
+        if cached is not None:
+            return bool(cached)
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get("https://api.spotify.com/v1", timeout=5)
-            api_status_cache['spotify']['is_online'] = response.status_code == 200
-            api_status_cache['spotify']['last_error'] = None if response.status_code == 200 else f"HTTP {response.status_code}"
-            return response.status_code == 200
+        auth_string = f"{settings.SPOTIFY_CLIENT_ID}:{settings.SPOTIFY_CLIENT_SECRET}"
+        auth_base64 = base64.b64encode(auth_string.encode("utf-8")).decode("utf-8")
+        headers = {
+            "Authorization": f"Basic {auth_base64}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+        data = {"grant_type": "client_credentials"}
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            response = await client.post("https://accounts.spotify.com/api/token", headers=headers, data=data)
+        response.raise_for_status()
+        api_status_cache['spotify']['is_online'] = True
+        api_status_cache['spotify']['last_error'] = None
+        api_status_cache['spotify']['last_success'] = utc_now()
+        return True
+    except asyncio.TimeoutError:
+        if _has_recent_success(api_status_cache['spotify']['last_success']):
+            api_status_cache['spotify']['is_online'] = True
+            api_status_cache['spotify']['last_error'] = "timeout (cached)"
+            return True
+        api_status_cache['spotify']['is_online'] = False
+        api_status_cache['spotify']['last_error'] = "timeout"
+        return False
+    except httpx.TimeoutException:
+        if _has_recent_success(api_status_cache['spotify']['last_success']):
+            api_status_cache['spotify']['is_online'] = True
+            api_status_cache['spotify']['last_error'] = "timeout (cached)"
+            return True
+        api_status_cache['spotify']['is_online'] = False
+        api_status_cache['spotify']['last_error'] = "timeout"
+        return False
     except Exception as e:
+        if _has_recent_success(api_status_cache['spotify']['last_success']):
+            api_status_cache['spotify']['is_online'] = True
+            api_status_cache['spotify']['last_error'] = f"cached: {e}"
+            return True
         api_status_cache['spotify']['is_online'] = False
         api_status_cache['spotify']['last_error'] = str(e)
         return False
@@ -57,14 +106,51 @@ async def check_lastfm_api() -> bool:
         api_status_cache['lastfm']['last_error'] = "credentials not set"
         api_status_cache['lastfm']['last_checked'] = utc_now()
         return False
+    if _is_recent(api_status_cache['lastfm']['last_checked']):
+        cached = api_status_cache['lastfm']['is_online']
+        if cached is not None:
+            return bool(cached)
 
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get("http://ws.audioscrobbler.com/2.0/?method=artist.getinfo&artist=cher&api_key=test&format=json", timeout=5)
-            api_status_cache['lastfm']['is_online'] = response.status_code == 200
-            api_status_cache['lastfm']['last_error'] = None if response.status_code == 200 else f"HTTP {response.status_code}"
-            return response.status_code == 200
+            response = await client.get(
+                "https://ws.audioscrobbler.com/2.0/",
+                params={
+                    "method": "artist.getinfo",
+                    "artist": "cher",
+                    "api_key": settings.LASTFM_API_KEY,
+                    "format": "json",
+                },
+                timeout=4,
+            )
+        ok = response.status_code == 200
+        error_message = None
+        if ok:
+            try:
+                payload = response.json()
+            except Exception:
+                payload = {}
+            if isinstance(payload, dict) and payload.get("error"):
+                ok = False
+                error_message = payload.get("message", "Last.fm error")
+        api_status_cache['lastfm']['is_online'] = ok
+        api_status_cache['lastfm']['last_error'] = None if ok else (error_message or f"HTTP {response.status_code}")
+        if ok:
+            api_status_cache['lastfm']['last_success'] = utc_now()
+        return ok
+    except httpx.TimeoutException:
+        if _has_recent_success(api_status_cache['lastfm']['last_success']):
+            api_status_cache['lastfm']['is_online'] = True
+            api_status_cache['lastfm']['last_error'] = "timeout (cached)"
+            return True
+        api_status_cache['lastfm']['is_online'] = False
+        api_status_cache['lastfm']['last_error'] = "timeout"
+        return False
     except Exception as e:
+        if _has_recent_success(api_status_cache['lastfm']['last_success']):
+            api_status_cache['lastfm']['is_online'] = True
+            api_status_cache['lastfm']['last_error'] = f"cached: {e}"
+            return True
         api_status_cache['lastfm']['is_online'] = False
         api_status_cache['lastfm']['last_error'] = str(e)
         return False
@@ -94,10 +180,11 @@ async def health() -> dict:
 @router.get("/health/detailed", status_code=status.HTTP_200_OK)
 async def detailed_health() -> dict:
     """Detailed health check with service status."""
-    # Check all services
-    spotify_ok = await check_spotify_api()
-    lastfm_ok = await check_lastfm_api()
-    db_ok = check_database()
+    # Check all services in parallel (fast-fail with timeouts inside checks)
+    spotify_task = asyncio.create_task(check_spotify_api())
+    lastfm_task = asyncio.create_task(check_lastfm_api())
+    db_task = asyncio.to_thread(check_database)
+    spotify_ok, lastfm_ok, db_ok = await asyncio.gather(spotify_task, lastfm_task, db_task)
 
     # Determine overall system status
     system_status = "online"
