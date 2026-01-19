@@ -54,6 +54,13 @@ Se ha realizado una revisión exhaustiva del código del frontend para mejorar l
 - **Resistencia a borrados**: `delete_artist`/`delete_album`/`delete_track` rechazan la operación si hay favoritos. Nuevos helpers en `crud` + endpoints `DELETE /albums/id/{id}` ya protegidos.
 - **Dependencias**: añadido `Pillow` para el resize; `discogs-client` fijado a `2.3.0`.
 
+## 🆕 Discografía & Tracks (DB-first, agrupación)
+
+- **Discografía separada**: la ficha de artista divide **Álbumes / Sencillos / Compilaciones** y usa `album_group`/`album_type` cuando Spotify lo aporta.
+- **Carga no bloqueante**: `/artists/{spotify_id}/albums?refresh=true` responde con BD y dispara el refresco completo en background para evitar pantallas en negro por timeouts.
+- **Álbumes DB-first**: `/albums/spotify/{id}` y `/albums/{id}/tracks` sirven desde BD si hay datos y solo consultan Spotify si faltan tracks; si Spotify falla no rompen la UI.
+- **Tracks sin duplicados visibles**: la vista de Tracks agrupa por `artista + nombre`, elige la mejor versión (archivo local > YouTube > favorito) y aplica favoritos al grupo completo.
+
 ## 🎧 YouTube streaming, caché y descargas
 
 - **Job en background** (`app/core/youtube_prefetch.py`): al arrancar `uvicorn app.main:app --reload` se ejecuta `youtube_prefetch_loop()` que inspecciona la tabla `track` y va rellenando `YouTubeDownload` uno a uno. Usa `youtube_client.min_interval_seconds = 5` para no quemar cuota y, si recibe un `403/429`, entra en enfriamiento de 15 min. Vigila los avances con `tail -f uvicorn.log | grep youtube_prefetch`.

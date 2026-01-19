@@ -20,7 +20,11 @@ async def save_artist_discography(spotify_artist_id: str) -> Optional[int]:
     artist = save_artist(artist_data)
     artist_id = artist.id
 
-    albums_data = await spotify_client.get_artist_albums(spotify_artist_id, include_groups="album,single")
+    albums_data = await spotify_client.get_artist_albums(
+        spotify_artist_id,
+        include_groups="album,single,compilation",
+        fetch_all=True,
+    )
     for album_data in albums_data:
         album = save_album(album_data)
         if not album or not album.id:

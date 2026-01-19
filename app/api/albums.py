@@ -2,6 +2,9 @@
 Album endpoints: tracks, save to DB, etc.
 """
 
+import ast
+import json
+import logging
 from typing import List
 
 from fastapi import APIRouter, Path, HTTPException
@@ -10,10 +13,12 @@ from ..core.spotify import spotify_client
 from ..core.config import settings
 from ..core.lastfm import lastfm_client
 from ..core.image_proxy import proxy_image_list
-from ..crud import save_album, delete_album
+from ..crud import save_album, save_track, delete_album
 from ..core.db import get_session
-from ..models.base import Album
+from ..models.base import Album, Artist, Track
 from sqlmodel import select
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/albums", tags=["albums"])
 
@@ -21,8 +26,18 @@ router = APIRouter(prefix="/albums", tags=["albums"])
 @router.get("/spotify/{spotify_id}")
 async def get_album_from_spotify(spotify_id: str = Path(..., description="Spotify album ID")):
     """Get album details and tracks directly from Spotify."""
+    with get_session() as session:
+        local_album = session.exec(select(Album).where(Album.spotify_id == spotify_id)).first()
+        if local_album:
+            artist = session.exec(select(Artist).where(Artist.id == local_album.artist_id)).first()
+            tracks = session.exec(select(Track).where(Track.album_id == local_album.id)).all()
+            album_payload = _album_from_local(local_album, artist, tracks)
+            if tracks:
+                return album_payload
+            # No tracks locally; fall through to Spotify if possible
+
     if not settings.SPOTIFY_CLIENT_ID or not settings.SPOTIFY_CLIENT_SECRET:
-        raise HTTPException(status_code=400, detail="Spotify credentials not configured")
+        return album_payload if "album_payload" in locals() else {}
     try:
         album = await spotify_client.get_album(spotify_id)
         if not album:
@@ -39,17 +54,38 @@ async def get_album_from_spotify(spotify_id: str = Path(..., description="Spotif
                 album["lastfm"] = lfm_info
         except Exception:
             album["lastfm"] = {}
+        if local_album and tracks:
+            for track_data in tracks:
+                save_track(track_data, local_album.id, local_album.artist_id)
         return album
     except HTTPException:
         raise
     except Exception as e:
+        if "album_payload" in locals():
+            return album_payload
         raise HTTPException(status_code=500, detail=f"Error fetching album from Spotify: {e}")
 
 
 @router.get("/{spotify_id}/tracks")
 async def get_album_tracks(spotify_id: str = Path(..., description="Spotify album ID")) -> List[dict]:
     """Get all tracks for an album via Spotify API."""
-    tracks = await spotify_client.get_album_tracks(spotify_id)
+    local_album = None
+    with get_session() as session:
+        local_album = session.exec(select(Album).where(Album.spotify_id == spotify_id)).first()
+        if local_album:
+            artist = session.exec(select(Artist).where(Artist.id == local_album.artist_id)).first()
+            tracks = session.exec(select(Track).where(Track.album_id == local_album.id)).all()
+            if tracks:
+                return [_track_from_local(track, artist) for track in tracks]
+    try:
+        tracks = await spotify_client.get_album_tracks(spotify_id)
+    except Exception as exc:
+        logger.warning("Spotify album tracks fetch failed for %s: %r", spotify_id, exc, exc_info=True)
+        return []
+
+    if local_album and tracks:
+        for track_data in tracks:
+            save_track(track_data, local_album.id, local_album.artist_id)
     return tracks
 
 
@@ -100,3 +136,45 @@ def get_album(album_id: int = Path(..., description="Local album ID")) -> Album:
         if not album:
             raise HTTPException(status_code=404, detail="Album not found")
     return album
+
+
+def _parse_images_field(raw) -> list:
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return raw
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        try:
+            return ast.literal_eval(raw)
+        except (ValueError, SyntaxError):
+            return []
+
+
+def _track_from_local(track: Track, artist: Artist | None) -> dict:
+    return {
+        "id": track.spotify_id or str(track.id),
+        "spotify_id": track.spotify_id,
+        "name": track.name,
+        "duration_ms": track.duration_ms,
+        "popularity": track.popularity,
+        "external_urls": {"spotify": track.external_url} if track.external_url else {},
+        "artists": [{"name": artist.name}] if artist else [],
+    }
+
+
+def _album_from_local(album: Album, artist: Artist | None, tracks: list[Track]) -> dict:
+    images = proxy_image_list(_parse_images_field(album.images), size=512)
+    payload = {
+        "id": album.spotify_id or str(album.id),
+        "name": album.name,
+        "release_date": album.release_date,
+        "images": images,
+        "artists": [{"name": artist.name}] if artist else [],
+    }
+    if tracks:
+        payload["tracks"] = [_track_from_local(track, artist) for track in tracks]
+    else:
+        payload["tracks"] = []
+    return payload

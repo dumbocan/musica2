@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from .api.routes_health import router as health_router
 from .api.artists import router as artists_router
@@ -61,6 +61,17 @@ PUBLIC_PREFIXES = (
     "/youtube/download",  # <audio> fetches file URLs without auth headers.
 )
 
+def _apply_cors_headers(response: Response, request: Request) -> Response:
+    origin = request.headers.get("origin")
+    if not origin:
+        return response
+    if origin in settings.CORS_ORIGINS:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        if settings.CORS_ALLOW_CREDENTIALS:
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Vary"] = "Origin"
+    return response
+
 
 @app.middleware("http")
 async def require_authenticated_user(request: Request, call_next):
@@ -74,23 +85,27 @@ async def require_authenticated_user(request: Request, call_next):
     with get_session() as session:
         user_exists = session.exec(select(User.id)).first()
         if not user_exists:
-            return JSONResponse(status_code=401, content={"detail": "No users found. Register via /auth/register."})
+            response = JSONResponse(status_code=401, content={"detail": "No users found. Register via /auth/register."})
+            return _apply_cors_headers(response, request)
 
         auth_header = request.headers.get("Authorization", "")
         token = None
         if auth_header.lower().startswith("bearer "):
             token = auth_header.split(" ", 1)[1].strip()
         if not token:
-            return JSONResponse(status_code=401, content={"detail": "Authorization bearer token required"})
+            response = JSONResponse(status_code=401, content={"detail": "Authorization bearer token required"})
+            return _apply_cors_headers(response, request)
 
         try:
             user_id = get_current_user_id_from_token(token)
         except ValueError as exc:
-            return JSONResponse(status_code=401, content={"detail": str(exc)})
+            response = JSONResponse(status_code=401, content={"detail": str(exc)})
+            return _apply_cors_headers(response, request)
 
         user_in_db = session.exec(select(User.id).where(User.id == user_id)).first()
         if not user_in_db:
-            return JSONResponse(status_code=401, content={"detail": "User not found"})
+            response = JSONResponse(status_code=401, content={"detail": "User not found"})
+            return _apply_cors_headers(response, request)
 
         request.state.user_id = user_id
 

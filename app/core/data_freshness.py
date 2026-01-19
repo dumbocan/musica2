@@ -176,7 +176,11 @@ class DataFreshnessManager:
 
         try:
             # Get all artist albums from Spotify
-            spotify_albums = await spotify_client.get_artist_albums(spotify_id, include_groups="album,single")
+            spotify_albums = await spotify_client.get_artist_albums(
+                spotify_id,
+                include_groups="album,single,compilation",
+                fetch_all=True,
+            )
             logger.info(f"Found {len(spotify_albums)} albums on Spotify")
 
             # Check each album
@@ -394,7 +398,8 @@ class DataFreshnessManager:
         try:
             main_artist_albums = await spotify_client.get_artist_albums(
                 main_artist_spotify_id,
-                include_groups="album,single",
+                include_groups="album,single,compilation",
+                fetch_all=True,
             )
             logger.info(f"📀 {main_artist_name} has {len(main_artist_albums)} albums in Spotify")
 
@@ -511,7 +516,8 @@ class DataFreshnessManager:
                 try:
                     similar_artist_albums = await spotify_client.get_artist_albums(
                         similar_artist_spotify_id,
-                        include_groups="album,single",
+                        include_groups="album,single,compilation",
+                        fetch_all=True,
                     )
                     logger.info(f"📀 {artist_name} has {len(similar_artist_albums)} albums")
 

@@ -230,20 +230,87 @@ class SpotifyClient:
         response = await self._make_request(endpoint)
         return response
 
+    async def get_artist_albums_page(
+        self,
+        artist_id: str,
+        limit: int = 50,
+        offset: int = 0,
+        include_groups: str = "album,single,compilation",
+    ) -> dict:
+        """Get a single page of albums for an artist."""
+        endpoint = f"/artists/{artist_id}/albums"
+        params = {
+            "limit": limit,
+            "offset": max(offset, 0),
+            "include_groups": include_groups,
+        }
+        return await self._make_request(endpoint, params)
+
     async def get_artist_albums(
         self,
         artist_id: str,
         limit: int = 50,
-        include_groups: str = "album,single",
+        include_groups: str = "album,single,compilation",
+        fetch_all: bool = False,
     ) -> List[dict]:
         """Get albums for an artist. include_groups: album, single, compilation, appears_on."""
-        endpoint = f"/artists/{artist_id}/albums"
-        params = {
-            "limit": limit,
-            "include_groups": include_groups
-        }
-        response = await self._make_request(endpoint, params)
-        return response.get("items", [])
+        response = await self.get_artist_albums_page(
+            artist_id,
+            limit=limit,
+            offset=0,
+            include_groups=include_groups,
+        )
+        items = response.get("items", []) or []
+        if not fetch_all:
+            return items
+
+        total = response.get("total")
+        offset = len(items)
+        seen = set()
+        deduped: list[dict] = []
+        for item in items:
+            item_id = item.get("id") if isinstance(item, dict) else None
+            if not item_id or item_id in seen:
+                continue
+            seen.add(item_id)
+            deduped.append(item)
+
+        while total is None or offset < total:
+            response = await self.get_artist_albums_page(
+                artist_id,
+                limit=limit,
+                offset=offset,
+                include_groups=include_groups,
+            )
+            page_items = response.get("items", []) or []
+            if not page_items:
+                break
+            for item in page_items:
+                item_id = item.get("id") if isinstance(item, dict) else None
+                if not item_id or item_id in seen:
+                    continue
+                seen.add(item_id)
+                deduped.append(item)
+            offset += len(page_items)
+            if total is None:
+                total = response.get("total")
+
+        return deduped
+
+    async def get_artist_albums_total(
+        self,
+        artist_id: str,
+        include_groups: str = "album,single,compilation",
+    ) -> Optional[int]:
+        """Get total count of albums for an artist."""
+        response = await self.get_artist_albums_page(
+            artist_id,
+            limit=1,
+            offset=0,
+            include_groups=include_groups,
+        )
+        total = response.get("total")
+        return int(total) if total is not None else None
 
     async def get_album(self, album_id: str) -> Optional[dict]:
         """Get album details by ID."""

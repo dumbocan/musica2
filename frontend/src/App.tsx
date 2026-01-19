@@ -230,7 +230,7 @@ function AppShell() {
                   id="q-top"
                   type="text"
                   name="q-top"
-                  placeholder="Search artists or tracks..."
+                  placeholder="Buscar artista, álbum, canción o género..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   autoComplete="off"

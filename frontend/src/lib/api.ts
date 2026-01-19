@@ -100,8 +100,8 @@ export const audio2Api = {
     api.get(`/artists/${spotifyId}/info`),
   getLocalArtistBySpotifyId: (spotifyId: string) =>
     api.get(`/artists/spotify/${spotifyId}/local`),
-  getArtistAlbums: (spotifyId: string) =>
-    api.get(`/artists/${spotifyId}/albums`),
+  getArtistAlbums: (spotifyId: string, params?: { refresh?: boolean }) =>
+    api.get(`/artists/${spotifyId}/albums`, { params }),
 
   searchOrchestrated: (params: { q: string; limit?: number; page?: number; lastfm_limit?: number; related_limit?: number }) =>
     api.get('/search/orchestrated', { params }),

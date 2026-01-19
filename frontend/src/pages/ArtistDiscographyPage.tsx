@@ -11,6 +11,8 @@ type Album = {
   total_tracks?: number;
   images?: AlbumImage[];
   youtube_links_available?: number;
+  album_group?: string;
+  album_type?: string;
 };
 type ArtistInfo = {
   spotify?: {
@@ -47,7 +49,7 @@ export function ArtistDiscographyPage() {
       try {
         const [artistRes, albumsRes, localRes] = await Promise.all([
           audio2Api.getArtistInfo(spotifyId),
-          audio2Api.getArtistAlbums(spotifyId),
+          audio2Api.getArtistAlbums(spotifyId, { refresh: true }),
           audio2Api.getLocalArtistBySpotifyId(spotifyId).catch(() => ({ data: null })),
         ]);
         setArtist(artistRes.data);
@@ -82,6 +84,45 @@ export function ArtistDiscographyPage() {
       .filter(Boolean);
   }, [bioHtml]);
   const bioToShow = showFullBio ? bioParagraphs : bioParagraphs.slice(0, 3);
+
+  const sortedAlbums = useMemo(() => {
+    return [...albums].sort((a, b) => {
+      const left = a.release_date || '';
+      const right = b.release_date || '';
+      if (left === right) return 0;
+      return left < right ? 1 : -1;
+    });
+  }, [albums]);
+
+  const { studioAlbums, singles, compilations } = useMemo(() => {
+    const items = {
+      studioAlbums: [] as Album[],
+      singles: [] as Album[],
+      compilations: [] as Album[],
+    };
+    for (const album of sortedAlbums) {
+      const group = album.album_group || album.album_type;
+      if (group === 'single') {
+        items.singles.push(album);
+        continue;
+      }
+      if (group === 'compilation') {
+        items.compilations.push(album);
+        continue;
+      }
+      if (group === 'album') {
+        items.studioAlbums.push(album);
+        continue;
+      }
+      const totalTracks = typeof album.total_tracks === 'number' ? album.total_tracks : null;
+      if (totalTracks !== null && totalTracks <= 6) {
+        items.singles.push(album);
+      } else {
+        items.studioAlbums.push(album);
+      }
+    }
+    return items;
+  }, [sortedAlbums]);
 
   if (!spotifyId) return <div className="card">Artista no especificado.</div>;
   if (loading) return <div className="card">Cargando discografía...</div>;
@@ -188,17 +229,61 @@ export function ArtistDiscographyPage() {
       </div>
 
       <div className="card">
-        <div style={{ fontWeight: 700, fontSize: 18 }}>{artistName} · Álbumes</div>
-        <div style={{ color: 'var(--muted)', fontSize: 13 }}>Haz clic en un álbum para ver detalles.</div>
+        <div style={{ fontWeight: 700, fontSize: 18 }}>{artistName} · Discografía</div>
+        <div style={{ color: 'var(--muted)', fontSize: 13 }}>Haz clic en un álbum o sencillo para ver detalles.</div>
       </div>
 
+      <DiscographySection
+        title="Álbumes"
+        subtitle={`${studioAlbums.length} lanzamientos`}
+        items={studioAlbums}
+        onSelect={(albumId) => navigate(`/albums/${albumId}`)}
+      />
+
+      <DiscographySection
+        title="Sencillos"
+        subtitle={`${singles.length} lanzamientos`}
+        items={singles}
+        onSelect={(albumId) => navigate(`/albums/${albumId}`)}
+      />
+
+      {compilations.length > 0 && (
+        <DiscographySection
+          title="Compilaciones"
+          subtitle={`${compilations.length} lanzamientos`}
+          items={compilations}
+          onSelect={(albumId) => navigate(`/albums/${albumId}`)}
+        />
+      )}
+    </div>
+  );
+}
+
+function DiscographySection({
+  title,
+  subtitle,
+  items,
+  onSelect,
+}: {
+  title: string;
+  subtitle: string;
+  items: Album[];
+  onSelect: (albumId: string) => void;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <section className="space-y-3">
+      <div className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ fontWeight: 700, fontSize: 16 }}>{title}</div>
+        <div style={{ color: 'var(--muted)', fontSize: 12 }}>{subtitle}</div>
+      </div>
       <div className="grid-cards" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 }}>
-        {albums.map((album) => (
+        {items.map((album) => (
           <div
             key={album.id}
             className="card"
             style={{ padding: 12, background: 'var(--panel-2)', cursor: 'pointer', minWidth: 220, maxWidth: 260, margin: '0 auto' }}
-            onClick={() => navigate(`/albums/${album.id}`)}
+            onClick={() => onSelect(album.id)}
           >
             {album.images?.[0]?.url && (
               <img
@@ -220,7 +305,7 @@ export function ArtistDiscographyPage() {
           </div>
         ))}
       </div>
-    </div>
+    </section>
   );
 }
 

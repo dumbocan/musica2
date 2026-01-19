@@ -3,20 +3,26 @@ Advanced search endpoints.
 """
 
 import asyncio
+import json
 import logging
 import time
+import ast
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Depends
 from sqlmodel import select, and_
+from sqlalchemy import desc, or_
 
 from ..core.config import settings
 from ..core.db import get_session, SessionDep
 from ..core.image_proxy import proxy_image_list
 from ..core.lastfm import lastfm_client
 from ..core.spotify import spotify_client
+from ..core.time_utils import utc_now
 from ..models.base import Artist, Album, Track, Tag, TrackTag
-from ..services.library_expansion import save_artist_and_similars
+from ..services.library_expansion import save_artist_discography
+from ..crud import normalize_name
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 router = APIRouter(prefix="/search", tags=["search"])
@@ -24,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 CACHE_TTL_SECONDS = 60
 MAX_CACHE_ENTRIES = 200
+ARTIST_REFRESH_DAYS = 7
 _orchestrated_cache: dict[str, tuple[float, dict]] = {}
 _artist_profile_cache: dict[str, tuple[float, dict]] = {}
 
@@ -62,6 +69,64 @@ def _format_tracks(tracks: list[dict]) -> list[dict]:
             "album": album
         })
     return results
+
+
+def _parse_images_field(raw) -> list:
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return raw
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        try:
+            return ast.literal_eval(raw)
+        except (ValueError, SyntaxError):
+            return []
+
+
+def _parse_genres_field(raw) -> list:
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [g.strip() for g in raw if isinstance(g, str) and g.strip()]
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [g.strip() for g in parsed if isinstance(g, str) and g.strip()]
+    except (json.JSONDecodeError, TypeError):
+        try:
+            parsed = ast.literal_eval(raw)
+            if isinstance(parsed, list):
+                return [g.strip() for g in parsed if isinstance(g, str) and g.strip()]
+        except (ValueError, SyntaxError):
+            return []
+    if isinstance(raw, str) and "," in raw:
+        return [g.strip() for g in raw.split(",") if g.strip()]
+    return []
+
+
+def _artist_to_spotify_dict(artist: Artist, size: int = 512) -> dict:
+    images = proxy_image_list(_parse_images_field(artist.images), size=size)
+    return {
+        "id": artist.spotify_id,
+        "name": artist.name,
+        "images": images,
+        "followers": {"total": artist.followers or 0},
+        "popularity": artist.popularity or 0,
+        "genres": _parse_genres_field(artist.genres),
+    }
+
+
+def _artist_to_lastfm_dict(artist: Artist) -> dict:
+    tags = _parse_genres_field(artist.genres)
+    return {
+        "summary": artist.bio_summary or "",
+        "content": artist.bio_content or "",
+        "stats": {},
+        "tags": [{"name": tag} for tag in tags] if tags else [],
+        "images": [],
+    }
 
 
 def _infer_genre_keywords(query: str) -> list[str]:
@@ -480,9 +545,11 @@ async def orchestrated_search(
 async def search_artist_profile(
     q: str = Query(..., description="Nombre del artista/grupo"),
     similar_limit: int = Query(10, description="Número de artistas afines"),
-    min_followers: int = Query(200_000, description="Umbral mínimo de followers Spotify para similares")
+    min_followers: int = Query(200_000, description="Umbral mínimo de followers Spotify para similares"),
+    session: AsyncSession = Depends(SessionDep),
 ):
     """Devuelve ficha del artista (bio Last.fm + datos Spotify) y similares."""
+    q = q.strip()
     cache_key = f"{q.lower()}|{similar_limit}|{min_followers}"
     cached = _cache_get(_artist_profile_cache, cache_key)
     if cached:
@@ -491,40 +558,142 @@ async def search_artist_profile(
     if not settings.LASTFM_API_KEY:
         raise HTTPException(status_code=400, detail="Se requiere LASTFM_API_KEY para este endpoint")
 
+    local_cache: dict[str, Artist | None] = {}
+
+    async def get_local_artist(name: str) -> Artist | None:
+        normalized = normalize_name(name)
+        if not normalized:
+            return None
+        if normalized in local_cache:
+            return local_cache[normalized]
+        local = (await session.exec(
+            select(Artist)
+            .where(
+                or_(
+                    Artist.normalized_name == normalized,
+                    Artist.name.ilike(f"%{name}%"),
+                )
+            )
+            .order_by(desc(Artist.popularity))
+            .limit(1)
+        )).first()
+        local_cache[normalized] = local
+        return local
+
+    def is_stale(artist: Artist | None) -> bool:
+        if not artist:
+            return True
+        stale_at = artist.last_refreshed_at
+        return not stale_at or (utc_now() - stale_at) > timedelta(days=ARTIST_REFRESH_DAYS)
+
     timeout_spotify = 4.0
     timeout_lastfm = 6.0
     sem_spotify = asyncio.Semaphore(10)
+    spotify_available = True
+
+    async def safe_spotify(coro, default):
+        nonlocal spotify_available
+        if not spotify_available:
+            if asyncio.iscoroutine(coro):
+                coro.close()
+            return default
+        try:
+            return await asyncio.wait_for(coro, timeout=timeout_spotify)
+        except Exception as exc:
+            spotify_available = False
+            logger.warning("[search_artist_profile] spotify call failed: %s", exc)
+            return default
 
     async def fetch_main():
-        # Last.fm bio/info
-        lfm = await _safe_timed(lastfm_client.get_artist_info(q), {}, timeout_lastfm)
-        # Spotify info
-        async with sem_spotify:
-            sp_matches = await _safe_timed(spotify_client.search_artists(q, limit=3), [], timeout_spotify)
-        sp_sorted = sorted(
-            sp_matches,
-            key=lambda x: (x.get("followers", {}) or {}).get("total", 0),
-            reverse=True
-        )
-        sp_best = None
-        for cand in sp_sorted:
-            if _name_matches(q, cand.get("name", "")):
-                sp_best = cand
-                break
-        if not sp_best and sp_sorted:
-            sp_best = sp_sorted[0]
+        local_artist = await get_local_artist(q)
+        sp_best = _artist_to_spotify_dict(local_artist) if local_artist else None
+        lfm = _artist_to_lastfm_dict(local_artist) if local_artist else {}
+        needs_lastfm = not (lfm.get("summary") or lfm.get("content"))
+        if needs_lastfm:
+            lfm_remote = await _safe_timed(lastfm_client.get_artist_info(q), {}, timeout_lastfm)
+            if local_artist:
+                lfm = {
+                    "summary": local_artist.bio_summary or lfm_remote.get("summary", ""),
+                    "content": local_artist.bio_content or lfm_remote.get("content", ""),
+                    "stats": lfm_remote.get("stats", {}),
+                    "tags": lfm_remote.get("tags", []) or lfm.get("tags", []),
+                    "images": lfm_remote.get("images", []),
+                }
+            else:
+                lfm = lfm_remote
+        if not sp_best and spotify_available:
+            async with sem_spotify:
+                sp_matches = await safe_spotify(spotify_client.search_artists(q, limit=3), [])
+            sp_sorted = sorted(
+                sp_matches,
+                key=lambda x: (x.get("followers", {}) or {}).get("total", 0),
+                reverse=True
+            )
+            for cand in sp_sorted:
+                if _name_matches(q, cand.get("name", "")):
+                    sp_best = cand
+                    break
+            if not sp_best and sp_sorted:
+                sp_best = sp_sorted[0]
         return {"spotify": sp_best, "lastfm": lfm}
 
     async def fetch_similars(main_name: str):
-        similars = await _safe_timed(lastfm_client.get_similar_artists(main_name, limit=similar_limit + 8), [], timeout_lastfm)
+        similars = await _safe_timed(
+            lastfm_client.get_similar_artists(main_name, limit=similar_limit + 8),
+            [],
+            timeout_lastfm,
+        )
         results = []
         seen_ids = set()
         for entry in similars:
             name = entry.get("name")
             if not name:
                 continue
+            local_artist = await get_local_artist(name)
+            if local_artist:
+                sp_best = _artist_to_spotify_dict(local_artist, size=384)
+                sp_id = sp_best.get("id")
+                if sp_id and sp_id in seen_ids:
+                    continue
+                if sp_id:
+                    seen_ids.add(sp_id)
+                results.append({
+                    "name": name,
+                    "match": entry.get("match"),
+                    "url": entry.get("url"),
+                    "image": entry.get("image", []),
+                    "spotify": sp_best,
+                    "lastfm": entry,
+                })
+                if len(results) >= similar_limit:
+                    break
+                continue
+            if not spotify_available:
+                results.append({
+                    "name": name,
+                    "match": entry.get("match"),
+                    "url": entry.get("url"),
+                    "image": entry.get("image", []),
+                    "spotify": None,
+                    "lastfm": entry,
+                })
+                if len(results) >= similar_limit:
+                    break
+                continue
             async with sem_spotify:
-                sp_candidates = await _safe_timed(spotify_client.search_artists(name, limit=2), [], timeout_spotify)
+                sp_candidates = await safe_spotify(spotify_client.search_artists(name, limit=2), [])
+            if not spotify_available:
+                results.append({
+                    "name": name,
+                    "match": entry.get("match"),
+                    "url": entry.get("url"),
+                    "image": entry.get("image", []),
+                    "spotify": None,
+                    "lastfm": entry,
+                })
+                if len(results) >= similar_limit:
+                    break
+                continue
             sp_sorted = sorted(
                 sp_candidates,
                 key=lambda x: (x.get("followers", {}) or {}).get("total", 0),
@@ -559,20 +728,62 @@ async def search_artist_profile(
         return results
 
     tracks_task = asyncio.create_task(
-        _safe_timed(spotify_client.search_tracks(q, limit=5), [], timeout_spotify)
+        safe_spotify(spotify_client.search_tracks(q, limit=5), [])
     )
     main = await fetch_main()
-    main_name = main.get("spotify", {}).get("name") or q
+    spotify_main = (main or {}).get("spotify") or {}
+    if not spotify_main:
+        normalized = _normalize_name(q)
+        local_artist = (await session.exec(
+            select(Artist)
+            .where(
+                (Artist.name.ilike(f"%{q}%")) |
+                (Artist.normalized_name == normalized)
+            )
+            .order_by(desc(Artist.popularity))
+            .limit(1)
+        )).first()
+        if local_artist:
+            images = proxy_image_list(_parse_images_field(local_artist.images), size=512)
+            spotify_main = {
+                "id": local_artist.spotify_id,
+                "name": local_artist.name,
+                "images": images,
+                "followers": {"total": local_artist.followers or 0},
+                "popularity": local_artist.popularity or 0,
+                "genres": _parse_genres_field(local_artist.genres),
+            }
+            main["spotify"] = spotify_main
+    main_name = spotify_main.get("name") or q
+
     similars = await fetch_similars(main_name)
 
-    # Persist main artist and up to 5 similars in background
-    try:
-        main_spotify_id = main.get("spotify", {}).get("id") if isinstance(main, dict) else None
-        similar_ids = [s.get("spotify", {}).get("id") for s in similars if s.get("spotify")]
-        if main_spotify_id:
-            asyncio.create_task(save_artist_and_similars(main_spotify_id, similar_ids, limit=5))
-    except Exception:
-        pass
+    if spotify_available:
+        refresh_ids: list[str] = []
+        main_spotify_id = spotify_main.get("id") if isinstance(spotify_main, dict) else None
+        local_main = await get_local_artist(main_name)
+        if main_spotify_id and is_stale(local_main):
+            refresh_ids.append(main_spotify_id)
+
+        for entry in similars:
+            sp_id = (entry.get("spotify") or {}).get("id")
+            if not sp_id:
+                continue
+            local_match = (await session.exec(
+                select(Artist).where(Artist.spotify_id == sp_id)
+            )).first()
+            if not local_match:
+                local_match = await get_local_artist(entry.get("name") or (entry.get("spotify") or {}).get("name") or "")
+            if is_stale(local_match):
+                refresh_ids.append(sp_id)
+
+        if refresh_ids:
+            unique_ids = []
+            for sid in refresh_ids:
+                if sid and sid not in unique_ids:
+                    unique_ids.append(sid)
+            for sid in unique_ids[:6]:
+                asyncio.create_task(save_artist_discography(sid))
 
     tracks = _format_tracks(await tracks_task)
     payload = {

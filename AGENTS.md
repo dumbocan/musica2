@@ -52,6 +52,12 @@ Secrets stay in `.env`; never hard-code tokens or client secrets. Honor the auth
 - The route `GET /tracks/overview` is the canonical way to expose track/YouTube/cache status. Any frontend widget that needs link/file info should consume this endpoint instead of hitting `/youtube/track/...` en masa.
 - The Tracks page (`frontend/src/pages/TracksPage.tsx`) expects fields like `youtube_status`, `youtube_url`, and `local_file_exists`. When updating backend schemas, keep those keys stable or update the UI in the same change.
 - Album link counters should combine DB data (`YouTubeDownload` joins) with downloaded track IDs. Make sure new features keep that dual-source logic intact, especially when introducing migrations or cleanup scripts.
+- The Tracks page groups duplicates by `artist + track name` to avoid multiple rows; favorites should apply to the whole group and the UI picks the best version (local file > YouTube > favorite).
+
+## Discography UX (DB-first)
+- `/artists/{spotify_id}/albums?refresh=true` returns local DB data immediately and triggers a full Spotify refresh in the background to avoid timeouts blocking the UI.
+- `/albums/spotify/{id}` and `/albums/{id}/tracks` should be DB-first and only call Spotify when tracks are missing; avoid hard failures when Spotify is slow/offline.
+- The artist discography page separates **Albums**, **Singles**, and **Compilations** using `album_group`/`album_type` when present and falls back to track count heuristics when missing.
 
 ## Playback History & Charts
 - `POST /tracks/play/{track_id}` records plays in `PlayHistory`; UI counters should read from backend endpoints instead of local-only state.

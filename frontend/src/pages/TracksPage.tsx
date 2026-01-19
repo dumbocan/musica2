@@ -82,6 +82,15 @@ export function TracksPage() {
       .trim();
   const resolveTrackKey = useCallback((track: TrackOverview) =>
     track.spotify_track_id || String(track.track_id), []);
+  const groupKeyForTrack = useCallback(
+    (track: TrackOverview) => {
+      const name = normalizeSearchText(track.track_name || '');
+      const artist = normalizeSearchText(track.artist_name || '');
+      if (!name && !artist) return resolveTrackKey(track);
+      return `${artist}::${name}`;
+    },
+    [resolveTrackKey]
+  );
   const dedupeTracks = (items: TrackOverview[]) => {
     const seen = new Set<number>();
     return items.filter((track) => {
@@ -93,9 +102,98 @@ export function TracksPage() {
 
   const {
     favoriteIds: favoriteTrackIds,
-    toggleFavorite: toggleTrackFavorite,
+    setFavoriteIds: setFavoriteTrackIds,
     effectiveUserId: effectiveTrackUserId
   } = useFavorites('track', userId);
+
+  const { collapsedTracks, groupIds, groupFavorites } = useMemo(() => {
+    const groups = new Map<string, TrackOverview[]>();
+    const order: string[] = [];
+    for (const track of tracks) {
+      const key = groupKeyForTrack(track);
+      const existing = groups.get(key);
+      if (existing) {
+        existing.push(track);
+      } else {
+        groups.set(key, [track]);
+        order.push(key);
+      }
+    }
+
+    const idsMap = new Map<string, number[]>();
+    const favoriteMap = new Map<string, boolean>();
+    const selected: TrackOverview[] = [];
+
+    const scoreTrack = (track: TrackOverview) => {
+      let score = 0;
+      if (track.local_file_exists) score += 100;
+      if (track.youtube_video_id) score += 50;
+      if (favoriteTrackIds.has(track.track_id)) score += 25;
+      if (typeof track.popularity === 'number') score += track.popularity / 10;
+      if (track.album_name) score += 1;
+      return score;
+    };
+
+    for (const key of order) {
+      const group = groups.get(key) || [];
+      const ids = group.map((item) => item.track_id);
+      idsMap.set(key, ids);
+      const isFavorite = ids.some((id) => favoriteTrackIds.has(id));
+      favoriteMap.set(key, isFavorite);
+
+      let best = group[0];
+      let bestScore = best ? scoreTrack(best) : -1;
+      for (const candidate of group.slice(1)) {
+        const candidateScore = scoreTrack(candidate);
+        if (candidateScore > bestScore) {
+          best = candidate;
+          bestScore = candidateScore;
+        }
+      }
+      if (best) {
+        selected.push(best);
+      }
+    }
+
+    return { collapsedTracks: selected, groupIds: idsMap, groupFavorites: favoriteMap };
+  }, [tracks, favoriteTrackIds, groupKeyForTrack]);
+
+  const groupFavoriteCount = useMemo(() => {
+    let count = 0;
+    groupFavorites.forEach((value) => {
+      if (value) count += 1;
+    });
+    return count;
+  }, [groupFavorites]);
+
+  const toggleGroupFavorite = useCallback(
+    async (track: TrackOverview) => {
+      if (!effectiveTrackUserId) return;
+      const key = groupKeyForTrack(track);
+      const ids = groupIds.get(key) || [track.track_id];
+      const shouldRemove = ids.some((id) => favoriteTrackIds.has(id));
+      try {
+        if (shouldRemove) {
+          await Promise.all(ids.map((id) => audio2Api.removeFavorite('track', id, effectiveTrackUserId)));
+          setFavoriteTrackIds((prev) => {
+            const next = new Set(prev);
+            ids.forEach((id) => next.delete(id));
+            return next;
+          });
+        } else {
+          await Promise.all(ids.map((id) => audio2Api.addFavorite('track', id, effectiveTrackUserId)));
+          setFavoriteTrackIds((prev) => {
+            const next = new Set(prev);
+            ids.forEach((id) => next.add(id));
+            return next;
+          });
+        }
+      } catch (err) {
+        console.error('Failed to toggle favorite group', err);
+      }
+    },
+    [effectiveTrackUserId, favoriteTrackIds, groupIds, groupKeyForTrack, setFavoriteTrackIds]
+  );
 
   useEffect(() => {
     const activeSearch = search.trim();
@@ -223,26 +321,28 @@ export function TracksPage() {
         missingFile: summary.missing_file,
       };
     }
-    const total = tracks.length;
-    const withLink = tracks.filter((t) => !!t.youtube_video_id).length;
-    const withFile = tracks.filter((t) => t.local_file_exists).length;
+    const total = collapsedTracks.length;
+    const withLink = collapsedTracks.filter((t) => !!t.youtube_video_id).length;
+    const withFile = collapsedTracks.filter((t) => t.local_file_exists).length;
     const missingLink = total - withLink;
     const missingFile = total - withFile;
     return { total, withLink, withFile, missingLink, missingFile };
-  }, [tracks, summary]);
+  }, [collapsedTracks, summary]);
 
   const filteredTracks = useMemo(() => {
     const normalizedQuery = normalizeSearchText(search);
-    return tracks.filter((track) => {
+    return collapsedTracks.filter((track) => {
       const text = normalizeSearchText(`${track.track_name || ''} ${track.artist_name || ''} ${track.album_name || ''}`);
       const passesSearch = normalizedQuery.length === 0 || text.includes(normalizedQuery);
 
       const hasLink = !!track.youtube_video_id;
       const hasFile = track.local_file_exists;
+      const groupKey = groupKeyForTrack(track);
+      const isFavoriteGroup = groupFavorites.get(groupKey) ?? favoriteTrackIds.has(track.track_id);
 
       const passesFilter =
         filter === 'all' ||
-        (filter === 'favorites' && favoriteTrackIds.has(track.track_id)) ||
+        (filter === 'favorites' && isFavoriteGroup) ||
         (filter === 'withLink' && hasLink) ||
         (filter === 'noLink' && !hasLink) ||
         (filter === 'hasFile' && hasFile) ||
@@ -250,7 +350,7 @@ export function TracksPage() {
 
       return passesSearch && passesFilter;
     });
-  }, [tracks, search, filter, favoriteTrackIds]);
+  }, [collapsedTracks, search, filter, favoriteTrackIds, groupFavorites, groupKeyForTrack]);
   const buildQueueItems = useCallback(
     (override?: { trackKey: string; videoId: string }) =>
       filteredTracks
@@ -370,7 +470,7 @@ export function TracksPage() {
     if (!summary || isSearchActive) return filteredTracks.length;
     switch (filter) {
       case 'favorites':
-        return favoriteTrackIds.size;
+        return groupFavoriteCount;
       case 'withLink':
         return summary.with_link;
       case 'noLink':
@@ -380,9 +480,9 @@ export function TracksPage() {
       case 'missingFile':
         return summary.missing_file;
       default:
-        return summary.total;
+      return summary.total;
     }
-  }, [filter, filteredTracks.length, filteredTotal, isFilteredView, isSearchActive, summary, favoriteTrackIds.size]);
+  }, [filter, filteredTracks.length, filteredTotal, isFilteredView, isSearchActive, summary, groupFavoriteCount]);
   const prefetchTarget = useMemo(() => Math.max(80, Math.floor(limit * 0.8)), [limit]);
   const targetFilteredCount = useMemo(() => {
     if (!isFilteredView) return 0;
@@ -569,7 +669,7 @@ export function TracksPage() {
       <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
           <SummaryCard label="Total pistas" value={stats.total} />
-          <SummaryCard label="Favoritos" value={favoriteTrackIds.size} />
+          <SummaryCard label="Favoritos" value={groupFavoriteCount} />
             <SummaryCard label="Con link YouTube" value={stats.withLink} accent />
             <SummaryCard label="Con MP3 local" value={stats.withFile} accent />
             <SummaryCard label="Pendiente link" value={stats.missingLink} muted />
@@ -708,7 +808,8 @@ export function TracksPage() {
                   const trackKey = resolveTrackKey(track);
                   const linkLoading = linkState[trackKey]?.status === 'loading';
                   const canPlay = !linkLoading && (!!track.youtube_video_id || !!track.spotify_track_id);
-                  const isFavorite = favoriteTrackIds.has(track.track_id);
+                  const groupKey = groupKeyForTrack(track);
+                  const isFavorite = groupFavorites.get(groupKey) ?? favoriteTrackIds.has(track.track_id);
                   const chartBadge = track.chart_best_position
                     ? `#${track.chart_best_position}`
                     : null;
@@ -820,7 +921,7 @@ export function TracksPage() {
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'nowrap', overflow: 'hidden' }}>
                       <button
                         type="button"
-                        onClick={() => toggleTrackFavorite(track.track_id)}
+                        onClick={() => toggleGroupFavorite(track)}
                         className="badge"
                         style={{
                           textDecoration: 'none',

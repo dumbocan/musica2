@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { audio2Api } from '@/lib/api';
+import { audio2Api, API_BASE_URL } from '@/lib/api';
 import { useApiStore } from '@/store/useApiStore';
 import type { SpotifyArtist, SpotifyTrackLite, TrackChartStat } from '@/types/api';
 import { Music } from 'lucide-react';
@@ -11,7 +11,12 @@ type ArtistInfo = {
     summary?: string;
     stats?: { listeners?: string | number; playcount?: string | number };
     tags?: Array<{ name?: string }>;
+    image?: LastfmImage[];
+    images?: LastfmImage[];
   };
+  image?: LastfmImage[];
+  url?: string;
+  name?: string;
 };
 
 type LastfmImage = {
@@ -38,6 +43,11 @@ const formatChartDate = (value?: string | null) => {
   const [year, month, day] = parts;
   if (!day || !month || !year) return value;
   return `${day}-${month}-${year}`;
+};
+
+const resolveImageUrl = (url?: string) => {
+  if (!url) return '';
+  return url.startsWith('/') ? `${API_BASE_URL}${url}` : url;
 };
 
 export function SearchPage() {
@@ -273,13 +283,17 @@ export function SearchPage() {
             >
               {(() => {
                 const spImg = artistProfile.spotify?.images?.[0]?.url;
-                const lfmImgs = Array.isArray(artistProfile.lastfm?.image) ? artistProfile.lastfm?.image : [];
+                const lfmImgs = Array.isArray(artistProfile.lastfm?.image)
+                  ? artistProfile.lastfm?.image
+                  : Array.isArray(artistProfile.lastfm?.images)
+                    ? artistProfile.lastfm?.images
+                    : [];
                 const lfmPreferred =
                   lfmImgs.find((im: LastfmImage) => im?.size === 'extralarge') ||
                   lfmImgs.find((im: LastfmImage) => im?.size === 'large') ||
                   lfmImgs.find((im: LastfmImage) => im?.size === 'medium');
                 const lfmUrl = lfmPreferred?.['#text'];
-                const img = spImg || lfmUrl;
+                const img = resolveImageUrl(spImg || lfmUrl);
                 if (img) {
                   return (
                     <img
@@ -385,12 +399,18 @@ export function SearchPage() {
                     lfmImgList.find((im: LastfmImage) => im?.size === 'extralarge') ||
                     lfmImgList.find((im: LastfmImage) => im?.size === 'large') ||
                     lfmImgList.find((im: LastfmImage) => im?.size === 'medium');
-                  const img = spImg || lfmPreferred?.['#text'];
+                  const img = resolveImageUrl(spImg || lfmPreferred?.['#text']);
                   const spotifyId = a.spotify?.id;
                   const externalUrl = a.url || a.spotify?.external_urls?.spotify;
                   const handleClick = () => {
                     if (spotifyId) {
                       navigate(`/artists/discography/${spotifyId}`);
+                      return;
+                    }
+                    const fallbackName = a.name || a.spotify?.name;
+                    if (fallbackName) {
+                      performSearch(fallbackName);
+                      return;
                     } else if (externalUrl) {
                       window.open(externalUrl, '_blank');
                     }
@@ -491,7 +511,7 @@ export function SearchPage() {
                 >
                   {img?.['#text'] ? (
                     <img
-                      src={img['#text']}
+                      src={resolveImageUrl(img['#text'])}
                       alt={a.name}
                       loading="lazy"
                       style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 12, marginBottom: 8 }}
@@ -541,9 +561,9 @@ export function SearchPage() {
       {isLoading && (
         <div className="text-sm text-muted-foreground">Buscando...</div>
       )}
-      {trackResults.length > 0 && !artistProfile && (
+      {trackResults.length > 0 && (
         <div className="space-y-3">
-          <h3 className="text-xl font-semibold">Álbumes con esta canción</h3>
+          <h3 className="text-xl font-semibold">Canciones encontradas</h3>
           <div className="space-y-2">
             {Array.from(
               trackResults.reduce((map: Map<string, SpotifyTrackLite>, t: SpotifyTrackLite) => {
@@ -554,7 +574,7 @@ export function SearchPage() {
                 return map;
               }, new Map<string, SpotifyTrackLite>())
             ).map(([albumId, t], idx) => {
-              const albumImg = t.album?.images?.[0]?.url;
+              const albumImg = resolveImageUrl(t.album?.images?.[0]?.url);
               const artistNames = (t.artists || []).map((a: { name: string }) => a.name).join(', ');
               const chartStat = chartStatsBySpotifyId[t.id];
               const chartBadge = chartStat?.chart_best_position
