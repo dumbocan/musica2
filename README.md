@@ -61,6 +61,16 @@ Se ha realizado una revisión exhaustiva del código del frontend para mejorar l
 - **Álbumes DB-first**: `/albums/spotify/{id}` y `/albums/{id}/tracks` sirven desde BD si hay datos y solo consultan Spotify si faltan tracks; si Spotify falla no rompen la UI.
 - **Tracks sin duplicados visibles**: la vista de Tracks agrupa por `artista + nombre`, elige la mejor versión (archivo local > YouTube > favorito) y aplica favoritos al grupo completo.
 
+## ✅ Ajustes recientes (qué, cómo y por qué)
+
+- **Discografía completa (Spotify paginado)**: `app/core/spotify.py` ahora pagina todas las páginas (`fetch_all`) y deduplica álbumes por ID; se incluyen `album,single,compilation`. Esto evita que solo aparezcan sencillos o listas incompletas.
+- **Discografía DB-first y no bloqueante**: `GET /artists/{spotify_id}/albums` devuelve primero lo local y, si `refresh=true`, lanza el refresco completo en background. Así la UI no se queda en negro cuando Spotify tarda o falla.
+- **Separación profesional de discografía**: la vista de artista separa Álbumes / Sencillos / Compilaciones usando `album_group/album_type` o heurística por número de tracks (<=6 = single).
+- **Álbumes y tracks DB-first**: `/albums/spotify/{id}` y `/albums/{id}/tracks` sirven desde BD si existen; si faltan tracks, se consulta Spotify y se persisten. Si Spotify falla, no rompe la UI.
+- **Tracks sin duplicados**: la página Tracks agrupa por `artista + nombre`, muestra una sola fila y el favorito aplica al grupo completo. Esto evita casos tipo “Houdini” duplicado.
+- **Auth/CORS más robusto**: las respuestas de auth temprano incluyen headers CORS para evitar bloqueos del navegador.
+- **Búsqueda de artista resistente**: `/search/artist-profile` es DB-first y no crashea cuando Spotify falla; el frontend hace búsqueda interna si no hay `spotify_id`.
+
 ## 🎧 YouTube streaming, caché y descargas
 
 - **Job en background** (`app/core/youtube_prefetch.py`): al arrancar `uvicorn app.main:app --reload` se ejecuta `youtube_prefetch_loop()` que inspecciona la tabla `track` y va rellenando `YouTubeDownload` uno a uno. Usa `youtube_client.min_interval_seconds = 5` para no quemar cuota y, si recibe un `403/429`, entra en enfriamiento de 15 min. Vigila los avances con `tail -f uvicorn.log | grep youtube_prefetch`.
