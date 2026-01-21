@@ -57,7 +57,6 @@ class Artist(SQLModel, table=True):
     spotify_id: Optional[str] = Field(unique=True, default=None)  # Optional if from other source
     name: str = Field(max_length=200, index=True)
     normalized_name: str = Field(default="", index=True)  # For deduplication
-    is_hidden: bool = Field(default=False, index=True)
     genres: Optional[str] = None  # JSON list as string
     images: Optional[str] = None  # JSON list of image URLs
     popularity: int = Field(default=0)  # Spotify 0-100
@@ -193,6 +192,20 @@ class UserFavorite(SQLModel, table=True):
         UniqueConstraint("user_id", "target_type", "artist_id"),
         UniqueConstraint("user_id", "target_type", "album_id"),
         UniqueConstraint("user_id", "target_type", "track_id"),
+    )
+
+class UserHiddenArtist(SQLModel, table=True):
+    """Artists hidden by a user from their personal view."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", ondelete="CASCADE")
+    artist_id: int = Field(foreign_key="artist.id", ondelete="CASCADE")
+    created_at: datetime = Field(default_factory=utc_now)
+
+    user: User = Relationship()
+    artist: Artist = Relationship()
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "artist_id"),
     )
 
 

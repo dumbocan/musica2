@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from .models.base import (
     Artist, Album, Track, User, Playlist, PlaylistTrack, Tag, TrackTag,
     PlayHistory, AlgorithmLearning, UserFavorite, FavoriteTargetType,
-    SearchEntityType
+    UserHiddenArtist, SearchEntityType
 )
 from .core.db import get_session
 from .core.image_proxy import proxy_image_list
@@ -375,17 +375,27 @@ def list_favorites(user_id: int, target_type: Optional[FavoriteTargetType] = Non
         session.close()
 
 
-def hide_artist_for_user(user_id: int, artist_id: int) -> Artist:
+def hide_artist_for_user(user_id: int, artist_id: int) -> UserHiddenArtist:
     session = get_session()
     try:
+        hidden = session.exec(
+            select(UserHiddenArtist).where(
+                UserHiddenArtist.user_id == user_id,
+                UserHiddenArtist.artist_id == artist_id
+            )
+        ).first()
+        if hidden:
+            return hidden
+
         artist = session.get(Artist, artist_id)
         if not artist:
             raise ValueError("Artist not found")
-        artist.is_hidden = True
-        session.add(artist)
+
+        hidden = UserHiddenArtist(user_id=user_id, artist_id=artist_id)
+        session.add(hidden)
         session.commit()
-        session.refresh(artist)
-        return artist
+        session.refresh(hidden)
+        return hidden
     finally:
         session.close()
 
@@ -393,15 +403,20 @@ def hide_artist_for_user(user_id: int, artist_id: int) -> Artist:
 def unhide_artist_for_user(user_id: int, artist_id: int) -> bool:
     session = get_session()
     try:
-        artist = session.get(Artist, artist_id)
-        if not artist:
+        hidden = session.exec(
+            select(UserHiddenArtist).where(
+                UserHiddenArtist.user_id == user_id,
+                UserHiddenArtist.artist_id == artist_id
+            )
+        ).first()
+        if not hidden:
             return False
-        artist.is_hidden = False
-        session.add(artist)
+        session.delete(hidden)
         session.commit()
         return True
     finally:
         session.close()
+
 
 
 def update_album_spotify_data(album_id: int, spotify_data: dict):

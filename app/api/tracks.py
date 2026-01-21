@@ -23,6 +23,7 @@ from ..models.base import (
     Album,
     YouTubeDownload,
     UserFavorite,
+    UserHiddenArtist,
     TrackChartStats,
     ChartEntryRaw,
     TrackChartEntry,
@@ -49,6 +50,17 @@ _SPOTIFY_ID_RE = re.compile(r"^[A-Za-z0-9]{22}$")
 
 def _is_spotify_id(value: str) -> bool:
     return bool(_SPOTIFY_ID_RE.fullmatch(value))
+
+
+def _hidden_artist_exists(user_id: int | None):
+    if not user_id:
+        return None
+    return exists(
+        select(1).where(
+            (UserHiddenArtist.user_id == user_id)
+            & (UserHiddenArtist.artist_id == Artist.id)
+        )
+    )
 
 
 class TrackResolveRequest(BaseModel):
@@ -398,9 +410,11 @@ def get_tracks_overview(
         raise HTTPException(status_code=400, detail="Invalid filter value")
     search_term = normalize_search(search) if search else ""
     is_filtered_query = bool(filter or search_term)
+    user_id = getattr(request.state, "user_id", None) if request else None
+    hidden_exists = _hidden_artist_exists(user_id)
     if include_summary:
         with get_session() as session:
-            total, with_link, with_file = session.exec(
+            summary_query = (
                 select(
                     func.count(Track.id),
                     func.count(func.distinct(Track.id)).filter(
@@ -418,9 +432,11 @@ def get_tracks_overview(
                 )
                 .select_from(Track)
                 .join(Artist, Artist.id == Track.artist_id)
-                .where(Artist.is_hidden.is_(False))
                 .outerjoin(YouTubeDownload, YouTubeDownload.spotify_track_id == Track.spotify_id)
-            ).one()
+            )
+            if hidden_exists is not None:
+                summary_query = summary_query.where(~hidden_exists)
+            total, with_link, with_file = session.exec(summary_query).one()
         total = int(total or 0)
         with_link = int(with_link or 0)
         with_file = int(with_file or 0)
@@ -433,7 +449,6 @@ def get_tracks_overview(
         }
 
     if filter == "favorites" and not search_term and not include_summary:
-        user_id = getattr(request.state, "user_id", None)
         if not user_id:
             raise HTTPException(status_code=401, detail="User not authenticated")
         with get_session() as session:
@@ -443,9 +458,10 @@ def get_tracks_overview(
                 .join(Artist, Artist.id == Track.artist_id)
                 .outerjoin(Album, Album.id == Track.album_id)
                 .where(UserFavorite.user_id == user_id)
-                .where(Artist.is_hidden.is_(False))
                 .order_by(UserFavorite.created_at.desc(), Track.id.asc())
             )
+            if hidden_exists is not None:
+                base_query = base_query.where(~hidden_exists)
             if after_id is not None:
                 base_query = base_query.where(Track.id > after_id)
             else:
@@ -555,9 +571,10 @@ def get_tracks_overview(
             select(Track, Artist, Album)
             .join(Artist, Artist.id == Track.artist_id)
             .outerjoin(Album, Album.id == Track.album_id)
-            .where(Artist.is_hidden.is_(False))
             .order_by(Track.id.asc())
         )
+        if hidden_exists is not None:
+            base_query = base_query.where(~hidden_exists)
 
         if search_term:
             pattern = f"%{search_term}%"
@@ -617,8 +634,9 @@ def get_tracks_overview(
                 select(func.count(Track.id))
                 .join(Artist, Artist.id == Track.artist_id)
                 .outerjoin(Album, Album.id == Track.album_id)
-                .where(Artist.is_hidden.is_(False))
             )
+            if hidden_exists is not None:
+                count_query = count_query.where(~hidden_exists)
             if search_term:
                 pattern = f"%{search_term}%"
                 count_query = count_query.where(
@@ -772,19 +790,23 @@ def get_tracks_overview(
 
 @router.get("/recently-added")
 async def get_recently_added_tracks(
+    request: Request,
     limit: int = Query(10, ge=1, le=50, description="Number of tracks to return"),
     verify_files: bool = Query(False, description="Check file existence on disk"),
     session: AsyncSession = Depends(SessionDep),
 ) -> dict:
     """Return the most recently added tracks."""
+    user_id = getattr(request.state, "user_id", None) if request else None
+    hidden_exists = _hidden_artist_exists(user_id)
     statement = (
         select(Track, Artist, Album)
         .join(Artist, Artist.id == Track.artist_id)
         .outerjoin(Album, Album.id == Track.album_id)
-        .where(Artist.is_hidden.is_(False))
         .order_by(Track.created_at.desc(), Track.id.desc())
         .limit(limit)
     )
+    if hidden_exists is not None:
+        statement = statement.where(~hidden_exists)
     rows = (await session.exec(statement)).all()
     spotify_ids = [track.spotify_id for track, _, _ in rows if track.spotify_id]
     downloads = []
@@ -839,6 +861,7 @@ def get_most_played_tracks(
 ) -> dict:
     """Return most played tracks for the current user."""
     user_id = getattr(request.state, "user_id", None) or 1
+    hidden_exists = _hidden_artist_exists(user_id)
     with get_session() as session:
         rows = session.exec(
             select(
@@ -855,13 +878,15 @@ def get_most_played_tracks(
             return {"items": []}
 
         track_ids = [row[0] for row in rows]
-        track_rows = session.exec(
+        track_query = (
             select(Track, Artist, Album)
             .join(Artist, Artist.id == Track.artist_id)
             .outerjoin(Album, Album.id == Track.album_id)
             .where(Track.id.in_(track_ids))
-            .where(Artist.is_hidden.is_(False))
-        ).all()
+        )
+        if hidden_exists is not None:
+            track_query = track_query.where(~hidden_exists)
+        track_rows = session.exec(track_query).all()
 
         track_map = {track.id: (track, artist, album) for track, artist, album in track_rows}
         spotify_ids = [
@@ -926,17 +951,20 @@ def get_recent_play_history(
 ) -> dict:
     """Return most recent plays for the current user."""
     user_id = getattr(request.state, "user_id", None) or 1
+    hidden_exists = _hidden_artist_exists(user_id)
     with get_session() as session:
-        rows = session.exec(
+        history_query = (
             select(PlayHistory, Track, Artist, Album)
             .join(Track, Track.id == PlayHistory.track_id)
             .join(Artist, Artist.id == Track.artist_id)
             .outerjoin(Album, Album.id == Track.album_id)
             .where(PlayHistory.user_id == user_id)
-            .where(Artist.is_hidden.is_(False))
             .order_by(PlayHistory.played_at.desc(), PlayHistory.id.desc())
             .limit(limit)
-        ).all()
+        )
+        if hidden_exists is not None:
+            history_query = history_query.where(~hidden_exists)
+        rows = session.exec(history_query).all()
 
         if not rows:
             return {"items": []}
@@ -1399,6 +1427,17 @@ async def _hybrid_local_recommendations(
     candidate_artist_ids: set[int] = set(artist_ids)
 
     if user_id:
+        hidden_rows = (await session.exec(
+            select(UserHiddenArtist.artist_id)
+            .where(UserHiddenArtist.user_id == user_id)
+        )).all()
+        hidden_ids = {
+            row if isinstance(row, int) else row[0]
+            for row in hidden_rows
+            if row
+        }
+        candidate_artist_ids.difference_update(hidden_ids)
+
         fav_artist_rows = (await session.exec(
             select(UserFavorite.artist_id)
             .where(UserFavorite.user_id == user_id)
@@ -1436,6 +1475,7 @@ async def _hybrid_local_recommendations(
     if not candidate_artist_ids:
         return {"tracks": [], "artists": []}
 
+    hidden_exists = _hidden_artist_exists(user_id)
     played_subquery = None
     if user_id:
         played_subquery = select(PlayHistory.track_id).where(PlayHistory.user_id == user_id)
@@ -1445,9 +1485,10 @@ async def _hybrid_local_recommendations(
         .join(Artist, Track.artist_id == Artist.id)
         .outerjoin(Album, Track.album_id == Album.id)
         .where(Track.artist_id.in_(candidate_artist_ids))
-        .where(Artist.is_hidden.is_(False))
         .order_by(desc(Track.popularity), Track.id.asc())
     )
+    if hidden_exists is not None:
+        base_query = base_query.where(~hidden_exists)
     query = base_query
     if played_subquery is not None:
         query = query.where(~Track.id.in_(played_subquery))
@@ -1476,15 +1517,22 @@ async def _hybrid_local_recommendations(
 
 
 @router.get("/id/{track_id}")
-def get_track(track_id: int = Path(..., description="Local track ID")) -> Track:
+def get_track(
+    request: Request,
+    track_id: int = Path(..., description="Local track ID"),
+) -> Track:
     """Get single track by local ID."""
+    user_id = getattr(request.state, "user_id", None) if request else None
+    hidden_exists = _hidden_artist_exists(user_id)
     with get_session() as session:
-        track = session.exec(
+        track_query = (
             select(Track)
             .join(Artist, Artist.id == Track.artist_id)
             .where(Track.id == track_id)
-            .where(Artist.is_hidden.is_(False))
-        ).first()
+        )
+        if hidden_exists is not None:
+            track_query = track_query.where(~hidden_exists)
+        track = session.exec(track_query).first()
         if not track:
             raise HTTPException(status_code=404, detail="Track not found")
     return track

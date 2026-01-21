@@ -61,7 +61,6 @@ def create_db_and_tables() -> None:
     SQLModel.metadata.create_all(sync_engine)
     try:
         with sync_engine.begin() as conn:
-            conn.execute(text("ALTER TABLE artist ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN DEFAULT FALSE"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_playhistory_user_id ON playhistory (user_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_playhistory_user_track ON playhistory (user_id, track_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_playhistory_user_played_at ON playhistory (user_id, played_at DESC)"))
@@ -69,7 +68,8 @@ def create_db_and_tables() -> None:
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_userfavorite_user_track ON userfavorite (user_id, track_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_userfavorite_user_artist ON userfavorite (user_id, artist_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_userfavorite_user_target ON userfavorite (user_id, target_type)"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_artist_is_hidden ON artist (is_hidden)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_userhiddenartist_user_id ON userhiddenartist (user_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_userhiddenartist_user_artist ON userhiddenartist (user_id, artist_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_artist_popularity ON artist (popularity DESC, id ASC)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_artist_name_order ON artist (name ASC, id ASC)"))
     except Exception as exc:

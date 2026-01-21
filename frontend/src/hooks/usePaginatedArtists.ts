@@ -5,11 +5,12 @@ import type { Artist } from '@/types/api';
 interface Options {
   limit?: number;
   sortOption?: 'pop-desc' | 'pop-asc' | 'name-asc';
+  userId?: number | null;
 }
 
 type PaginatedArtistsResponse = Artist[] | { items: Artist[], total?: number };
 
-export function usePaginatedArtists({ limit = 200, sortOption = 'pop-desc' }: Options = {}) {
+export function usePaginatedArtists({ limit = 200, sortOption = 'pop-desc', userId }: Options = {}) {
   const [artists, setArtists] = useState<Artist[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -41,7 +42,12 @@ export function usePaginatedArtists({ limit = 200, sortOption = 'pop-desc' }: Op
       }
       setError('');
       try {
-        const res = await audio2Api.getAllArtists({ offset, limit, order: sortOption });
+        const res = await audio2Api.getAllArtists({
+          offset,
+          limit,
+          order: sortOption,
+          user_id: userId ?? undefined,
+        });
         const { items, total: totalCount } = normalizeResponse(res.data);
         const base = replace ? [] : artistsRef.current;
         const combined = replace ? items : [...base, ...items];
@@ -64,7 +70,7 @@ export function usePaginatedArtists({ limit = 200, sortOption = 'pop-desc' }: Op
         }
       }
     },
-    [limit, normalizeResponse, sortOption]
+    [limit, normalizeResponse, sortOption, userId]
   );
 
   const reload = useCallback(() => {

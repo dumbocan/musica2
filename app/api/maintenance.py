@@ -36,6 +36,7 @@ from ..models.base import (
     Track,
     PlaylistTrack,
     UserFavorite,
+    UserHiddenArtist,
     TrackTag,
     PlayHistory,
     TrackChartEntry,
@@ -606,6 +607,7 @@ def purge_artist(
         if album_ids:
             session.exec(delete(Album).where(Album.id.in_(album_ids)))
         if artist_ids:
+            session.exec(delete(UserHiddenArtist).where(UserHiddenArtist.artist_id.in_(artist_ids)))
             session.exec(delete(Artist).where(Artist.id.in_(artist_ids)))
 
         session.commit()

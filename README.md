@@ -206,8 +206,8 @@ PY
 | `/artists/save/{spotify_id}` | POST | Save artist to DB |
 | `/artists/{spotify_id}/full-discography` | POST | **Save complete discography** |
 | `/artists/refresh-missing` | POST | Backfill missing bio/genres/images (Spotify + Last.fm) |
-| `/artists/id/{artist_id}/hide?user_id=1` | POST | Hide artist globally (also hides albums/tracks) |
-| `/artists/id/{artist_id}/hide?user_id=1` | DELETE | Unhide artist globally |
+| `/artists/id/{artist_id}/hide?user_id=1` | POST | Hide artist for the user |
+| `/artists/id/{artist_id}/hide?user_id=1` | DELETE | Unhide artist for the user |
 
 ### 📀 **Albums**
 | Endpoint | Method | Description |

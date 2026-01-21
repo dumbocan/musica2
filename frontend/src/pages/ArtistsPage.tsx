@@ -68,7 +68,7 @@ export function ArtistsPage() {
     hasMore,
     loadMore,
     reload,
-  } = usePaginatedArtists({ limit: 200, sortOption: apiSortOption });
+  } = usePaginatedArtists({ limit: 200, sortOption: apiSortOption, userId });
   const { isArtistsLoading, userId } = useApiStore();
   const navigate = useNavigate();
   const loadMoreRef = useRef<HTMLDivElement | null>(null);

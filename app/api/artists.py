@@ -9,8 +9,8 @@ import ast
 from datetime import timedelta
 from typing import List
 
-from fastapi import APIRouter, Query, Path, HTTPException, BackgroundTasks, Depends
-from sqlalchemy import desc, asc, func
+from fastapi import APIRouter, Query, Path, HTTPException, BackgroundTasks, Depends, Request
+from sqlalchemy import desc, asc, func, exists
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select
 from sqlalchemy.orm import selectinload
@@ -24,7 +24,7 @@ from ..crud import (
     unhide_artist_for_user,
 )
 from ..core.db import get_session, SessionDep
-from ..models.base import Artist, Album, Track, YouTubeDownload
+from ..models.base import Artist, Album, Track, YouTubeDownload, UserHiddenArtist
 from ..core.lastfm import lastfm_client
 from ..core.genre_backfill import (
     derive_genres_from_artist_tags,
@@ -141,8 +141,6 @@ async def get_artist_albums(
     artist = (await session.exec(
         select(Artist).where(Artist.spotify_id == spotify_id)
     )).first()
-    if artist and artist.is_hidden:
-        return []
     albums: list[dict] = []
     local_count = 0
     if artist:
@@ -324,10 +322,6 @@ async def sync_artist_discography(
 @router.get("/{spotify_id}/full-discography")
 async def get_full_discography(spotify_id: str = Path(..., description="Spotify artist ID")):
     """Get complete discography from Spotify: artist + albums + tracks."""
-    with get_session() as session:
-        local_artist = session.exec(select(Artist).where(Artist.spotify_id == spotify_id)).first()
-        if local_artist and local_artist.is_hidden:
-            raise HTTPException(status_code=404, detail="Artist not found")
     # Get artist info
     artist_data = await spotify_client.get_artist(spotify_id)
     if not artist_data:
@@ -365,8 +359,6 @@ async def get_artist_info(
     local_artist = (await session.exec(
         select(Artist).where(Artist.spotify_id == spotify_id)
     )).first()
-    if local_artist and local_artist.is_hidden:
-        raise HTTPException(status_code=404, detail="Artist not found")
     spotify_data = None
     local_images = _parse_images_field(local_artist.images) if local_artist else []
     local_images_ok = has_valid_images(local_images)
@@ -565,11 +557,7 @@ def get_artist_discography(artist_id: int = Path(..., description="Local artist 
 def get_artist_by_spotify(spotify_id: str) -> Artist | None:
     """Get the locally stored artist by Spotify ID."""
     with get_session() as session:
-        artist = session.exec(
-            select(Artist)
-            .where(Artist.spotify_id == spotify_id)
-            .where(Artist.is_hidden.is_(False))
-        ).first()
+        artist = session.exec(select(Artist).where(Artist.spotify_id == spotify_id)).first()
         return artist
 
 
@@ -664,6 +652,7 @@ def _is_proxied_images(images: list) -> bool:
 
 @router.get("/")
 async def get_artists(
+    request: Request,
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=1000),
     order: str = Query(
@@ -672,6 +661,7 @@ async def get_artists(
         description="Ordering for returned artists"
     ),
     session: AsyncSession = Depends(SessionDep),
+    user_id: int | None = Query(None, ge=1, description="User ID for hidden artist filtering"),
 ) -> dict:
     """Get saved artists with pagination, ordering, and ensure cached images are proxied."""
     order_by_map = {
@@ -680,18 +670,22 @@ async def get_artists(
         "name-asc": [asc(Artist.name), asc(Artist.id)]
     }
     order_by_clause = order_by_map.get(order, order_by_map["pop-desc"])
-    total = (await session.exec(
-        select(func.count())
-        .select_from(Artist)
-        .where(Artist.is_hidden.is_(False))
-    )).one()
-    statement = (
-        select(Artist)
-        .where(Artist.is_hidden.is_(False))
-        .order_by(*order_by_clause)
-        .offset(offset)
-        .limit(limit)
-    )
+    effective_user_id = user_id or getattr(request.state, "user_id", None)
+    hidden_filter = None
+    if effective_user_id:
+        hidden_filter = ~exists(
+            select(1).where(
+                (UserHiddenArtist.user_id == effective_user_id)
+                & (UserHiddenArtist.artist_id == Artist.id)
+            )
+        )
+    total_query = select(func.count()).select_from(Artist)
+    if hidden_filter is not None:
+        total_query = total_query.where(hidden_filter)
+    total = (await session.exec(total_query)).one()
+    statement = select(Artist).order_by(*order_by_clause).offset(offset).limit(limit)
+    if hidden_filter is not None:
+        statement = statement.where(hidden_filter)
     artists = (await session.exec(statement)).all()
     response_items = []
     for artist in artists:
@@ -848,10 +842,10 @@ def hide_artist_for_user_endpoint(
     artist_id: int = Path(..., description="Local artist ID"),
     user_id: int = Query(..., ge=1, description="User ID"),
 ):
-    """Hide an artist globally."""
+    """Hide an artist for the specified user."""
     try:
-        artist = hide_artist_for_user(user_id, artist_id)
-        return {"message": "Artist hidden", "artist": artist.dict()}
+        hidden = hide_artist_for_user(user_id, artist_id)
+        return {"message": "Artist hidden", "hidden": hidden.dict()}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -861,7 +855,7 @@ def unhide_artist_for_user_endpoint(
     artist_id: int = Path(..., description="Local artist ID"),
     user_id: int = Query(..., ge=1, description="User ID"),
 ):
-    """Unhide an artist globally."""
+    """Remove user-specific hidden flag."""
     removed = unhide_artist_for_user(user_id, artist_id)
     if not removed:
         raise HTTPException(status_code=404, detail="Hidden artist entry not found")
@@ -872,11 +866,7 @@ def unhide_artist_for_user_endpoint(
 def get_artist(artist_id: int = Path(..., description="Local artist ID")) -> Artist:
     """Get single artist by local ID."""
     with get_session() as session:
-        artist = session.exec(
-            select(Artist)
-            .where(Artist.id == artist_id)
-            .where(Artist.is_hidden.is_(False))
-        ).first()
+        artist = session.exec(select(Artist).where(Artist.id == artist_id)).first()
         if not artist:
             raise HTTPException(status_code=404, detail="Artist not found")
     return artist

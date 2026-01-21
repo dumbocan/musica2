@@ -8,7 +8,7 @@ import logging
 import asyncio
 from typing import List
 
-from fastapi import APIRouter, Path, HTTPException
+from fastapi import APIRouter, Path, HTTPException, Request
 
 from ..core.spotify import spotify_client
 from ..core.config import settings
@@ -16,8 +16,9 @@ from ..core.lastfm import lastfm_client
 from ..core.image_proxy import proxy_image_list
 from ..crud import save_album, save_track, delete_album
 from ..core.db import get_session
-from ..models.base import Album, Artist, Track
+from ..models.base import Album, Artist, Track, UserHiddenArtist
 from sqlmodel import select
+from sqlalchemy import exists
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,17 @@ async def _safe_timed(label: str, coro, timeout: float, default):
     except Exception as exc:
         logger.warning("%s failed after %ss: %r", label, timeout, exc, exc_info=True)
         return default
+
+
+def _hidden_artist_exists(user_id: int | None):
+    if not user_id:
+        return None
+    return exists(
+        select(1).where(
+            (UserHiddenArtist.user_id == user_id)
+            & (UserHiddenArtist.artist_id == Artist.id)
+        )
+    )
 
 
 async def _backfill_album_tracks(spotify_id: str, album_id: int, artist_id: int) -> None:
@@ -51,15 +63,25 @@ async def _backfill_album_tracks(spotify_id: str, album_id: int, artist_id: int)
 
 
 @router.get("/spotify/{spotify_id}")
-async def get_album_from_spotify(spotify_id: str = Path(..., description="Spotify album ID")):
+async def get_album_from_spotify(
+    request: Request,
+    spotify_id: str = Path(..., description="Spotify album ID"),
+):
     """Get album details and tracks directly from Spotify."""
+    user_id = getattr(request.state, "user_id", None) if request else None
     album_payload = None
     with get_session() as session:
         local_album = session.exec(select(Album).where(Album.spotify_id == spotify_id)).first()
         if local_album:
             artist = session.exec(select(Artist).where(Artist.id == local_album.artist_id)).first()
-            if artist and artist.is_hidden:
-                raise HTTPException(status_code=404, detail="Album not found")
+            if artist and user_id:
+                hidden = session.exec(
+                    select(UserHiddenArtist)
+                    .where(UserHiddenArtist.user_id == user_id)
+                    .where(UserHiddenArtist.artist_id == artist.id)
+                ).first()
+                if hidden:
+                    raise HTTPException(status_code=404, detail="Album not found")
             tracks = session.exec(select(Track).where(Track.album_id == local_album.id)).all()
             album_payload = _album_from_local(local_album, artist, tracks)
             if tracks:
@@ -137,15 +159,25 @@ async def get_album_from_spotify(spotify_id: str = Path(..., description="Spotif
 
 
 @router.get("/{spotify_id}/tracks")
-async def get_album_tracks(spotify_id: str = Path(..., description="Spotify album ID")) -> List[dict]:
+async def get_album_tracks(
+    request: Request,
+    spotify_id: str = Path(..., description="Spotify album ID"),
+) -> List[dict]:
     """Get all tracks for an album via Spotify API."""
+    user_id = getattr(request.state, "user_id", None) if request else None
     local_album = None
     with get_session() as session:
         local_album = session.exec(select(Album).where(Album.spotify_id == spotify_id)).first()
         if local_album:
             artist = session.exec(select(Artist).where(Artist.id == local_album.artist_id)).first()
-            if artist and artist.is_hidden:
-                return []
+            if artist and user_id:
+                hidden = session.exec(
+                    select(UserHiddenArtist)
+                    .where(UserHiddenArtist.user_id == user_id)
+                    .where(UserHiddenArtist.artist_id == artist.id)
+                ).first()
+                if hidden:
+                    return []
             tracks = session.exec(select(Track).where(Track.album_id == local_album.id)).all()
             if tracks:
                 return [_track_from_local(track, artist) for track in tracks]
@@ -186,14 +218,15 @@ async def save_album_to_db(spotify_id: str = Path(..., description="Spotify albu
 
 
 @router.get("/")
-def get_albums() -> List[Album]:
+def get_albums(request: Request) -> List[Album]:
     """Get all saved albums from DB."""
+    user_id = getattr(request.state, "user_id", None) if request else None
+    hidden_exists = _hidden_artist_exists(user_id)
     with get_session() as session:
-        albums = session.exec(
-            select(Album)
-            .join(Artist, Album.artist_id == Artist.id)
-            .where(Artist.is_hidden.is_(False))
-        ).all()
+        query = select(Album).join(Artist, Album.artist_id == Artist.id)
+        if hidden_exists is not None:
+            query = query.where(~hidden_exists)
+        albums = session.exec(query).all()
     return albums
 
 
@@ -210,15 +243,22 @@ def delete_album_endpoint(album_id: int = Path(..., description="Local album ID"
 
 
 @router.get("/id/{album_id}")
-def get_album(album_id: int = Path(..., description="Local album ID")) -> Album:
+def get_album(
+    request: Request,
+    album_id: int = Path(..., description="Local album ID"),
+) -> Album:
     """Get single album by local ID."""
+    user_id = getattr(request.state, "user_id", None) if request else None
+    hidden_exists = _hidden_artist_exists(user_id)
     with get_session() as session:
-        album = session.exec(
+        query = (
             select(Album)
             .join(Artist, Album.artist_id == Artist.id)
             .where(Album.id == album_id)
-            .where(Artist.is_hidden.is_(False))
-        ).first()
+        )
+        if hidden_exists is not None:
+            query = query.where(~hidden_exists)
+        album = session.exec(query).first()
         if not album:
             raise HTTPException(status_code=404, detail="Album not found")
     return album
