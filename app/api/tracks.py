@@ -417,6 +417,8 @@ def get_tracks_overview(
                     ),
                 )
                 .select_from(Track)
+                .join(Artist, Artist.id == Track.artist_id)
+                .where(Artist.is_hidden.is_(False))
                 .outerjoin(YouTubeDownload, YouTubeDownload.spotify_track_id == Track.spotify_id)
             ).one()
         total = int(total or 0)
@@ -441,6 +443,7 @@ def get_tracks_overview(
                 .join(Artist, Artist.id == Track.artist_id)
                 .outerjoin(Album, Album.id == Track.album_id)
                 .where(UserFavorite.user_id == user_id)
+                .where(Artist.is_hidden.is_(False))
                 .order_by(UserFavorite.created_at.desc(), Track.id.asc())
             )
             if after_id is not None:
@@ -552,6 +555,7 @@ def get_tracks_overview(
             select(Track, Artist, Album)
             .join(Artist, Artist.id == Track.artist_id)
             .outerjoin(Album, Album.id == Track.album_id)
+            .where(Artist.is_hidden.is_(False))
             .order_by(Track.id.asc())
         )
 
@@ -609,7 +613,12 @@ def get_tracks_overview(
 
         filtered_total = None
         if is_filtered_query:
-            count_query = select(func.count(Track.id)).join(Artist, Artist.id == Track.artist_id).outerjoin(Album, Album.id == Track.album_id)
+            count_query = (
+                select(func.count(Track.id))
+                .join(Artist, Artist.id == Track.artist_id)
+                .outerjoin(Album, Album.id == Track.album_id)
+                .where(Artist.is_hidden.is_(False))
+            )
             if search_term:
                 pattern = f"%{search_term}%"
                 count_query = count_query.where(
@@ -772,6 +781,7 @@ async def get_recently_added_tracks(
         select(Track, Artist, Album)
         .join(Artist, Artist.id == Track.artist_id)
         .outerjoin(Album, Album.id == Track.album_id)
+        .where(Artist.is_hidden.is_(False))
         .order_by(Track.created_at.desc(), Track.id.desc())
         .limit(limit)
     )
@@ -850,6 +860,7 @@ def get_most_played_tracks(
             .join(Artist, Artist.id == Track.artist_id)
             .outerjoin(Album, Album.id == Track.album_id)
             .where(Track.id.in_(track_ids))
+            .where(Artist.is_hidden.is_(False))
         ).all()
 
         track_map = {track.id: (track, artist, album) for track, artist, album in track_rows}
@@ -922,6 +933,7 @@ def get_recent_play_history(
             .join(Artist, Artist.id == Track.artist_id)
             .outerjoin(Album, Album.id == Track.album_id)
             .where(PlayHistory.user_id == user_id)
+            .where(Artist.is_hidden.is_(False))
             .order_by(PlayHistory.played_at.desc(), PlayHistory.id.desc())
             .limit(limit)
         ).all()
@@ -996,6 +1008,23 @@ async def get_track_recommendations(
         return {"tracks": local_tracks[:limit], "artists": []}
     spotify_track_ids = [track_id for track_id in track_ids if _is_spotify_id(track_id)]
     spotify_artist_ids = [artist_id for artist_id in artist_ids if _is_spotify_id(artist_id)]
+    if not spotify_track_ids and not spotify_artist_ids:
+        local_track_ids = [int(track_id) for track_id in track_ids if track_id.isdigit()]
+        local_artist_ids = [int(artist_id) for artist_id in artist_ids if artist_id.isdigit()]
+        if local_track_ids:
+            track_rows = (await session.exec(
+                select(Track.spotify_id)
+                .where(Track.id.in_(local_track_ids))
+                .where(Track.spotify_id.is_not(None))
+            )).all()
+            spotify_track_ids = [row for row in track_rows if row]
+        if local_artist_ids:
+            artist_rows = (await session.exec(
+                select(Artist.spotify_id)
+                .where(Artist.id.in_(local_artist_ids))
+                .where(Artist.spotify_id.is_not(None))
+            )).all()
+            spotify_artist_ids = [row for row in artist_rows if row]
     if mode == "local" or not settings.SPOTIFY_CLIENT_ID or not settings.SPOTIFY_CLIENT_SECRET:
         return local_payload
     if not spotify_track_ids and not spotify_artist_ids:
@@ -1416,6 +1445,7 @@ async def _hybrid_local_recommendations(
         .join(Artist, Track.artist_id == Artist.id)
         .outerjoin(Album, Track.album_id == Album.id)
         .where(Track.artist_id.in_(candidate_artist_ids))
+        .where(Artist.is_hidden.is_(False))
         .order_by(desc(Track.popularity), Track.id.asc())
     )
     query = base_query
@@ -1449,7 +1479,12 @@ async def _hybrid_local_recommendations(
 def get_track(track_id: int = Path(..., description="Local track ID")) -> Track:
     """Get single track by local ID."""
     with get_session() as session:
-        track = session.exec(select(Track).where(Track.id == track_id)).first()
+        track = session.exec(
+            select(Track)
+            .join(Artist, Artist.id == Track.artist_id)
+            .where(Track.id == track_id)
+            .where(Artist.is_hidden.is_(False))
+        ).first()
         if not track:
             raise HTTPException(status_code=404, detail="Track not found")
     return track

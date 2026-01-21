@@ -36,7 +36,6 @@ from ..models.base import (
     Track,
     PlaylistTrack,
     UserFavorite,
-    UserHiddenArtist,
     TrackTag,
     PlayHistory,
     TrackChartEntry,
@@ -582,9 +581,6 @@ def purge_artist(
                 fav_conditions.append(UserFavorite.track_id.in_(track_ids))
             if fav_conditions:
                 session.exec(delete(UserFavorite).where(or_(*fav_conditions)))
-
-        if artist_ids:
-            session.exec(delete(UserHiddenArtist).where(UserHiddenArtist.artist_id.in_(artist_ids)))
 
         if spotify_artist_ids or track_spotify_ids:
             dl_conditions = []

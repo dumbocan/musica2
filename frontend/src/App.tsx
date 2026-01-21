@@ -1,8 +1,6 @@
 import { BrowserRouter as Router, Navigate, Routes, Route, useLocation, useNavigate, Link } from 'react-router-dom';
 import { Sidebar } from '@/components/layout/Sidebar';
-import { YoutubeRequestCounter } from '@/components/YoutubeRequestCounter';
 import { PlayerFooter } from '@/components/PlayerFooter';
-import { audio2Api } from '@/lib/api';
 import { useApiStore } from '@/store/useApiStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import { LogOut, User, ChevronDown, Search, Menu, Home, Music, ListMusic } from 'lucide-react';
@@ -67,7 +65,6 @@ const getTokenExpiryMs = (token: string): number | null => {
 
 function AppShell() {
   const { setSidebarOpen, isAuthenticated, searchQuery, setSearchQuery, setSearchTrigger } = useApiStore();
-  const setServiceStatus = useApiStore((s) => s.setServiceStatus);
   const token = useApiStore((s) => s.token);
   const logout = useApiStore((s) => s.logout);
   const playbackMode = usePlayerStore((s) => s.playbackMode);
@@ -104,27 +101,6 @@ function AppShell() {
     const timeout = setTimeout(() => logout(), remainingMs);
     return () => clearTimeout(timeout);
   }, [logout, token]);
-
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    let cancelled = false;
-    const timer = window.setTimeout(async () => {
-      try {
-        const res = await audio2Api.healthDetailed?.();
-        if (!cancelled) {
-          setServiceStatus(res?.data?.services ?? null);
-        }
-      } catch {
-        if (!cancelled) {
-          setServiceStatus((prev) => prev ?? null);
-        }
-      }
-    }, 8000);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [isAuthenticated, setServiceStatus]);
 
   const openMenu = () => {
     if (closeMenuTimeout.current) clearTimeout(closeMenuTimeout.current);
@@ -358,7 +334,6 @@ function AppShell() {
         </nav>
       </div>
 
-      <YoutubeRequestCounter />
       <PlayerFooter />
     </div>
   );

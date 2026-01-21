@@ -206,9 +206,8 @@ PY
 | `/artists/save/{spotify_id}` | POST | Save artist to DB |
 | `/artists/{spotify_id}/full-discography` | POST | **Save complete discography** |
 | `/artists/refresh-missing` | POST | Backfill missing bio/genres/images (Spotify + Last.fm) |
-| `/artists/hidden?user_id=1` | GET | List artists hidden by the user |
-| `/artists/id/{artist_id}/hide?user_id=1` | POST | Hide artist from the user's library |
-| `/artists/id/{artist_id}/hide?user_id=1` | DELETE | Unhide artist for the user |
+| `/artists/id/{artist_id}/hide?user_id=1` | POST | Hide artist globally (also hides albums/tracks) |
+| `/artists/id/{artist_id}/hide?user_id=1` | DELETE | Unhide artist globally |
 
 ### 📀 **Albums**
 | Endpoint | Method | Description |
@@ -470,6 +469,16 @@ Current Status
 **🎉 PROJECT 100% COMPLETE AND PRODUCTION READY!**
 
 ## 🚀 **Roadmap - Future Enhancements**
+
+### **Phase 1: DB-first Search Professionalization**
+- **Goal**: Resolve searches locally first (artists, albums, tracks), even offline, and only enrich via external APIs when needed.
+- **Work plan**:
+  - **Alias & variants**: store per-artist/album/track alias strings (typos, transliterations, punctuation variants).
+  - **Local search index**: tokenize names + aliases, add popularity/favorites/last_played signals, and rank results deterministically.
+  - **DB-first flow**: try local search with fuzzy + normalized matching, return suggestions immediately, and mark missing data for background enrichment.
+  - **Background enrichment**: if confidence is low, fetch external data asynchronously and persist; never block UI when offline.
+  - **Consistency**: keep album covers, bios, and chart stats read from DB; refresh on a schedule, not during search.
+- **Planned commit**: `feat: professionalize db-first search resolution`
 
 ### **Phase 2: Advanced Recommendations**
 - [ ] **🎯 Smart Artist Discovery Algorithm** - Implement vector embeddings for better artist similarity

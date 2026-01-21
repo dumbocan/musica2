@@ -48,6 +48,16 @@ Secrets stay in `.env`; never hard-code tokens or client secrets. Honor the auth
 - Prefer local playback for `/youtube/stream` by checking `download_path` (mp3/m4a) before hitting YouTube.
 - Add per-user hide/delete for albums and tracks (non-destructive, data remains for other users).
 
+## DB-first Search Plan (Professionalization)
+- Goal: resolve search locally for artists/albums/tracks (even offline), then enrich in background only if needed.
+- Steps:
+  - Add alias storage for artist/album/track names (typos, transliterations, punctuation variants).
+  - Build a local search index with normalized tokens + ranking signals (popularity, favorites, last played).
+  - Implement DB-first search flow: local match + suggestions → return immediately; low-confidence results trigger async enrichment.
+  - Ensure the UI never blocks on external APIs; all external calls are best-effort and persisted.
+  - Keep album covers, bios, and chart stats DB-sourced; refresh on schedule rather than during search.
+- Planned commit: `feat: professionalize db-first search resolution`
+
 ## Tracks Overview Workflow
 - The route `GET /tracks/overview` is the canonical way to expose track/YouTube/cache status. Any frontend widget that needs link/file info should consume this endpoint instead of hitting `/youtube/track/...` en masa.
 - The Tracks page (`frontend/src/pages/TracksPage.tsx`) expects fields like `youtube_status`, `youtube_url`, and `local_file_exists`. When updating backend schemas, keep those keys stable or update the UI in the same change.

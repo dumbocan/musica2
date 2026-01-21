@@ -11,20 +11,36 @@ Key Features:
 import asyncio
 import json
 import logging
+import ast
 from typing import Dict, List
 from datetime import timedelta
 from sqlmodel import select
+from sqlalchemy import func
 
 from .spotify import spotify_client
 from .lastfm import lastfm_client
 from .genre_backfill import extract_genres_from_lastfm_tags
-from .image_proxy import proxy_image_list
+from .image_proxy import proxy_image_list, has_valid_images
 from .time_utils import utc_now
 from .db import get_session
 from ..models.base import Artist, Album, Track, YouTubeDownload
 from ..crud import save_artist, save_album, save_track
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_images_field(raw) -> list:
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return raw
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        try:
+            return ast.literal_eval(raw)
+        except (ValueError, SyntaxError):
+            return []
 
 
 class DataFreshnessManager:
@@ -53,6 +69,9 @@ class DataFreshnessManager:
         """
         if not artist.updated_at:
             return True  # Legacy data needs update
+        images = _parse_images_field(artist.images)
+        if not has_valid_images(images):
+            return True
 
         age_hours = (utc_now() - artist.updated_at).total_seconds() / 3600
         return age_hours > (self.artist_update_interval_hours)
@@ -407,64 +426,82 @@ class DataFreshnessManager:
                 album_id = album_data['id']
                 album_name = album_data['name']
 
-                # Check if album exists, if not save it
-                session = get_session()
-                try:
+                existing_album = None
+                local_track_count = 0
+                with get_session() as session:
                     existing_album = session.exec(
                         select(Album).where(Album.spotify_id == album_id)
                     ).first()
+                    if existing_album:
+                        count_row = session.exec(
+                            select(func.count(Track.id)).where(Track.album_id == existing_album.id)
+                        ).one() or 0
+                        if isinstance(count_row, tuple):
+                            count_value = count_row[0]
+                        else:
+                            count_value = count_row
+                        local_track_count = int(count_value or 0)
 
-                    if not existing_album:
-                        saved_album = save_album(album_data)
+                target_album = existing_album
+                if not target_album:
+                    target_album = save_album(album_data)
+                    if target_album:
                         logger.info(f"💾 Saved album: {album_name} by {main_artist_name}")
                         total_albums_processed += 1
 
-                        # Process all tracks in this album
-                        try:
-                            album_tracks = await spotify_client.get_album_tracks(album_id)
-                            logger.info(f"🎵 Album {album_name} has {len(album_tracks)} tracks")
+                if not target_album:
+                    continue
 
-                            for track_data in album_tracks:
-                                track_id = track_data['id']
+                # Process tracks for this album; use Spotify when needed
+                should_fetch_tracks = include_youtube_links
+                if not include_youtube_links:
+                    total_tracks = target_album.total_tracks or 0
+                    should_fetch_tracks = local_track_count == 0 or (total_tracks and local_track_count < total_tracks)
 
-                                # Check if track exists
-                                existing_track = session.exec(
-                                    select(Track).where(Track.spotify_id == track_id)
-                                ).first()
+                if not should_fetch_tracks:
+                    continue
 
-                                if not existing_track:
-                                    if include_youtube_links:
-                                        # Save track and search YouTube link
-                                        await self.save_track_with_youtube_link(
-                                            track_data,
-                                            saved_album.id,
-                                            saved_album.artist_id
-                                        )
-                                        total_youtube_links_found += 1  # Assume we find most
-                                    else:
-                                        save_track(track_data, saved_album.id, saved_album.artist_id)
-                                    total_tracks_processed += 1
-                                else:
-                                    logger.info(f"⏭️  Track {track_data['name']} already exists")
+                try:
+                    album_tracks = await spotify_client.get_album_tracks(album_id)
+                    logger.info(f"🎵 Album {album_name} has {len(album_tracks)} tracks")
+                    for track_data in album_tracks:
+                        if include_youtube_links:
+                            # Save/update track and search YouTube link if missing
+                            await self.save_track_with_youtube_link(
+                                track_data,
+                                target_album.id,
+                                target_album.artist_id
+                            )
+                            total_youtube_links_found += 1
+                            total_tracks_processed += 1
+                            continue
 
-                        except Exception as album_error:
-                            logger.warning(f"Could not process tracks for album {album_name}: {album_error}")
-                    else:
-                        logger.info(f"⏭️  Album {album_name} already exists")
-
-                finally:
-                    session.close()
+                        track_id = track_data['id']
+                        with get_session() as session:
+                            existing_track = session.exec(
+                                select(Track).where(Track.spotify_id == track_id)
+                            ).first()
+                        if not existing_track:
+                            save_track(track_data, target_album.id, target_album.artist_id)
+                            total_tracks_processed += 1
+                        else:
+                            logger.info(f"⏭️  Track {track_data['name']} already exists")
+                except Exception as album_error:
+                    logger.warning(f"Could not process tracks for album {album_name}: {album_error}")
 
         except Exception as e:
             logger.error(f"Error getting albums for {main_artist_name}: {e}")
 
         # 2. GET SIMILAR ARTISTS
-        try:
-            similar_artists = await lastfm_client.get_similar_artists(main_artist_name, limit=similar_count)
-            logger.info(f"🎸 Found {len(similar_artists)} similar artists from Last.fm")
-        except Exception as e:
-            logger.warning(f"Could not get similar artists from Last.fm: {e}")
+        if similar_count <= 0:
             similar_artists = []
+        else:
+            try:
+                similar_artists = await lastfm_client.get_similar_artists(main_artist_name, limit=similar_count)
+                logger.info(f"🎸 Found {len(similar_artists)} similar artists from Last.fm")
+            except Exception as e:
+                logger.warning(f"Could not get similar artists from Last.fm: {e}")
+                similar_artists = []
 
         # 3. PROCESS EACH SIMILAR ARTIST - COMPLETE DISCOGRAPHY
         for similar_artist in similar_artists[:similar_count]:

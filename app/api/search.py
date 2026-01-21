@@ -7,12 +7,13 @@ import json
 import logging
 import time
 import ast
+import difflib
 from datetime import timedelta
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, Request
 from sqlmodel import select, and_
-from sqlalchemy import desc, or_
+from sqlalchemy import desc, or_, func
 
 from ..core.config import settings
 from ..core.db import get_session, SessionDep
@@ -20,9 +21,10 @@ from ..core.image_proxy import proxy_image_list
 from ..core.lastfm import lastfm_client
 from ..core.spotify import spotify_client
 from ..core.time_utils import utc_now
-from ..models.base import Artist, Album, Track, Tag, TrackTag
-from ..services.library_expansion import save_artist_discography
+from ..models.base import Artist, Album, Track, Tag, TrackTag, SearchAlias, SearchEntityType, UserFavorite
+from ..services.library_expansion import save_artist_discography, schedule_artist_expansion
 from ..crud import normalize_name
+from ..core.search_index import normalize_search_text
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 router = APIRouter(prefix="/search", tags=["search"])
@@ -105,6 +107,376 @@ def _parse_genres_field(raw) -> list:
         return [g.strip() for g in raw.split(",") if g.strip()]
     return []
 
+
+def _track_to_spotify_lite(track: Track, artist: Artist | None, album: Album | None) -> dict:
+    album_payload = None
+    if album:
+        album_payload = {
+            "id": album.spotify_id or str(album.id),
+            "name": album.name,
+            "images": proxy_image_list(_parse_images_field(album.images), size=384),
+        }
+    artists_payload = []
+    if artist:
+        artists_payload.append({
+            "id": artist.spotify_id or str(artist.id),
+            "name": artist.name,
+        })
+    payload = {
+        "id": track.spotify_id or str(track.id),
+        "name": track.name,
+        "duration_ms": track.duration_ms,
+        "popularity": track.popularity,
+        "preview_url": track.preview_url,
+        "artists": artists_payload,
+    }
+    if track.external_url:
+        payload["external_urls"] = {"spotify": track.external_url}
+    if album_payload:
+        payload["album"] = album_payload
+    return payload
+
+
+def _query_tokens(value: str) -> list[str]:
+    normalized = normalize_search_text(value)
+    return [token for token in normalized.split() if token]
+
+
+def _track_title_matches(query: str, title: str) -> bool:
+    if not query or not title:
+        return False
+    q_tokens = _query_tokens(query)
+    if not q_tokens:
+        return False
+    title_norm = normalize_search_text(title)
+    return all(token in title_norm for token in q_tokens)
+
+
+async def _favorite_ids(session: AsyncSession, entity_type: SearchEntityType, user_id: int | None) -> set[int]:
+    if not user_id:
+        return set()
+    if entity_type == SearchEntityType.ARTIST:
+        column = UserFavorite.artist_id
+    elif entity_type == SearchEntityType.ALBUM:
+        column = UserFavorite.album_id
+    else:
+        column = UserFavorite.track_id
+    rows = (await session.exec(
+        select(column)
+        .where(UserFavorite.user_id == user_id)
+        .where(column.is_not(None))
+    )).all()
+    return {row for row in rows if row is not None}
+
+
+def _merge_scores(primary: dict[int, float], secondary: dict[int, float]) -> dict[int, float]:
+    merged = dict(primary)
+    for key, score in secondary.items():
+        merged[key] = max(merged.get(key, 0.0), score)
+    return merged
+
+
+def _apply_boosts(
+    entities: list,
+    scores: dict[int, float],
+    favorite_ids: set[int],
+    popularity_attr: str | None = None,
+) -> list[tuple]:
+    scored = []
+    for entity in entities:
+        base = scores.get(entity.id, 0.0)
+        if entity.id in favorite_ids:
+            base += 0.2
+        if popularity_attr:
+            popularity = getattr(entity, popularity_attr, 0) or 0
+            base += (popularity / 100.0) * 0.1
+        scored.append((entity, base))
+    scored.sort(key=lambda item: item[1], reverse=True)
+    return scored
+
+
+async def _alias_score_map(
+    session: AsyncSession,
+    entity_type: SearchEntityType,
+    normalized_query: str,
+    limit: int,
+    min_similarity: float,
+) -> dict[int, float]:
+    if not normalized_query:
+        return {}
+    similarity = func.similarity(SearchAlias.normalized_alias, normalized_query)
+    trgm_match = SearchAlias.normalized_alias.op("%")(normalized_query)
+    score = func.max(similarity)
+    stmt = (
+        select(SearchAlias.entity_id, score.label("score"))
+        .where(SearchAlias.entity_type == entity_type)
+        .where(trgm_match)
+        .group_by(SearchAlias.entity_id)
+        .having(score >= min_similarity)
+        .order_by(desc("score"))
+        .limit(limit)
+    )
+    try:
+        rows = (await session.exec(stmt)).all()
+        return {row[0]: float(row[1] or 0.0) for row in rows}
+    except Exception as exc:
+        logger.warning("[db_search] alias similarity failed: %s", exc)
+        try:
+            fallback = (
+                select(SearchAlias.entity_id)
+                .where(SearchAlias.entity_type == entity_type)
+                .where(SearchAlias.normalized_alias.ilike(f"%{normalized_query}%"))
+                .limit(limit)
+            )
+            rows = (await session.exec(fallback)).all()
+            return {row: 0.2 for row in rows}
+        except Exception as fallback_exc:
+            logger.warning("[db_search] alias fallback failed: %s", fallback_exc)
+            return {}
+
+
+async def _artist_name_scores(
+    session: AsyncSession,
+    query: str,
+    limit: int,
+    min_similarity: float,
+) -> dict[int, float]:
+    query_lower = (query or "").lower().strip()
+    if not query_lower:
+        return {}
+    similarity = func.similarity(func.lower(Artist.name), query_lower)
+    trgm_match = func.lower(Artist.name).op("%")(query_lower)
+    stmt = (
+        select(Artist.id, similarity.label("score"))
+        .where(or_(Artist.name.ilike(f"%{query_lower}%"), trgm_match, similarity >= min_similarity))
+        .order_by(desc("score"))
+        .limit(limit)
+    )
+    try:
+        rows = (await session.exec(stmt)).all()
+        return {row[0]: float(row[1] or 0.0) for row in rows}
+    except Exception as exc:
+        logger.warning("[db_search] artist similarity failed: %s", exc)
+        fallback = (
+            select(Artist.id)
+            .where(Artist.name.ilike(f"%{query_lower}%"))
+            .limit(limit)
+        )
+        rows = (await session.exec(fallback)).all()
+        return {row: 0.2 for row in rows}
+
+
+async def _album_name_scores(
+    session: AsyncSession,
+    query: str,
+    limit: int,
+    min_similarity: float,
+) -> dict[int, float]:
+    query_lower = (query or "").lower().strip()
+    if not query_lower:
+        return {}
+    album_similarity = func.similarity(func.lower(Album.name), query_lower)
+    artist_similarity = func.similarity(func.lower(Artist.name), query_lower)
+    album_trgm = func.lower(Album.name).op("%")(query_lower)
+    artist_trgm = func.lower(Artist.name).op("%")(query_lower)
+    score = func.greatest(album_similarity, artist_similarity)
+    stmt = (
+        select(Album.id, score.label("score"))
+        .join(Artist, Album.artist_id == Artist.id)
+        .where(or_(
+            Album.name.ilike(f"%{query_lower}%"),
+            Artist.name.ilike(f"%{query_lower}%"),
+            album_trgm,
+            artist_trgm,
+            score >= min_similarity,
+        ))
+        .order_by(desc("score"))
+        .limit(limit)
+    )
+    try:
+        rows = (await session.exec(stmt)).all()
+        return {row[0]: float(row[1] or 0.0) for row in rows}
+    except Exception as exc:
+        logger.warning("[db_search] album similarity failed: %s", exc)
+        fallback = (
+            select(Album.id)
+            .where(Album.name.ilike(f"%{query_lower}%"))
+            .limit(limit)
+        )
+        rows = (await session.exec(fallback)).all()
+        return {row: 0.2 for row in rows}
+
+
+async def _track_name_scores(
+    session: AsyncSession,
+    query: str,
+    limit: int,
+    min_similarity: float,
+) -> dict[int, float]:
+    query_lower = (query or "").lower().strip()
+    if not query_lower:
+        return {}
+    track_similarity = func.similarity(func.lower(Track.name), query_lower)
+    track_trgm = func.lower(Track.name).op("%")(query_lower)
+    score = track_similarity
+    stmt = (
+        select(Track.id, score.label("score"))
+        .where(or_(
+            Track.name.ilike(f"%{query_lower}%"),
+            track_trgm,
+            score >= min_similarity,
+        ))
+        .order_by(desc("score"))
+        .limit(limit)
+    )
+    try:
+        rows = (await session.exec(stmt)).all()
+        return {row[0]: float(row[1] or 0.0) for row in rows}
+    except Exception as exc:
+        logger.warning("[db_search] track similarity failed: %s", exc)
+        fallback = (
+            select(Track.id)
+            .where(Track.name.ilike(f"%{query_lower}%"))
+            .limit(limit)
+        )
+        rows = (await session.exec(fallback)).all()
+        return {row: 0.2 for row in rows}
+
+
+async def _search_local_artists(
+    session: AsyncSession,
+    query: str,
+    limit: int,
+    user_id: int | None = None,
+    genre_keys: list[str] | None = None,
+) -> list[tuple[Artist, float]]:
+    normalized_query = normalize_search_text(query)
+    candidate_limit = max(limit * 4, 30)
+    scores = await _alias_score_map(
+        session,
+        SearchEntityType.ARTIST,
+        normalized_query,
+        candidate_limit,
+        min_similarity=0.3,
+    )
+    if not scores:
+        name_scores = await _artist_name_scores(session, query, candidate_limit, min_similarity=0.25)
+        scores = _merge_scores(scores, name_scores)
+
+    if genre_keys:
+        genre_filters = [Artist.genres.ilike(f"%{key}%") for key in genre_keys]
+        if genre_filters:
+            genre_rows = (await session.exec(
+                select(Artist.id)
+                .where(or_(*genre_filters))
+                .limit(candidate_limit)
+            )).all()
+            for artist_id in genre_rows:
+                scores[artist_id] = max(scores.get(artist_id, 0.0), 0.25)
+
+    if not scores:
+        return []
+    artists = (await session.exec(
+        select(Artist).where(Artist.id.in_(scores.keys()))
+    )).all()
+    favorite_ids = await _favorite_ids(session, SearchEntityType.ARTIST, user_id)
+    return _apply_boosts(artists, scores, favorite_ids, popularity_attr="popularity")
+
+
+async def _search_local_albums(
+    session: AsyncSession,
+    query: str,
+    limit: int,
+    user_id: int | None = None,
+) -> list[tuple[Album, float]]:
+    normalized_query = normalize_search_text(query)
+    candidate_limit = max(limit * 4, 30)
+    scores = await _alias_score_map(
+        session,
+        SearchEntityType.ALBUM,
+        normalized_query,
+        candidate_limit,
+        min_similarity=0.3,
+    )
+    if not scores:
+        name_scores = await _album_name_scores(session, query, candidate_limit, min_similarity=0.25)
+        scores = _merge_scores(scores, name_scores)
+    if not scores:
+        return []
+    albums = (await session.exec(
+        select(Album).where(Album.id.in_(scores.keys()))
+    )).all()
+    favorite_ids = await _favorite_ids(session, SearchEntityType.ALBUM, user_id)
+    return _apply_boosts(albums, scores, favorite_ids)
+
+
+async def _search_local_tracks(
+    session: AsyncSession,
+    query: str,
+    limit: int,
+    user_id: int | None = None,
+) -> list[tuple[Track, float]]:
+    normalized_query = normalize_search_text(query)
+    candidate_limit = max(limit * 4, 40)
+    scores = await _alias_score_map(
+        session,
+        SearchEntityType.TRACK,
+        normalized_query,
+        candidate_limit,
+        min_similarity=0.3,
+    )
+    if not scores:
+        name_scores = await _track_name_scores(session, query, candidate_limit, min_similarity=0.25)
+        scores = _merge_scores(scores, name_scores)
+    if not scores:
+        return []
+    tracks = (await session.exec(
+        select(Track).where(Track.id.in_(scores.keys()))
+    )).all()
+    favorite_ids = await _favorite_ids(session, SearchEntityType.TRACK, user_id)
+    return _apply_boosts(tracks, scores, favorite_ids, popularity_attr="popularity")
+
+
+async def _local_similar_artists(
+    session: AsyncSession,
+    main_artist: Artist | None,
+    fallback_name: str,
+    limit: int,
+    user_id: int | None = None,
+) -> list[dict]:
+    if main_artist:
+        genres = _parse_genres_field(main_artist.genres)
+        genre_filters = [Artist.genres.ilike(f"%{genre}%") for genre in genres if genre]
+        if genre_filters:
+            rows = (await session.exec(
+                select(Artist)
+                .where(Artist.id != main_artist.id)
+                .where(or_(*genre_filters))
+                .order_by(desc(Artist.popularity))
+                .limit(limit)
+            )).all()
+            return [
+                {
+                    "name": artist.name,
+                    "spotify": _artist_to_spotify_dict(artist, size=384),
+                    "lastfm": _artist_to_lastfm_dict(artist),
+                }
+                for artist in rows
+            ]
+
+    hits = await _search_local_artists(session, fallback_name, limit=limit + 5, user_id=user_id)
+    results = []
+    for artist, _ in hits:
+        if main_artist and artist.id == main_artist.id:
+            continue
+        results.append({
+            "name": artist.name,
+            "spotify": _artist_to_spotify_dict(artist, size=384),
+            "lastfm": _artist_to_lastfm_dict(artist),
+        })
+        if len(results) >= limit:
+            break
+    return results
 
 def _artist_to_spotify_dict(artist: Artist, size: int = 512) -> dict:
     images = proxy_image_list(_parse_images_field(artist.images), size=size)
@@ -192,6 +564,60 @@ def _name_matches(target: str, candidate: str) -> bool:
         return False
     return t in c or c in t
 
+
+_SEARCH_STOPWORDS = {
+    "the",
+    "a",
+    "an",
+    "and",
+    "or",
+    "of",
+    "de",
+    "del",
+    "la",
+    "el",
+    "los",
+    "las",
+    "y",
+}
+
+
+def _token_similarity(left: str, right: str) -> float:
+    return difflib.SequenceMatcher(None, left, right).ratio()
+
+
+def _filtered_tokens(value: str) -> list[str]:
+    tokens = normalize_search_text(value).split()
+    return [token for token in tokens if token and token not in _SEARCH_STOPWORDS and len(token) >= 3]
+
+
+def _is_confident_artist_match(query: str, candidate: str, score: float) -> bool:
+    if not query or not candidate:
+        return False
+    if score < 0.3:
+        return False
+    query_tokens = _filtered_tokens(query)
+    candidate_tokens = _filtered_tokens(candidate)
+    if not query_tokens:
+        return True
+    if not candidate_tokens:
+        return False
+    matches = 0
+    for q_token in query_tokens:
+        for c_token in candidate_tokens:
+            if q_token == c_token or _token_similarity(q_token, c_token) >= 0.8:
+                matches += 1
+                break
+    if len(query_tokens) == 1:
+        return matches >= 1
+    if matches >= 2:
+        return True
+    flat_query = "".join(query_tokens)
+    flat_candidate = "".join(candidate_tokens)
+    if flat_query and flat_candidate:
+        return _token_similarity(flat_query, flat_candidate) >= 0.78
+    return False
+
 @router.get("/spotify")
 async def search_spotify(
     q: str = Query(..., description="Search query"),
@@ -263,11 +689,12 @@ async def search_tag_enriched(
 
 @router.get("/orchestrated")
 async def orchestrated_search(
+    request: Request,
     q: str = Query(..., description="Query o tag principal"),
     limit: int = Query(20, description="Máximo artistas a traer de Spotify (no usado, compatibilidad)"),
     page: int = Query(0, description="Página de resultados (0-index)"),
     lastfm_limit: int = Query(60, description="Máximo artistas por tag Last.fm"),
-    related_limit: int = Query(8, description="Límite de similares Last.fm"),
+    related_limit: int = Query(10, description="Límite de similares Last.fm"),
     min_followers: int = Query(300_000, description="Umbral mínimo de followers para mostrar"),
     session: AsyncSession = Depends(SessionDep),
 ):
@@ -280,6 +707,68 @@ async def orchestrated_search(
     cached = _cache_get(_orchestrated_cache, cache_key)
     if cached:
         return cached
+
+    genre_keys = _infer_genre_keywords(q)
+    timeout_spotify = 4.0
+    timeout_lastfm = 6.0
+    timeout_related = 5.0
+
+    user_id = getattr(request.state, "user_id", None) if request else None
+
+    # DB-first artists + tracks (offline-friendly)
+    local_artist_hits = await _search_local_artists(
+        session,
+        q,
+        limit=limit + related_limit,
+        user_id=user_id,
+        genre_keys=genre_keys,
+    )
+    local_track_hits = await _search_local_tracks(session, q, limit=5, user_id=user_id)
+    confident_artist_hits = [
+        hit for hit in local_artist_hits if _is_confident_artist_match(q, hit[0].name, hit[1])
+    ]
+    confident_track_hits = [
+        hit for hit in local_track_hits if _track_title_matches(q, hit[0].name)
+    ]
+    if confident_artist_hits or confident_track_hits:
+        artists_for_grid = [
+            _artist_to_spotify_dict(hit[0], size=384)
+            for hit in confident_artist_hits[:limit]
+        ]
+        related = [
+            _artist_to_spotify_dict(hit[0], size=384)
+            for hit in confident_artist_hits[limit:limit + related_limit]
+        ]
+        tracks = []
+        if confident_track_hits:
+            track_ids = [hit[0].id for hit in confident_track_hits]
+            track_rows = (await session.exec(
+                select(Track, Artist, Album)
+                .join(Artist, Track.artist_id == Artist.id)
+                .outerjoin(Album, Track.album_id == Album.id)
+                .where(Track.id.in_(track_ids))
+            )).all()
+            track_map = {row[0].id: row for row in track_rows}
+            for track_id in track_ids:
+                row = track_map.get(track_id)
+                if not row:
+                    continue
+                track, artist, album = row
+                tracks.append(_track_to_spotify_lite(track, artist, album))
+        payload = {
+            "query": q,
+            "page": max(page, 0),
+            "limit": limit,
+            "has_more_artists": False,
+            "has_more_lastfm": False,
+            "main": None,
+            "artists": artists_for_grid,
+            "related": related,
+            "tracks": tracks,
+            "lastfm_top": []
+        }
+        _cache_set(_orchestrated_cache, cache_key, payload)
+        return payload
 
     if not settings.LASTFM_API_KEY:
         payload = {
@@ -297,48 +786,9 @@ async def orchestrated_search(
         _cache_set(_orchestrated_cache, cache_key, payload)
         return payload
 
-    genre_keys = _infer_genre_keywords(q)
-    timeout_spotify = 4.0
-    timeout_lastfm = 6.0
-    timeout_related = 5.0
-
     tracks_task = asyncio.create_task(
         _safe_timed(spotify_client.search_tracks(q, limit=5), [], timeout_spotify)
     )
-
-    # Primero intentamos desde DB
-    db_artists = []
-    db_artists = (await session.exec(
-        select(Artist).where(Artist.name.ilike(f"%{q}%")).limit(limit)
-    )).all()
-
-    if db_artists:
-        tracks = _format_tracks(await tracks_task)
-        artists_for_grid = []
-        for a in db_artists:
-            data = a.dict()
-            # Rewrite images to proxy
-            try:
-                import json
-                imgs = json.loads(a.images) if a.images else []
-            except Exception:
-                imgs = []
-            data["images"] = proxy_image_list(imgs, size=384)
-            artists_for_grid.append(data)
-        payload = {
-            "query": q,
-            "page": max(page, 0),
-            "limit": limit,
-            "has_more_artists": False,
-            "has_more_lastfm": False,
-            "main": None,
-            "artists": artists_for_grid,
-            "related": [],
-            "tracks": tracks,
-            "lastfm_top": []
-        }
-        _cache_set(_orchestrated_cache, cache_key, payload)
-        return payload
 
     # Si no hay suficientes datos locales, usamos Last.fm + Spotify y persistimos
     lastfm_top_task = asyncio.create_task(
@@ -525,6 +975,8 @@ async def orchestrated_search(
             artists_for_grid.append({"id": entry.get("name"), "name": entry.get("name"), "followers": {"total": entry.get("listeners", 0)}})
 
     tracks = _format_tracks(await tracks_task)
+    if tracks:
+        tracks = [t for t in tracks if _track_title_matches(q, t.get("name", ""))]
     payload = {
         "query": q,
         "page": max(page, 0),
@@ -543,6 +995,7 @@ async def orchestrated_search(
 
 @router.get("/artist-profile")
 async def search_artist_profile(
+    request: Request,
     q: str = Query(..., description="Nombre del artista/grupo"),
     similar_limit: int = Query(10, description="Número de artistas afines"),
     min_followers: int = Query(200_000, description="Umbral mínimo de followers Spotify para similares"),
@@ -554,11 +1007,17 @@ async def search_artist_profile(
     cached = _cache_get(_artist_profile_cache, cache_key)
     if cached:
         return cached
-
-    if not settings.LASTFM_API_KEY:
-        raise HTTPException(status_code=400, detail="Se requiere LASTFM_API_KEY para este endpoint")
+    lastfm_available = bool(settings.LASTFM_API_KEY)
+    user_id = getattr(request.state, "user_id", None) if request else None
 
     local_cache: dict[str, Artist | None] = {}
+
+    async def resolve_best_local(name: str) -> Artist | None:
+        hits = await _search_local_artists(session, name, limit=1, user_id=user_id)
+        if not hits:
+            return None
+        artist, score = hits[0]
+        return artist if _is_confident_artist_match(name, artist.name, score) else None
 
     async def get_local_artist(name: str) -> Artist | None:
         normalized = normalize_name(name)
@@ -577,6 +1036,8 @@ async def search_artist_profile(
             .order_by(desc(Artist.popularity))
             .limit(1)
         )).first()
+        if not local:
+            local = await resolve_best_local(name)
         local_cache[normalized] = local
         return local
 
@@ -584,7 +1045,14 @@ async def search_artist_profile(
         if not artist:
             return True
         stale_at = artist.last_refreshed_at
-        return not stale_at or (utc_now() - stale_at) > timedelta(days=ARTIST_REFRESH_DAYS)
+        if not stale_at or (utc_now() - stale_at) > timedelta(days=ARTIST_REFRESH_DAYS):
+            return True
+        if not artist.spotify_id:
+            return True
+        images = (artist.images or "").strip()
+        if not images or images in {"[]", ""}:
+            return True
+        return False
 
     timeout_spotify = 4.0
     timeout_lastfm = 6.0
@@ -604,12 +1072,110 @@ async def search_artist_profile(
             logger.warning("[search_artist_profile] spotify call failed: %s", exc)
             return default
 
+    local_main = await resolve_best_local(q)
+    if local_main:
+        if spotify_available and is_stale(local_main):
+            async def _refresh_local_artist(artist: Artist) -> None:
+                try:
+                    sid = artist.spotify_id
+                    if not sid and artist.name:
+                        candidates = await safe_spotify(spotify_client.search_artists(artist.name, limit=3), [])
+                        match = None
+                        for candidate in candidates or []:
+                            if _name_matches(artist.name, candidate.get("name", "")):
+                                match = candidate
+                                break
+                        if not match and candidates:
+                            match = candidates[0]
+                        if match:
+                            sid = match.get("id")
+                    if sid:
+                        logger.info("[artist_profile] refresh queued for %s (%s)", artist.name, sid)
+                        await save_artist_discography(sid)
+                except Exception as exc:
+                    logger.warning(
+                        "[artist_profile] refresh failed for %s: %r",
+                        artist.name,
+                        exc,
+                        exc_info=True,
+                    )
+            asyncio.create_task(_refresh_local_artist(local_main))
+        main = {
+            "spotify": _artist_to_spotify_dict(local_main),
+            "lastfm": _artist_to_lastfm_dict(local_main),
+        }
+        similars = await _local_similar_artists(session, local_main, local_main.name, similar_limit, user_id)
+        local_track_hits = await _search_local_tracks(session, local_main.name, limit=5, user_id=user_id)
+        tracks = []
+        if local_track_hits:
+            track_ids = [hit[0].id for hit in local_track_hits]
+            track_rows = (await session.exec(
+                select(Track, Artist, Album)
+                .join(Artist, Track.artist_id == Artist.id)
+                .outerjoin(Album, Track.album_id == Album.id)
+                .where(Track.id.in_(track_ids))
+            )).all()
+            track_map = {row[0].id: row for row in track_rows}
+            for track_id in track_ids:
+                row = track_map.get(track_id)
+                if not row:
+                    continue
+                track, artist, album = row
+                tracks.append(_track_to_spotify_lite(track, artist, album))
+        payload = {
+            "query": q,
+            "mode": "artist",
+            "main": main,
+            "similar": similars,
+            "tracks": tracks
+        }
+        _cache_set(_artist_profile_cache, cache_key, payload)
+        return payload
+
+    local_track_hits = await _search_local_tracks(session, q, limit=5, user_id=user_id)
+    if local_track_hits:
+        track_ids = [hit[0].id for hit in local_track_hits]
+        track_rows = (await session.exec(
+            select(Track, Artist, Album)
+            .join(Artist, Track.artist_id == Artist.id)
+            .outerjoin(Album, Track.album_id == Album.id)
+            .where(Track.id.in_(track_ids))
+        )).all()
+        track_map = {row[0].id: row for row in track_rows}
+        tracks = []
+        main_artist = None
+        for track_id in track_ids:
+            row = track_map.get(track_id)
+            if not row:
+                continue
+            track, artist, album = row
+            if not _track_title_matches(q, track.name):
+                continue
+            if not main_artist:
+                main_artist = artist
+            tracks.append(_track_to_spotify_lite(track, artist, album))
+        if tracks:
+            main = {
+                "spotify": _artist_to_spotify_dict(main_artist) if main_artist else None,
+                "lastfm": _artist_to_lastfm_dict(main_artist) if main_artist else {},
+            }
+            similars = await _local_similar_artists(session, main_artist, main_artist.name if main_artist else q, similar_limit, user_id)
+            payload = {
+                "query": q,
+                "mode": "artist",
+                "main": main,
+                "similar": similars,
+                "tracks": tracks
+            }
+            _cache_set(_artist_profile_cache, cache_key, payload)
+            return payload
+
     async def fetch_main():
         local_artist = await get_local_artist(q)
         sp_best = _artist_to_spotify_dict(local_artist) if local_artist else None
         lfm = _artist_to_lastfm_dict(local_artist) if local_artist else {}
         needs_lastfm = not (lfm.get("summary") or lfm.get("content"))
-        if needs_lastfm:
+        if needs_lastfm and lastfm_available:
             lfm_remote = await _safe_timed(lastfm_client.get_artist_info(q), {}, timeout_lastfm)
             if local_artist:
                 lfm = {
@@ -637,7 +1203,9 @@ async def search_artist_profile(
                 sp_best = sp_sorted[0]
         return {"spotify": sp_best, "lastfm": lfm}
 
-    async def fetch_similars(main_name: str):
+    async def fetch_similars(main_name: str, local_main: Artist | None):
+        if not lastfm_available:
+            return await _local_similar_artists(session, local_main, main_name, similar_limit, user_id)
         similars = await _safe_timed(
             lastfm_client.get_similar_artists(main_name, limit=similar_limit + 8),
             [],
@@ -727,9 +1295,6 @@ async def search_artist_profile(
                 break
         return results
 
-    tracks_task = asyncio.create_task(
-        safe_spotify(spotify_client.search_tracks(q, limit=5), [])
-    )
     main = await fetch_main()
     spotify_main = (main or {}).get("spotify") or {}
     if not spotify_main:
@@ -755,14 +1320,23 @@ async def search_artist_profile(
             }
             main["spotify"] = spotify_main
     main_name = spotify_main.get("name") or q
+    local_main = await get_local_artist(main_name)
 
-    similars = await fetch_similars(main_name)
+    similars = await fetch_similars(main_name, local_main)
 
     if spotify_available:
         refresh_ids: list[str] = []
         main_spotify_id = spotify_main.get("id") if isinstance(spotify_main, dict) else None
+        scheduled_expansion = False
+        if main_spotify_id and (not local_main or is_stale(local_main)):
+            schedule_artist_expansion(
+                spotify_artist_id=main_spotify_id,
+                artist_name=main_name,
+                include_youtube_links=True,
+            )
+            scheduled_expansion = True
         local_main = await get_local_artist(main_name)
-        if main_spotify_id and is_stale(local_main):
+        if main_spotify_id and is_stale(local_main) and not scheduled_expansion:
             refresh_ids.append(main_spotify_id)
 
         for entry in similars:
@@ -785,7 +1359,26 @@ async def search_artist_profile(
             for sid in unique_ids[:6]:
                 asyncio.create_task(save_artist_discography(sid))
 
-    tracks = _format_tracks(await tracks_task)
+    tracks = []
+    local_track_hits = await _search_local_tracks(session, q, limit=5, user_id=user_id)
+    if local_track_hits:
+        track_ids = [hit[0].id for hit in local_track_hits]
+        track_rows = (await session.exec(
+            select(Track, Artist, Album)
+            .join(Artist, Track.artist_id == Artist.id)
+            .outerjoin(Album, Track.album_id == Album.id)
+            .where(Track.id.in_(track_ids))
+        )).all()
+        track_map = {row[0].id: row for row in track_rows}
+        for track_id in track_ids:
+            row = track_map.get(track_id)
+            if not row:
+                continue
+            track, artist, album = row
+            if _track_title_matches(q, track.name):
+                tracks.append(_track_to_spotify_lite(track, artist, album))
+    elif spotify_available:
+        tracks = _format_tracks(await safe_spotify(spotify_client.search_tracks(q, limit=5), []))
     payload = {
         "query": q,
         "mode": "artist",
@@ -799,10 +1392,33 @@ async def search_artist_profile(
 
 @router.get("/tracks-quick")
 async def search_tracks_quick(
+    request: Request,
     q: str = Query(..., description="Nombre de canción"),
-    limit: int = Query(10, description="Número de tracks a devolver")
+    limit: int = Query(10, description="Número de tracks a devolver"),
+    session: AsyncSession = Depends(SessionDep),
 ):
     """Búsqueda rápida de canciones en Spotify con sus artistas y álbum."""
+    user_id = getattr(request.state, "user_id", None) if request else None
+    local_track_hits = await _search_local_tracks(session, q, limit=limit, user_id=user_id)
+    if local_track_hits:
+        track_ids = [hit[0].id for hit in local_track_hits]
+        track_rows = (await session.exec(
+            select(Track, Artist, Album)
+            .join(Artist, Track.artist_id == Artist.id)
+            .outerjoin(Album, Track.album_id == Album.id)
+            .where(Track.id.in_(track_ids))
+        )).all()
+        track_map = {row[0].id: row for row in track_rows}
+        tracks = []
+        for track_id in track_ids:
+            row = track_map.get(track_id)
+            if not row:
+                continue
+            track, artist, album = row
+            tracks.append(_track_to_spotify_lite(track, artist, album))
+        return {"query": q, "tracks": tracks}
+    if not settings.SPOTIFY_CLIENT_ID or not settings.SPOTIFY_CLIENT_SECRET:
+        return {"query": q, "tracks": []}
     try:
         tracks = await spotify_client.search_tracks(q, limit=limit)
         return {"query": q, "tracks": _format_tracks(tracks)}
@@ -810,84 +1426,71 @@ async def search_tracks_quick(
         raise HTTPException(status_code=500, detail=f"Error searching tracks: {exc}")
 
 @router.get("/advanced")
-def advanced_search(
+async def advanced_search(
+    request: Request,
     query: str = Query(None, description="Search query"),
     search_in: str = Query("all", description="Search in: artists, albums, tracks, or all"),
     min_rating: int = Query(None, description="Minimum rating (0-5)"),
     is_favorite: bool = Query(None, description="Favorite tracks only"),
     tag: str = Query(None, description="Filter by tag name"),
-    limit: int = Query(20, description="Number of results to return")
+    limit: int = Query(20, description="Number of results to return"),
+    session: AsyncSession = Depends(SessionDep),
 ):
     """Advanced search across artists, albums, and tracks with filtering."""
-    session = get_session()
-    try:
-        results = {
-            "artists": [],
-            "albums": [],
-            "tracks": []
-        }
+    results = {
+        "artists": [],
+        "albums": [],
+        "tracks": []
+    }
+    user_id = getattr(request.state, "user_id", None) if request else None
 
-        # Search in artists
-        if search_in in ["artists", "all"] and query:
-            artist_results = session.exec(
-                select(Artist)
-                .where(Artist.name.ilike(f"%{query}%"))
-                .limit(limit)
-            ).all()
-            results["artists"] = [artist.dict() for artist in artist_results]
+    if search_in in ["artists", "all"] and query:
+        artist_hits = await _search_local_artists(session, query, limit=limit, user_id=user_id)
+        results["artists"] = [artist.dict() for artist, _ in artist_hits[:limit]]
 
-        # Search in albums
-        if search_in in ["albums", "all"] and query:
-            album_results = session.exec(
-                select(Album)
-                .where(Album.name.ilike(f"%{query}%"))
-                .limit(limit)
-            ).all()
-            results["albums"] = [album.dict() for album in album_results]
+    if search_in in ["albums", "all"] and query:
+        album_hits = await _search_local_albums(session, query, limit=limit, user_id=user_id)
+        results["albums"] = [album.dict() for album, _ in album_hits[:limit]]
 
-        # Search in tracks with advanced filtering
-        if search_in in ["tracks", "all"]:
-            track_query = select(Track)
+    if search_in in ["tracks", "all"]:
+        track_query = select(Track)
 
-            # Apply search query if provided
-            if query:
-                track_query = track_query.where(Track.name.ilike(f"%{query}%"))
+        if query:
+            track_hits = await _search_local_tracks(session, query, limit=limit * 4, user_id=user_id)
+            track_ids = [track.id for track, _ in track_hits]
+            if track_ids:
+                track_query = track_query.where(Track.id.in_(track_ids))
+            else:
+                track_query = track_query.where(False)
 
-            # Apply rating filter
-            if min_rating is not None and min_rating >= 0:
-                track_query = track_query.where(Track.user_score >= min_rating)
+        if min_rating is not None and min_rating >= 0:
+            track_query = track_query.where(Track.user_score >= min_rating)
 
-            # Apply favorite filter
-            if is_favorite is not None:
-                track_query = track_query.where(Track.is_favorite == is_favorite)
+        if is_favorite is not None:
+            track_query = track_query.where(Track.is_favorite == is_favorite)
 
-            # Apply tag filter
-            if tag:
-                # Get tag ID first
-                tag_obj = session.exec(select(Tag).where(Tag.name == tag)).first()
-                if tag_obj:
-                    # Get track IDs with this tag
-                    track_tags = session.exec(
-                        select(TrackTag).where(TrackTag.tag_id == tag_obj.id)
-                    ).all()
-                    track_ids = [tt.track_id for tt in track_tags]
-                    track_query = track_query.where(Track.id.in_(track_ids))
+        if tag:
+            tag_obj = (await session.exec(select(Tag).where(Tag.name == tag))).first()
+            if tag_obj:
+                track_tags = (await session.exec(
+                    select(TrackTag).where(TrackTag.tag_id == tag_obj.id)
+                )).all()
+                track_ids = [tt.track_id for tt in track_tags]
+                track_query = track_query.where(Track.id.in_(track_ids))
 
-            track_results = session.exec(track_query.limit(limit)).all()
-            results["tracks"] = [track.dict() for track in track_results]
+        track_results = (await session.exec(track_query.limit(limit))).all()
+        results["tracks"] = [track.dict() for track in track_results]
 
-        return {
-            "query": query,
-            "search_in": search_in,
-            "filters": {
-                "min_rating": min_rating,
-                "is_favorite": is_favorite,
-                "tag": tag
-            },
-            "results": results
-        }
-    finally:
-        session.close()
+    return {
+        "query": query,
+        "search_in": search_in,
+        "filters": {
+            "min_rating": min_rating,
+            "is_favorite": is_favorite,
+            "tag": tag
+        },
+        "results": results
+    }
 
 @router.get("/fuzzy")
 def fuzzy_search(

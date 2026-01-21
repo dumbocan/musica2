@@ -112,8 +112,6 @@ export const audio2Api = {
 
   getAllArtists: (params?: { offset?: number; limit?: number; order?: 'pop-desc' | 'pop-asc' | 'name-asc' }) =>
     api.get('/artists/', { params }),
-  listHiddenArtists: (params: { user_id: number }) =>
-    api.get('/artists/hidden', { params }),
   hideArtist: (artistId: number, userId: number) =>
     api.post(`/artists/id/${artistId}/hide`, null, { params: { user_id: userId } }),
   unhideArtist: (artistId: number, userId: number) =>
@@ -200,7 +198,7 @@ export const audio2Api = {
   removeFavorite: (targetType: 'artist' | 'album' | 'track', targetId: number, userId: number) =>
     api.delete(`/favorites/${targetType}/${targetId}`, { params: { user_id: userId } }),
   listFavorites: (params: { user_id: number; target_type?: 'artist' | 'album' | 'track' }) =>
-    api.get('/favorites', { params }),
+    api.get('/favorites/', { params }),
 
   // User learning
   getUserRecommendations: (userId: number, limit?: number) =>

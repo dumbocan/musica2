@@ -5,6 +5,7 @@ Album endpoints: tracks, save to DB, etc.
 import ast
 import json
 import logging
+import asyncio
 from typing import List
 
 from fastapi import APIRouter, Path, HTTPException
@@ -23,34 +24,103 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/albums", tags=["albums"])
 
 
+async def _safe_timed(label: str, coro, timeout: float, default):
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout)
+    except Exception as exc:
+        logger.warning("%s failed after %ss: %r", label, timeout, exc, exc_info=True)
+        return default
+
+
+async def _backfill_album_tracks(spotify_id: str, album_id: int, artist_id: int) -> None:
+    try:
+        tracks = await spotify_client.get_album_tracks(spotify_id)
+    except Exception as exc:
+        logger.warning("Spotify album tracks backfill failed for %s: %r", spotify_id, exc, exc_info=True)
+        return
+    for track_data in tracks:
+        try:
+            save_track(track_data, album_id, artist_id)
+        except Exception as exc:
+            logger.warning(
+                "Track save failed for album %s (%s): %r",
+                spotify_id,
+                track_data.get("id"),
+                exc,
+            )
+
+
 @router.get("/spotify/{spotify_id}")
 async def get_album_from_spotify(spotify_id: str = Path(..., description="Spotify album ID")):
     """Get album details and tracks directly from Spotify."""
+    album_payload = None
     with get_session() as session:
         local_album = session.exec(select(Album).where(Album.spotify_id == spotify_id)).first()
         if local_album:
             artist = session.exec(select(Artist).where(Artist.id == local_album.artist_id)).first()
+            if artist and artist.is_hidden:
+                raise HTTPException(status_code=404, detail="Album not found")
             tracks = session.exec(select(Track).where(Track.album_id == local_album.id)).all()
             album_payload = _album_from_local(local_album, artist, tracks)
             if tracks:
                 return album_payload
-            # No tracks locally; fall through to Spotify if possible
+            # No tracks locally; backfill in background to keep UI fast
+            if settings.SPOTIFY_CLIENT_ID and settings.SPOTIFY_CLIENT_SECRET:
+                asyncio.create_task(_backfill_album_tracks(spotify_id, local_album.id, local_album.artist_id))
+            return album_payload
 
     if not settings.SPOTIFY_CLIENT_ID or not settings.SPOTIFY_CLIENT_SECRET:
-        return album_payload if "album_payload" in locals() else {}
+        return album_payload if album_payload is not None else {}
     try:
-        album = await spotify_client.get_album(spotify_id)
+        tracks_timeout = 12.0
+        album_timeout = 10.0
+        if local_album and album_payload:
+            tracks = await _safe_timed(
+                "Spotify album tracks fetch",
+                spotify_client.get_album_tracks(spotify_id),
+                tracks_timeout,
+                [],
+            )
+            if tracks:
+                album_payload["tracks"] = tracks
+                for track_data in tracks:
+                    save_track(track_data, local_album.id, local_album.artist_id)
+            return album_payload
+
+        album_task = asyncio.create_task(
+            _safe_timed(
+                "Spotify album fetch",
+                spotify_client.get_album(spotify_id),
+                album_timeout,
+                None,
+            )
+        )
+        tracks_task = asyncio.create_task(
+            _safe_timed(
+                "Spotify album tracks fetch",
+                spotify_client.get_album_tracks(spotify_id),
+                tracks_timeout,
+                [],
+            )
+        )
+        album = await album_task
         if not album:
-            raise HTTPException(status_code=404, detail="Album not found on Spotify")
-        tracks = await spotify_client.get_album_tracks(spotify_id)
-        album["tracks"] = tracks
+            raise HTTPException(status_code=504, detail="Spotify album lookup timed out")
+        tracks = await tracks_task
+        if tracks:
+            album["tracks"] = tracks
         album["images"] = proxy_image_list(album.get("images", []), size=512)
         # Enrich with Last.fm wiki if possible
         try:
             artist_name = (album.get("artists") or [{}])[0].get("name")
             album_name = album.get("name")
             if artist_name and album_name and settings.LASTFM_API_KEY:
-                lfm_info = await lastfm_client.get_album_info(artist_name, album_name)
+                lfm_info = await _safe_timed(
+                    "Last.fm album info",
+                    lastfm_client.get_album_info(artist_name, album_name),
+                    6.0,
+                    {},
+                )
                 album["lastfm"] = lfm_info
         except Exception:
             album["lastfm"] = {}
@@ -61,7 +131,7 @@ async def get_album_from_spotify(spotify_id: str = Path(..., description="Spotif
     except HTTPException:
         raise
     except Exception as e:
-        if "album_payload" in locals():
+        if album_payload is not None:
             return album_payload
         raise HTTPException(status_code=500, detail=f"Error fetching album from Spotify: {e}")
 
@@ -74,11 +144,18 @@ async def get_album_tracks(spotify_id: str = Path(..., description="Spotify albu
         local_album = session.exec(select(Album).where(Album.spotify_id == spotify_id)).first()
         if local_album:
             artist = session.exec(select(Artist).where(Artist.id == local_album.artist_id)).first()
+            if artist and artist.is_hidden:
+                return []
             tracks = session.exec(select(Track).where(Track.album_id == local_album.id)).all()
             if tracks:
                 return [_track_from_local(track, artist) for track in tracks]
     try:
-        tracks = await spotify_client.get_album_tracks(spotify_id)
+        tracks = await _safe_timed(
+            "Spotify album tracks fetch",
+            spotify_client.get_album_tracks(spotify_id),
+            12.0,
+            [],
+        )
     except Exception as exc:
         logger.warning("Spotify album tracks fetch failed for %s: %r", spotify_id, exc, exc_info=True)
         return []
@@ -112,7 +189,11 @@ async def save_album_to_db(spotify_id: str = Path(..., description="Spotify albu
 def get_albums() -> List[Album]:
     """Get all saved albums from DB."""
     with get_session() as session:
-        albums = session.exec(select(Album)).all()
+        albums = session.exec(
+            select(Album)
+            .join(Artist, Album.artist_id == Artist.id)
+            .where(Artist.is_hidden.is_(False))
+        ).all()
     return albums
 
 
@@ -132,7 +213,12 @@ def delete_album_endpoint(album_id: int = Path(..., description="Local album ID"
 def get_album(album_id: int = Path(..., description="Local album ID")) -> Album:
     """Get single album by local ID."""
     with get_session() as session:
-        album = session.exec(select(Album).where(Album.id == album_id)).first()
+        album = session.exec(
+            select(Album)
+            .join(Artist, Album.artist_id == Artist.id)
+            .where(Album.id == album_id)
+            .where(Artist.is_hidden.is_(False))
+        ).first()
         if not album:
             raise HTTPException(status_code=404, detail="Album not found")
     return album

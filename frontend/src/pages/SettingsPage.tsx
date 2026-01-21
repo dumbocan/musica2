@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { audio2Api } from '@/lib/api';
+import { useApiStore } from '@/store/useApiStore';
 
 export function SettingsPage() {
+  const setServiceStatus = useApiStore((s) => s.setServiceStatus);
   const [maintenanceState, setMaintenanceState] = useState<'unknown' | 'running' | 'idle' | 'error'>('unknown');
   const [maintenanceStarting, setMaintenanceStarting] = useState(false);
   const [maintenanceStopping, setMaintenanceStopping] = useState(false);
@@ -17,8 +19,117 @@ export function SettingsPage() {
   const [logLines, setLogLines] = useState<string[]>([]);
   const [logsEnabled, setLogsEnabled] = useState(true);
   const [logError, setLogError] = useState<string | null>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
+  const [healthError, setHealthError] = useState<string | null>(null);
+  const [youtubeUsage, setYoutubeUsage] = useState<{
+    requests_total?: number;
+    next_reset_at_unix?: number;
+    reset_hour_local?: number;
+  } | null>(null);
+  const [youtubeUsageError, setYoutubeUsageError] = useState<string | null>(null);
+  const [serviceSnapshot, setServiceSnapshot] = useState<{
+    spotify?: { status?: string | null; last_error?: string | null };
+    lastfm?: { status?: string | null; last_error?: string | null };
+    database?: { status?: string | null; last_error?: string | null };
+  } | null>(null);
   const logBoxRef = useRef<HTMLDivElement | null>(null);
   const lastLogIdRef = useRef<number | null>(null);
+
+  const refreshHealth = async () => {
+    setHealthLoading(true);
+    try {
+      const res = await audio2Api.healthDetailed?.();
+      const services = res?.data?.services ?? null;
+      setServiceSnapshot(services);
+      setServiceStatus(
+        services
+          ? { spotify: services.spotify, lastfm: services.lastfm }
+          : null
+      );
+      setHealthError(null);
+    } catch (err) {
+      setHealthError(err instanceof Error ? err.message : 'Error cargando estado');
+    } finally {
+      setHealthLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let active = true;
+    setHealthLoading(true);
+    audio2Api
+      .healthDetailed?.()
+      .then((res) => {
+        if (!active) return;
+        const services = res?.data?.services ?? null;
+        setServiceSnapshot(services);
+        setServiceStatus(
+          services
+            ? { spotify: services.spotify, lastfm: services.lastfm }
+            : null
+        );
+        setHealthError(null);
+      })
+      .catch((err) => {
+        if (!active) return;
+        setHealthError(err instanceof Error ? err.message : 'Error cargando estado');
+      })
+      .finally(() => {
+        if (!active) return;
+        setHealthLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [setServiceStatus]);
+
+  useEffect(() => {
+    let active = true;
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const pollIntervalMs = 5 * 60 * 1000;
+
+    const load = async () => {
+      try {
+        const res = await audio2Api.getYoutubeUsage();
+        if (!active) return;
+        setYoutubeUsage(res.data ?? null);
+        setYoutubeUsageError(null);
+      } catch (err) {
+        if (!active) return;
+        setYoutubeUsageError(err instanceof Error ? err.message : 'Error cargando cuota YouTube');
+      }
+    };
+
+    const stopPolling = () => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+    };
+
+    const startPolling = () => {
+      if (!interval) {
+        interval = setInterval(load, pollIntervalMs);
+      }
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        load();
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    };
+
+    handleVisibility();
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      active = false;
+      stopPolling();
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -192,6 +303,29 @@ export function SettingsPage() {
     }
   };
 
+  const renderServiceStatus = (
+    label: string,
+    service?: { status?: string | null; last_error?: string | null }
+  ) => {
+    const status = service?.status ?? 'unknown';
+    const text =
+      status === 'online' ? 'online' : status === 'offline' ? 'offline' : 'desconocido';
+    const color = status === 'online' ? '#22c55e' : status === 'offline' ? '#ef4444' : '#f59e0b';
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <div style={{ fontSize: 11 }}>
+          {label}:{' '}
+          <span style={{ color, fontWeight: 600 }}>{text}</span>
+        </div>
+        {service?.last_error && status !== 'online' && (
+          <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)' }}>
+            {service.last_error}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="page">
       <div
@@ -208,6 +342,59 @@ export function SettingsPage() {
             <div style={{ color: 'var(--muted)', fontSize: 12 }}>
               Acciones rápidas y backfills. Revisa el terminal para el progreso.
             </div>
+          </div>
+
+          <div
+            style={{
+              border: '1px solid rgba(255,255,255,0.08)',
+              borderRadius: 12,
+              padding: 10,
+              marginBottom: 12,
+              background: 'rgba(255,255,255,0.03)'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ fontWeight: 600, fontSize: 12 }}>Estado servicios</div>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={refreshHealth}
+                disabled={healthLoading}
+                style={{ padding: '4px 10px', fontSize: 11 }}
+              >
+                {healthLoading ? 'Actualizando...' : 'Actualizar'}
+              </button>
+            </div>
+            {healthError ? (
+              <div style={{ fontSize: 11, color: '#ef4444', marginTop: 6 }}>{healthError}</div>
+            ) : (
+              <div style={{ display: 'grid', gap: 6, marginTop: 8 }}>
+                {renderServiceStatus('Spotify', serviceSnapshot?.spotify)}
+                {renderServiceStatus('Last.fm', serviceSnapshot?.lastfm)}
+                {renderServiceStatus('Base de datos', serviceSnapshot?.database)}
+                <div style={{ marginTop: 4 }}>
+                  <div style={{ fontSize: 11 }}>
+                    YouTube requests:{' '}
+                    <span style={{ fontWeight: 600 }}>
+                      {typeof youtubeUsage?.requests_total === 'number'
+                        ? youtubeUsage.requests_total
+                        : '—'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)' }}>
+                    Reset:{' '}
+                    {youtubeUsage?.next_reset_at_unix
+                      ? new Date(youtubeUsage.next_reset_at_unix * 1000).toLocaleString()
+                      : '—'}
+                  </div>
+                  {youtubeUsageError && (
+                    <div style={{ fontSize: 10, color: '#ef4444', marginTop: 2 }}>
+                      {youtubeUsageError}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           <button

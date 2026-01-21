@@ -206,13 +206,33 @@ export function Dashboard() {
           .filter((trackId) => /^[A-Za-z0-9]{22}$/.test(trackId))
       )
     ).slice(0, 3);
+    const localSeedTracks = Array.from(
+      new Set(
+        recentPlays
+          .map((play) => {
+            if (typeof play.localTrackId === 'number') {
+              return String(play.localTrackId);
+            }
+            return /^\d+$/.test(play.spotifyTrackId) ? play.spotifyTrackId : null;
+          })
+          .filter((trackId): trackId is string => Boolean(trackId))
+      )
+    ).slice(0, 3);
+    const combinedSeedTracks = Array.from(new Set([...seedTracks, ...localSeedTracks]));
+    const nameSeedTracks = seedTracks.length ? seedTracks : localSeedTracks;
     const seedNames = seedArtistNames.length > 0
       ? seedArtistNames
       : recentPlays
-          .filter((play) => seedTracks.includes(play.spotifyTrackId))
+          .filter((play) => {
+            const localId = typeof play.localTrackId === 'number'
+              ? String(play.localTrackId)
+              : (/^\d+$/.test(play.spotifyTrackId) ? play.spotifyTrackId : null);
+            const matchId = seedTracks.length ? play.spotifyTrackId : localId;
+            return Boolean(matchId && nameSeedTracks.includes(matchId));
+          })
           .map((play) => play.title)
           .slice(0, 3);
-    if (!seedTracks.length && !seedArtists.length) {
+    if (!combinedSeedTracks.length && !seedArtists.length) {
       setRecommendations([]);
       setRecommendationBase([]);
       return;
@@ -223,9 +243,9 @@ export function Dashboard() {
       setRecommendationsError(null);
       try {
         const response = await audio2Api.getTrackRecommendations({
-          seed_tracks: seedArtists.length ? undefined : seedTracks,
+          seed_tracks: seedArtists.length ? undefined : combinedSeedTracks,
           seed_artists: seedArtists.length ? seedArtists : undefined,
-          limit: 6,
+          limit: 12,
         });
         if (!active) return;
         const payload = response.data;

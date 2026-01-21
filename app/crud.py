@@ -7,15 +7,17 @@ import json
 
 from typing import Optional, List
 from sqlmodel import select
+from sqlalchemy.exc import IntegrityError
 
 from .models.base import (
     Artist, Album, Track, User, Playlist, PlaylistTrack, Tag, TrackTag,
     PlayHistory, AlgorithmLearning, UserFavorite, FavoriteTargetType,
-    UserHiddenArtist
+    SearchEntityType
 )
 from .core.db import get_session
 from .core.image_proxy import proxy_image_list
 from .core.image_cache import schedule_warm_cache_images
+from .core.search_index import ensure_entity_aliases
 from .core.time_utils import utc_now
 
 
@@ -39,7 +41,6 @@ def get_artist_by_spotify_id(spotify_id: str) -> Optional[Artist]:
 
 def save_artist(artist_data: dict) -> Artist:
     spotify_id = artist_data['id']
-    artist = get_artist_by_spotify_id(spotify_id)
     session = get_session()
     try:
         now = utc_now()
@@ -47,50 +48,62 @@ def save_artist(artist_data: dict) -> Artist:
         proxied_images = proxy_image_list(images_data, size=384)
         serialized_images = json.dumps(proxied_images)
         needs_warm_cache = False
+
+        normalized = normalize_name(artist_data['name'])
+        artist = session.exec(
+            select(Artist).where(Artist.spotify_id == spotify_id)
+        ).first()
+        if not artist and normalized:
+            artist = session.exec(
+                select(Artist).where(Artist.normalized_name == normalized)
+            ).first()
+
+        def _apply_updates(target: Artist) -> None:
+            target.spotify_id = target.spotify_id or spotify_id
+            target.name = artist_data['name']
+            target.normalized_name = normalized
+            target.genres = str(artist_data.get('genres', []))
+            target.popularity = artist_data.get('popularity', 0)
+            target.followers = artist_data.get('followers', {}).get('total', 0)
+            target.updated_at = now
+            target.last_refreshed_at = now
+            nonlocal needs_warm_cache
+            if target.images != serialized_images:
+                needs_warm_cache = True
+            target.images = serialized_images
+            session.add(target)
+
         if artist:
-            artist.name = artist_data['name']
-            artist.normalized_name = normalize_name(artist_data['name'])
-            artist.genres = str(artist_data.get('genres', []))
-            if artist.images != serialized_images:
-                needs_warm_cache = True
-            artist.images = serialized_images
-            artist.popularity = artist_data.get('popularity', 0)
-            artist.followers = artist_data.get('followers', {}).get('total', 0)
-            artist.updated_at = now  # Update timestamp
-            artist.last_refreshed_at = now
-            session.add(artist)
+            _apply_updates(artist)
         else:
-            normalized = normalize_name(artist_data['name'])
-            # Check for existing by normalized name
-            statement = select(Artist).where(Artist.normalized_name == normalized)
-            existing_artist = session.exec(statement).first()
-            if existing_artist:
-                # Merge into existing
-                existing_artist.spotify_id = existing_artist.spotify_id or spotify_id
-                existing_artist.name = artist_data['name']
-                existing_artist.normalized_name = normalized
-                existing_artist.genres = str(artist_data.get('genres', []))
-                if existing_artist.images != serialized_images:
-                    needs_warm_cache = True
-                existing_artist.images = serialized_images
-                existing_artist.popularity = artist_data.get('popularity', 0)
-                existing_artist.followers = artist_data.get('followers', {}).get('total', 0)
-                existing_artist.updated_at = now  # Update timestamp
-                existing_artist.last_refreshed_at = now
-                artist = existing_artist
-            else:
-                needs_warm_cache = True
-                artist = Artist(
-                    spotify_id=spotify_id,
-                    name=artist_data['name'],
-                    normalized_name=normalized,
-                    genres=str(artist_data.get('genres', [])),
-                    images=serialized_images,
-                    popularity=artist_data.get('popularity', 0),
-                    followers=artist_data.get('followers', {}).get('total', 0),
-                    last_refreshed_at=now
-                )
-                session.add(artist)
+            needs_warm_cache = True
+            artist = Artist(
+                spotify_id=spotify_id,
+                name=artist_data['name'],
+                normalized_name=normalized,
+                genres=str(artist_data.get('genres', [])),
+                images=serialized_images,
+                popularity=artist_data.get('popularity', 0),
+                followers=artist_data.get('followers', {}).get('total', 0),
+                last_refreshed_at=now
+            )
+            session.add(artist)
+        try:
+            session.flush()
+        except IntegrityError:
+            session.rollback()
+            artist = session.exec(
+                select(Artist).where(Artist.spotify_id == spotify_id)
+            ).first()
+            if not artist and normalized:
+                artist = session.exec(
+                    select(Artist).where(Artist.normalized_name == normalized)
+                ).first()
+            if not artist:
+                raise
+            _apply_updates(artist)
+            session.flush()
+        ensure_entity_aliases(session, SearchEntityType.ARTIST, artist.id, artist.name)
         session.commit()
         session.refresh(artist)
         if needs_warm_cache and images_data:
@@ -120,6 +133,10 @@ def save_album(album_data: dict) -> Album:
         proxied_images = proxy_image_list(images_data, size=384)
         serialized_images = json.dumps(proxied_images)
         needs_warm_cache = False
+        if not album:
+            album = session.exec(
+                select(Album).where(Album.spotify_id == spotify_id)
+            ).first()
         if album:
             album.name = album_data['name']
             album.release_date = album_data['release_date']
@@ -151,6 +168,26 @@ def save_album(album_data: dict) -> Album:
                 last_refreshed_at=now
             )
             session.add(album)
+        try:
+            session.flush()
+        except IntegrityError:
+            session.rollback()
+            album = session.exec(
+                select(Album).where(Album.spotify_id == spotify_id)
+            ).first()
+            if not album:
+                raise
+            album.name = album_data['name']
+            album.release_date = album_data['release_date']
+            album.total_tracks = album_data['total_tracks']
+            if album.images != serialized_images:
+                needs_warm_cache = True
+            album.images = serialized_images
+            album.label = album_data.get('label')
+            album.updated_at = now
+            album.last_refreshed_at = now
+            session.add(album)
+        ensure_entity_aliases(session, SearchEntityType.ALBUM, album.id, album.name)
         session.commit()
         session.refresh(album)
         if needs_warm_cache and images_data:
@@ -199,6 +236,8 @@ def save_track(track_data: dict, album_id: Optional[int] = None, artist_id: Opti
                 last_refreshed_at=now
             )
             session.add(track)
+        session.flush()
+        ensure_entity_aliases(session, SearchEntityType.TRACK, track.id, track.name)
         session.commit()
         session.refresh(track)
         return track
@@ -336,27 +375,17 @@ def list_favorites(user_id: int, target_type: Optional[FavoriteTargetType] = Non
         session.close()
 
 
-def hide_artist_for_user(user_id: int, artist_id: int) -> UserHiddenArtist:
+def hide_artist_for_user(user_id: int, artist_id: int) -> Artist:
     session = get_session()
     try:
-        hidden = session.exec(
-            select(UserHiddenArtist).where(
-                UserHiddenArtist.user_id == user_id,
-                UserHiddenArtist.artist_id == artist_id
-            )
-        ).first()
-        if hidden:
-            return hidden
-
         artist = session.get(Artist, artist_id)
         if not artist:
             raise ValueError("Artist not found")
-
-        hidden = UserHiddenArtist(user_id=user_id, artist_id=artist_id)
-        session.add(hidden)
+        artist.is_hidden = True
+        session.add(artist)
         session.commit()
-        session.refresh(hidden)
-        return hidden
+        session.refresh(artist)
+        return artist
     finally:
         session.close()
 
@@ -364,29 +393,16 @@ def hide_artist_for_user(user_id: int, artist_id: int) -> UserHiddenArtist:
 def unhide_artist_for_user(user_id: int, artist_id: int) -> bool:
     session = get_session()
     try:
-        hidden = session.exec(
-            select(UserHiddenArtist).where(
-                UserHiddenArtist.user_id == user_id,
-                UserHiddenArtist.artist_id == artist_id
-            )
-        ).first()
-        if not hidden:
+        artist = session.get(Artist, artist_id)
+        if not artist:
             return False
-        session.delete(hidden)
+        artist.is_hidden = False
+        session.add(artist)
         session.commit()
         return True
     finally:
         session.close()
 
-
-def list_hidden_artists(user_id: int) -> list[UserHiddenArtist]:
-    session = get_session()
-    try:
-        return session.exec(
-            select(UserHiddenArtist).where(UserHiddenArtist.user_id == user_id)
-        ).all()
-    finally:
-        session.close()
 
 def update_album_spotify_data(album_id: int, spotify_data: dict):
     """Update album with fresh Spotify data."""

@@ -5,15 +5,30 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List
 import json
+import ast
 
 from sqlmodel import select
 
 from app.core.db import get_session
+from app.core.image_proxy import has_valid_images
 from app.models.base import Artist
 
 REPORT_DIR = Path("cache/data_quality")
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
 REPORT_FILE = REPORT_DIR / "artists_missing_fields.json"
+
+def _parse_images_field(raw: str | None) -> list:
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return raw
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        try:
+            return ast.literal_eval(raw)
+        except (ValueError, SyntaxError):
+            return []
 
 
 def collect_artist_quality_report(limit: int | None = None) -> List[Dict[str, str]]:
@@ -27,7 +42,8 @@ def collect_artist_quality_report(limit: int | None = None) -> List[Dict[str, st
     report: List[Dict[str, str]] = []
     for artist in artists:
         missing: List[str] = []
-        if not artist.images or artist.images.strip() in {"[]", ""}:
+        images = _parse_images_field(artist.images)
+        if not has_valid_images(images):
             missing.append("image")
         if not artist.genres or artist.genres.strip() in {"[]", ""}:
             missing.append("genres")

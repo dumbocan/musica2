@@ -54,55 +54,36 @@ const getArtistAssets = (artist: Artist) => {
   };
 };
 
-type HiddenArtistEntry = { artist_id: number };
-
 export function ArtistsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortOption, setSortOption] = useState<'pop-desc' | 'pop-asc' | 'name-asc' | 'favorites'>('pop-desc');
   const apiSortOption = sortOption === 'favorites' ? 'pop-desc' : sortOption;
   const [genreFilter, setGenreFilter] = useState('');
-  const { artists, isLoading, error, total } = usePaginatedArtists({ limit: 1000, sortOption: apiSortOption });
+  const {
+    artists,
+    isLoading,
+    isLoadingMore,
+    error,
+    total,
+    hasMore,
+    loadMore,
+    reload,
+  } = usePaginatedArtists({ limit: 200, sortOption: apiSortOption });
   const { isArtistsLoading, userId } = useApiStore();
   const navigate = useNavigate();
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const prefetchKeyRef = useRef('');
+  const prefetchCountRef = useRef(0);
   const {
     favoriteIds,
     toggleFavorite: toggleArtistFavorite,
     effectiveUserId: effectiveArtistUserId
   } = useFavorites('artist', userId);
-  const [hiddenIds, setHiddenIds] = useState<Set<number>>(new Set());
   const [visibleCount, setVisibleCount] = useState(20);
 
   useEffect(() => {
-
+    setVisibleCount(20);
   }, [searchTerm, genreFilter, sortOption]);
-
-  useEffect(() => {
-    let aborted = false;
-    const loadPreferences = async () => {
-      if (!userId) {
-        setHiddenIds(new Set());
-        return;
-      }
-      try {
-        const hiddenRes = await audio2Api.listHiddenArtists({ user_id: userId });
-        if (aborted) return;
-        const hiddenSet = new Set<number>();
-        (hiddenRes.data || []).forEach((entry: HiddenArtistEntry) => {
-          if (typeof entry?.artist_id === 'number') {
-            hiddenSet.add(entry.artist_id);
-          }
-        });
-        setHiddenIds(hiddenSet);
-      } catch (prefErr) {
-        console.error('Failed to load hidden artists', prefErr);
-      }
-    };
-    loadPreferences();
-    return () => {
-      aborted = true;
-    };
-  }, [userId]);
 
   const genreOptions = useMemo(() => {
     const set = new Set<string>();
@@ -114,13 +95,8 @@ export function ArtistsPage() {
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [artists]);
 
-  const visibleArtists = useMemo(
-    () => artists.filter((artist) => !hiddenIds.has(artist.id)),
-    [artists, hiddenIds]
-  );
-
   const filteredArtists = useMemo(() => {
-    return visibleArtists.filter((artist) => {
+    return artists.filter((artist) => {
       if (sortOption === 'favorites' && !favoriteIds.has(artist.id)) return false;
       const matchesSearch = artist.name.toLowerCase().includes(searchTerm.toLowerCase());
       const genres = parseStoredJsonArray(artist.genres)
@@ -129,9 +105,23 @@ export function ArtistsPage() {
       const matchesGenre = !genreFilter || genres.includes(genreFilter.toLowerCase());
       return matchesSearch && matchesGenre;
     });
-  }, [visibleArtists, searchTerm, genreFilter, sortOption, favoriteIds]);
+  }, [artists, searchTerm, genreFilter, sortOption, favoriteIds]);
 
   const displayArtists = useMemo(() => filteredArtists.slice(0, visibleCount), [filteredArtists, visibleCount]);
+
+  useEffect(() => {
+    const filterKey = `${searchTerm}|${genreFilter}|${sortOption}`;
+    if (prefetchKeyRef.current !== filterKey) {
+      prefetchKeyRef.current = filterKey;
+      prefetchCountRef.current = 0;
+    }
+    if (!searchTerm && !genreFilter && sortOption !== 'favorites') return;
+    if (isLoading || isLoadingMore || !hasMore) return;
+    if (filteredArtists.length >= 12) return;
+    if (prefetchCountRef.current >= 1) return;
+    prefetchCountRef.current += 1;
+    loadMore();
+  }, [filteredArtists.length, genreFilter, hasMore, isLoading, isLoadingMore, loadMore, searchTerm, sortOption]);
 
   useEffect(() => {
     const target = loadMoreRef.current;
@@ -141,13 +131,16 @@ export function ArtistsPage() {
         entries.forEach((entry) => {
           if (!entry.isIntersecting) return;
           setVisibleCount((prev) => Math.min(prev + 20, filteredArtists.length));
+          if (hasMore && !isLoadingMore && filteredArtists.length - visibleCount < 40) {
+            loadMore();
+          }
         });
       },
       { root: null, rootMargin: '200px' }
     );
     observer.observe(target);
     return () => observer.disconnect();
-  }, [filteredArtists.length]);
+  }, [filteredArtists.length, hasMore, isLoadingMore, loadMore, visibleCount]);
 
   const canFavorite = !!effectiveArtistUserId;
   const canHide = !!userId;
@@ -165,11 +158,7 @@ export function ArtistsPage() {
     if (!userId) return;
     try {
       await audio2Api.hideArtist(artistId, userId);
-      setHiddenIds((prev) => {
-        const next = new Set(prev);
-        next.add(artistId);
-        return next;
-      });
+      reload();
     } catch (err) {
       console.error('Failed to hide artist', err);
     }
@@ -195,7 +184,7 @@ export function ArtistsPage() {
                   Artists Found
                 </h3>
                 <span className="text-xs text-white/70">
-                  Filtered: {filteredArtists.length}
+                  Cargados: {artists.length} · Filtrados: {filteredArtists.length}
                 </span>
               </div>
             </div>
@@ -419,6 +408,12 @@ export function ArtistsPage() {
             })}
           </div>
           <div ref={loadMoreRef} style={{ height: 1 }} />
+          {isLoadingMore && (
+            <div className="text-center text-sm text-white/70">Cargando más artistas...</div>
+          )}
+          {!isLoadingMore && !hasMore && artists.length > 0 && (
+            <div className="text-center text-sm text-white/50">Fin de la lista</div>
+          )}
         </div>
       )}
     </div>

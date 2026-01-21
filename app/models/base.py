@@ -21,6 +21,11 @@ class FavoriteTargetType(str, Enum):
     ALBUM = "album"
     TRACK = "track"
 
+class SearchEntityType(str, Enum):
+    ARTIST = "artist"
+    ALBUM = "album"
+    TRACK = "track"
+
 class User(SQLModel, table=True):
     """Complete user model for multiuser system."""
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -52,6 +57,7 @@ class Artist(SQLModel, table=True):
     spotify_id: Optional[str] = Field(unique=True, default=None)  # Optional if from other source
     name: str = Field(max_length=200, index=True)
     normalized_name: str = Field(default="", index=True)  # For deduplication
+    is_hidden: bool = Field(default=False, index=True)
     genres: Optional[str] = None  # JSON list as string
     images: Optional[str] = None  # JSON list of image URLs
     popularity: int = Field(default=0)  # Spotify 0-100
@@ -66,6 +72,21 @@ class Artist(SQLModel, table=True):
     albums: Optional[List["Album"]] = Relationship(back_populates="artist")
     tracks: Optional[List["Track"]] = Relationship(back_populates="artist")
     favorites: Optional[List["UserFavorite"]] = Relationship(back_populates="artist")
+
+
+class SearchAlias(SQLModel, table=True):
+    """Alias and variant names used for DB-first search."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    entity_type: SearchEntityType = Field(index=True)
+    entity_id: int = Field(index=True)
+    alias: str = Field(max_length=250)
+    normalized_alias: str = Field(max_length=250, index=True)
+    source: Optional[str] = Field(default="system", max_length=50)
+    created_at: datetime = Field(default_factory=utc_now)
+
+    __table_args__ = (
+        UniqueConstraint("entity_type", "entity_id", "normalized_alias"),
+    )
 
 
 class Album(SQLModel, table=True):
@@ -174,20 +195,6 @@ class UserFavorite(SQLModel, table=True):
         UniqueConstraint("user_id", "target_type", "track_id"),
     )
 
-
-class UserHiddenArtist(SQLModel, table=True):
-    """Artists hidden by a user from their personal view."""
-    id: Optional[int] = Field(default=None, primary_key=True)
-    user_id: int = Field(foreign_key="user.id", ondelete="CASCADE")
-    artist_id: int = Field(foreign_key="artist.id", ondelete="CASCADE")
-    created_at: datetime = Field(default_factory=utc_now)
-
-    user: User = Relationship()
-    artist: Artist = Relationship()
-
-    __table_args__ = (
-        UniqueConstraint("user_id", "artist_id"),
-    )
 
 class YouTubeDownload(SQLModel, table=True):
     """Tracking system for YouTube audio downloads."""

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { audio2Api } from '@/lib/api';
 import type { Artist } from '@/types/api';
 
@@ -9,11 +9,15 @@ interface Options {
 
 type PaginatedArtistsResponse = Artist[] | { items: Artist[], total?: number };
 
-export function usePaginatedArtists({ limit = 500, sortOption = 'pop-desc' }: Options = {}) {
+export function usePaginatedArtists({ limit = 200, sortOption = 'pop-desc' }: Options = {}) {
   const [artists, setArtists] = useState<Artist[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState('');
   const [total, setTotal] = useState<number | null>(null);
+  const offsetRef = useRef(0);
+  const artistsRef = useRef<Artist[]>([]);
 
   const normalizeResponse = useCallback((payload: PaginatedArtistsResponse): { items: Artist[]; total: number | null } => {
     if (Array.isArray(payload)) {
@@ -28,30 +32,64 @@ export function usePaginatedArtists({ limit = 500, sortOption = 'pop-desc' }: Op
     return { items: [], total: null };
   }, []);
 
-  const fetchAll = useCallback(async () => {
-    setIsLoading(true);
-    setError('');
-    try {
-      const res = await audio2Api.getAllArtists({ offset: 0, limit, order: sortOption });
-      const { items, total: totalCount } = normalizeResponse(res.data);
-      setArtists(items);
-      setTotal(totalCount ?? items.length);
-    } catch {
-      setError('Failed to load artists. Please try again.');
-    } finally {
-      setIsLoading(false);
-    }
-  }, [limit, normalizeResponse, sortOption]);
+  const fetchPage = useCallback(
+    async (offset: number, replace: boolean) => {
+      if (replace) {
+        setIsLoading(true);
+      } else {
+        setIsLoadingMore(true);
+      }
+      setError('');
+      try {
+        const res = await audio2Api.getAllArtists({ offset, limit, order: sortOption });
+        const { items, total: totalCount } = normalizeResponse(res.data);
+        const base = replace ? [] : artistsRef.current;
+        const combined = replace ? items : [...base, ...items];
+        artistsRef.current = combined;
+        setArtists(combined);
+        setTotal(totalCount ?? combined.length);
+        offsetRef.current = combined.length;
+        if (typeof totalCount === 'number') {
+          setHasMore(combined.length < totalCount);
+        } else {
+          setHasMore(items.length >= limit);
+        }
+      } catch {
+        setError('Failed to load artists. Please try again.');
+      } finally {
+        if (replace) {
+          setIsLoading(false);
+        } else {
+          setIsLoadingMore(false);
+        }
+      }
+    },
+    [limit, normalizeResponse, sortOption]
+  );
+
+  const reload = useCallback(() => {
+    offsetRef.current = 0;
+    setHasMore(true);
+    fetchPage(0, true);
+  }, [fetchPage]);
+
+  const loadMore = useCallback(() => {
+    if (isLoading || isLoadingMore || !hasMore) return;
+    fetchPage(offsetRef.current, false);
+  }, [fetchPage, hasMore, isLoading, isLoadingMore]);
 
   useEffect(() => {
-    fetchAll();
-  }, [fetchAll]);
+    reload();
+  }, [reload]);
 
   return {
     artists,
     isLoading,
+    isLoadingMore,
     error,
     total,
-    reload: fetchAll,
+    hasMore,
+    reload,
+    loadMore,
   };
 }
