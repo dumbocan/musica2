@@ -5,9 +5,11 @@ import asyncio
 import logging
 import json
 import random
+import threading
 from datetime import date, timedelta
 
 from sqlmodel import select
+from sqlalchemy import func
 
 from .config import settings
 from .db import get_session, create_db_and_tables
@@ -26,6 +28,7 @@ from ..core.genre_backfill import (
 from ..core.time_utils import utc_now
 from ..models.base import (
     Artist,
+    Album,
     Track,
     ChartScanState,
     ChartEntryRaw,
@@ -37,7 +40,7 @@ from ..services.billboard import (
     normalize_artist_name,
     normalize_track_title,
 )
-from ..crud import save_artist
+from ..crud import save_artist, normalize_name
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +49,80 @@ _BILLBOARD_CHARTS = (
     ("billboard", "billboard-global-200"),
 )
 _GLOBAL_200_START_DATE = date(2020, 9, 19)
+
+_maintenance_lock = threading.Lock()
+_maintenance_started = False
+_maintenance_stop_event = threading.Event()
+_maintenance_tasks: set[asyncio.Task] = set()
+
+
+def maintenance_stop_requested() -> bool:
+    return _maintenance_stop_event.is_set()
+
+
+def register_maintenance_task(task: asyncio.Task) -> None:
+    _maintenance_tasks.add(task)
+    task.add_done_callback(lambda t: _maintenance_tasks.discard(t))
+
+
+def request_maintenance_stop() -> None:
+    global _maintenance_started
+    _maintenance_stop_event.set()
+    for task in list(_maintenance_tasks):
+        task.cancel()
+    _maintenance_tasks.clear()
+    _maintenance_started = False
+
+
+def start_maintenance_background(
+    delay_seconds: int | None = None,
+    stagger_seconds: int | None = None,
+) -> None:
+    if not settings.MAINTENANCE_ENABLED:
+        return
+
+    global _maintenance_started
+    with _maintenance_lock:
+        if _maintenance_started:
+            return
+        _maintenance_started = True
+
+    _maintenance_stop_event.clear()
+    delay = max(0, delay_seconds if delay_seconds is not None else settings.MAINTENANCE_STARTUP_DELAY_SECONDS)
+    stagger = max(0, stagger_seconds if stagger_seconds is not None else settings.MAINTENANCE_STAGGER_SECONDS)
+    logger.info(
+        "[maintenance] background start in %ss (stagger %ss)",
+        delay,
+        stagger,
+    )
+
+    async def _launch(task, task_delay: int) -> None:
+        if task_delay > 0:
+            await asyncio.sleep(task_delay)
+        await task()
+
+    loops = [
+        daily_refresh_loop,
+        genre_backfill_loop,
+        full_library_refresh_loop,
+        chart_scrape_loop,
+        chart_match_loop,
+    ]
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.warning("[maintenance] start skipped (no running event loop)")
+        with _maintenance_lock:
+            _maintenance_started = False
+        return
+
+    for index, loop_task in enumerate(loops):
+        task = loop.create_task(_launch(loop_task, delay + (index * stagger)))
+        register_maintenance_task(task)
+
+
+def maintenance_status() -> bool:
+    return _maintenance_started
 
 
 def _align_chart_date(input_date: date) -> date:
@@ -221,6 +298,8 @@ def _apply_chart_entries(
 async def daily_refresh_loop():
     """Daily job: refresh discography for favorited artists."""
     while True:
+        if maintenance_stop_requested():
+            return
         try:
             with get_session() as session:
                 favs = session.exec(
@@ -228,19 +307,64 @@ async def daily_refresh_loop():
                 ).all()
                 artist_ids = {f.artist_id for f in favs if f.artist_id}
             logger.info("[maintenance] refreshing %d favorited artists", len(artist_ids))
-            tasks = [asyncio.create_task(save_artist_discography(str(aid))) for aid in artist_ids if aid]
+            concurrency = max(1, settings.MAINTENANCE_FAVORITES_CONCURRENCY)
+            semaphore = asyncio.Semaphore(concurrency)
+
+            async def _run_refresh(artist_id: int) -> None:
+                async with semaphore:
+                    if maintenance_stop_requested():
+                        return
+                    await save_artist_discography(str(artist_id))
+
+            tasks = [
+                asyncio.create_task(_run_refresh(aid))
+                for aid in artist_ids
+                if aid
+            ]
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
             # After refreshing favorites, enrich artists missing metadata
             missing_report = collect_artist_quality_report()
             for entry in missing_report:
+                if maintenance_stop_requested():
+                    return
                 spotify_id = entry["spotify_id"]
+                if not spotify_id and entry.get("name"):
+                    try:
+                        candidates = await spotify_client.search_artists(entry["name"], limit=3)
+                        match = None
+                        for candidate in candidates or []:
+                            candidate_name = candidate.get("name") if isinstance(candidate, dict) else None
+                            if not candidate_name:
+                                continue
+                            if normalize_name(candidate_name) == normalize_name(entry["name"]):
+                                match = candidate
+                                break
+                        if match and match.get("id"):
+                            spotify_id = match["id"]
+                            logger.info(
+                                "[maintenance] spotify id resolved for %s -> %s",
+                                entry.get("name"),
+                                spotify_id,
+                            )
+                    except Exception as exc:
+                        logger.warning(
+                            "[maintenance] Spotify search failed for %s: %r",
+                            entry.get("name"),
+                            exc,
+                            exc_info=True,
+                        )
                 if spotify_id:
                     try:
                         data = await spotify_client.get_artist(spotify_id)
                         if data:
                             save_artist(data)
+                            logger.info(
+                                "[maintenance] artist refreshed from Spotify: %s (%s)",
+                                data.get("name") or entry.get("name") or "unknown",
+                                spotify_id,
+                            )
                     except Exception as exc:
                         logger.warning(
                             "[maintenance] Spotify refresh failed for %s: %r",
@@ -299,6 +423,8 @@ async def daily_refresh_loop():
 async def genre_backfill_loop():
     """Periodic job: fill missing artist genres using Last.fm track tags."""
     while True:
+        if maintenance_stop_requested():
+            return
         if not settings.LASTFM_API_KEY:
             logger.info("[maintenance] genre backfill skipped: LASTFM_API_KEY missing")
             await asyncio.sleep(24 * 60 * 60)
@@ -323,7 +449,17 @@ async def genre_backfill_loop():
                         .order_by(Track.popularity.desc(), Track.id.asc())
                         .limit(3)
                     ).all()
-                    track_samples[artist.id] = [row[0] for row in track_rows if row and row[0]]
+                    names: list[str] = []
+                    for row in track_rows:
+                        if isinstance(row, str):
+                            name = row
+                        elif row:
+                            name = row[0]
+                        else:
+                            name = None
+                        if name:
+                            names.append(name)
+                    track_samples[artist.id] = names
         except Exception as exc:
             logger.warning(
                 "[maintenance] genre backfill load failed: %r",
@@ -338,7 +474,10 @@ async def genre_backfill_loop():
             continue
 
         updated = 0
+        delay_seconds = max(0.0, settings.MAINTENANCE_BACKFILL_DELAY_SECONDS)
         for artist in artists:
+            if maintenance_stop_requested():
+                return
             track_names = track_samples.get(artist.id) or []
             try:
                 genres = await derive_genres_from_tracks(artist.name, track_names) if track_names else []
@@ -351,12 +490,18 @@ async def genre_backfill_loop():
                     exc,
                     exc_info=True
                 )
+                if delay_seconds:
+                    await asyncio.sleep(delay_seconds)
                 continue
             if not genres:
+                if delay_seconds:
+                    await asyncio.sleep(delay_seconds)
                 continue
             with get_session() as session:
                 target = session.exec(select(Artist).where(Artist.id == artist.id)).first()
                 if not target:
+                    if delay_seconds:
+                        await asyncio.sleep(delay_seconds)
                     continue
                 now = utc_now()
                 target.genres = json.dumps(genres)
@@ -365,6 +510,8 @@ async def genre_backfill_loop():
                 session.add(target)
                 session.commit()
                 updated += 1
+            if delay_seconds:
+                await asyncio.sleep(delay_seconds)
         logger.info("[maintenance] genre backfill updated %d artists", updated)
         await asyncio.sleep(2 * 60 * 60)
 
@@ -372,40 +519,89 @@ async def genre_backfill_loop():
 async def full_library_refresh_loop():
     """Periodic job: refresh artist metadata and detect new albums/tracks."""
     while True:
+        if maintenance_stop_requested():
+            return
         try:
             with get_session() as session:
                 artists = session.exec(
                     select(Artist)
-                    .order_by(Artist.updated_at.asc().nullsfirst(), Artist.popularity.desc())
-                    .limit(30)
+                    .where(Artist.spotify_id.is_not(None))
+                    .order_by(
+                        Artist.last_refreshed_at.asc().nullsfirst(),
+                        Artist.updated_at.asc().nullsfirst(),
+                        Artist.popularity.desc(),
+                    )
+                    .limit(settings.MAINTENANCE_LIBRARY_BATCH_SIZE)
                 ).all()
+                artist_ids = [artist.id for artist in artists if artist and artist.id]
+                album_counts: dict[int, int] = {}
+                if artist_ids:
+                    rows = session.exec(
+                        select(Album.artist_id, func.count(Album.id))
+                        .where(Album.artist_id.in_(artist_ids))
+                        .group_by(Album.artist_id)
+                    ).all()
+                    album_counts = {row[0]: int(row[1]) for row in rows if row[0]}
             refreshed = 0
             new_albums = 0
             new_tracks = 0
+            backfilled = 0
             for artist in artists:
+                if maintenance_stop_requested():
+                    return
                 if not artist.spotify_id:
                     continue
-                if await data_freshness_manager.should_refresh_artist(artist):
-                    if await data_freshness_manager.refresh_artist_data(artist.spotify_id):
-                        refreshed += 1
-                content = await data_freshness_manager.check_for_new_artist_content(artist.spotify_id)
-                new_albums += int(content.get("new_albums", 0) or 0)
-                new_tracks += int(content.get("new_tracks", 0) or 0)
+                local_album_count = album_counts.get(artist.id, 0)
+                needs_discography = local_album_count == 0
+                if not needs_discography:
+                    try:
+                        total = await asyncio.wait_for(
+                            spotify_client.get_artist_albums_total(
+                                artist.spotify_id,
+                                include_groups="album,single,compilation",
+                            ),
+                            timeout=max(1.0, settings.MAINTENANCE_LIBRARY_TOTAL_TIMEOUT_SECONDS),
+                        )
+                        if total is not None and total > local_album_count:
+                            needs_discography = True
+                    except Exception as exc:
+                        logger.info(
+                            "[maintenance] Spotify albums total check failed for %s: %r",
+                            artist.spotify_id,
+                            exc,
+                            exc_info=True,
+                        )
+                if needs_discography:
+                    await save_artist_discography(artist.spotify_id)
+                    backfilled += 1
+                else:
+                    if await data_freshness_manager.should_refresh_artist(artist):
+                        if await data_freshness_manager.refresh_artist_data(artist.spotify_id):
+                            refreshed += 1
+                    content = await data_freshness_manager.check_for_new_artist_content(artist.spotify_id)
+                    new_albums += int(content.get("new_albums", 0) or 0)
+                    new_tracks += int(content.get("new_tracks", 0) or 0)
+                delay = max(0.0, settings.MAINTENANCE_LIBRARY_DELAY_SECONDS)
+                if delay:
+                    await asyncio.sleep(delay)
             logger.info(
-                "[maintenance] library refresh: %d artists, %d new albums, %d new tracks",
+                "[maintenance] library refresh: %d refreshed, %d backfilled, %d new albums, %d new tracks",
                 refreshed,
+                backfilled,
                 new_albums,
                 new_tracks,
             )
         except Exception as exc:
             logger.error("[maintenance] library refresh failed: %s", exc)
-        await asyncio.sleep(6 * 60 * 60)
+        await asyncio.sleep(max(60, settings.MAINTENANCE_LIBRARY_LOOP_SECONDS))
 
 
 async def chart_scrape_loop():
     """Periodic job: scrape Billboard charts for tracks in the library."""
     create_db_and_tables()
     while True:
+        if maintenance_stop_requested():
+            return
         try:
             latest_chart_date = _align_chart_date(date.today())
 
@@ -418,6 +614,8 @@ async def chart_scrape_loop():
                 }
 
             for chart_source, chart_name in _BILLBOARD_CHARTS:
+                if maintenance_stop_requested():
+                    return
                 cutoff_date = _chart_start_date(chart_name, latest_chart_date)
                 with get_session() as session:
                     state = session.exec(
@@ -482,6 +680,8 @@ async def chart_scrape_loop():
                 total_updates = 0
                 total_raw = 0
                 for chart_date in dates_to_scan:
+                    if maintenance_stop_requested():
+                        return
                     try:
                         entries = await asyncio.to_thread(
                             fetch_chart_entries, chart_name, chart_date
@@ -549,6 +749,8 @@ async def chart_match_loop():
     """Periodic job: apply stored chart rows to current track library."""
     create_db_and_tables()
     while True:
+        if maintenance_stop_requested():
+            return
         try:
             with get_session() as session:
                 artists = session.exec(select(Artist.id, Artist.name)).all()
@@ -561,6 +763,8 @@ async def chart_match_loop():
             total_updates = 0
             total_dates = 0
             for chart_source, chart_name in _BILLBOARD_CHARTS:
+                if maintenance_stop_requested():
+                    return
                 with get_session() as session:
                     raw_rows = session.exec(
                         select(
@@ -578,6 +782,8 @@ async def chart_match_loop():
 
                 entries_by_date: dict[date, list[dict]] = {}
                 for chart_date, rank, title, artist in raw_rows:
+                    if maintenance_stop_requested():
+                        return
                     entries_by_date.setdefault(chart_date, []).append(
                         {"rank": rank, "title": title, "artist": artist}
                     )
@@ -587,6 +793,8 @@ async def chart_match_loop():
 
                 with get_session() as session:
                     for chart_date, entries in entries_by_date.items():
+                        if maintenance_stop_requested():
+                            return
                         total_updates += _apply_chart_entries(
                             session,
                             entries,

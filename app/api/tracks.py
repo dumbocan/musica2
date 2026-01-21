@@ -6,12 +6,14 @@ import asyncio
 from datetime import datetime, date
 from typing import List
 import re
+import json
+import ast
 from pathlib import Path as FsPath
 import logging
 
 from fastapi import APIRouter, Path, HTTPException, Query, Request, Depends
 from pydantic import BaseModel
-from sqlalchemy import func, or_, exists, and_
+from sqlalchemy import func, or_, exists, and_, desc
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from ..core.db import get_session, SessionDep
@@ -30,6 +32,7 @@ from ..crud import update_track_lastfm, update_track_spotify_data, record_play
 from ..core.lastfm import lastfm_client
 from ..core.spotify import spotify_client
 from ..core.time_utils import utc_now
+from ..core.image_proxy import proxy_image_list
 from ..services.billboard import (
     extract_primary_artist,
     normalize_artist_name,
@@ -40,6 +43,12 @@ from sqlmodel import select
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tracks", tags=["tracks"])
+
+_SPOTIFY_ID_RE = re.compile(r"^[A-Za-z0-9]{22}$")
+
+
+def _is_spotify_id(value: str) -> bool:
+    return bool(_SPOTIFY_ID_RE.fullmatch(value))
 
 
 class TrackResolveRequest(BaseModel):
@@ -850,9 +859,12 @@ def get_recent_play_history(
 
 @router.get("/recommendations")
 async def get_track_recommendations(
+    request: Request,
     seed_tracks: str | None = Query(None, description="Comma-separated Spotify track IDs"),
     seed_artists: str | None = Query(None, description="Comma-separated Spotify artist IDs"),
     limit: int = Query(20, ge=1, le=50, description="Number of recommendations"),
+    mode: str = Query("hybrid", pattern="^(hybrid|local|spotify)$"),
+    session: AsyncSession = Depends(SessionDep),
 ) -> dict:
     """Get Spotify track recommendations based on seed tracks/artists."""
     from ..core.config import settings
@@ -860,26 +872,45 @@ async def get_track_recommendations(
     artist_ids = [a for a in (seed_artists or "").split(",") if a]
     if not track_ids and not artist_ids:
         raise HTTPException(status_code=400, detail="Missing seed_tracks or seed_artists")
-    if not settings.SPOTIFY_CLIENT_ID or not settings.SPOTIFY_CLIENT_SECRET:
-        raise HTTPException(status_code=503, detail="Spotify credentials not configured")
-    track_ids = list(dict.fromkeys(track_ids))[:5]
-    artist_ids = list(dict.fromkeys(artist_ids))[:5]
+    user_id = getattr(request.state, "user_id", None) if request else None
+    local_payload = await _hybrid_local_recommendations(session, track_ids, artist_ids, limit, user_id)
+    local_tracks = local_payload.get("tracks", [])
+    if mode == "hybrid" and len(local_tracks) >= limit:
+        return {"tracks": local_tracks[:limit], "artists": []}
+    spotify_track_ids = [track_id for track_id in track_ids if _is_spotify_id(track_id)]
+    spotify_artist_ids = [artist_id for artist_id in artist_ids if _is_spotify_id(artist_id)]
+    if mode == "local" or not settings.SPOTIFY_CLIENT_ID or not settings.SPOTIFY_CLIENT_SECRET:
+        return local_payload
+    if not spotify_track_ids and not spotify_artist_ids:
+        return local_payload
+    spotify_track_ids = list(dict.fromkeys(spotify_track_ids))[:5]
+    spotify_artist_ids = list(dict.fromkeys(spotify_artist_ids))[:5]
     try:
-        return await spotify_client.get_recommendations(
-            seed_tracks=track_ids or None,
-            seed_artists=artist_ids or None,
-            limit=limit,
+        spotify_payload = await asyncio.wait_for(
+            spotify_client.get_recommendations(
+                seed_tracks=spotify_track_ids or None,
+                seed_artists=spotify_artist_ids or None,
+                limit=min(50, max(limit * 2, limit)),
+            ),
+            timeout=8.0,
         )
+        spotify_tracks = spotify_payload.get("tracks", [])
+        if mode == "spotify":
+            return {"tracks": spotify_tracks[:limit], "artists": spotify_payload.get("artists", [])}
+        if not spotify_tracks:
+            return local_payload
+        combined = _merge_hybrid_recommendations(local_tracks, spotify_tracks, limit)
+        return {"tracks": combined, "artists": spotify_payload.get("artists", [])}
     except Exception as exc:
         logger.warning("[tracks/recommendations] Spotify failed: %s", exc)
 
     # Fallback: derive artists and search their top tracks via Spotify search
     try:
         artist_seeds: list[str] = []
-        if artist_ids:
-            artist_seeds = artist_ids
+        if spotify_artist_ids:
+            artist_seeds = spotify_artist_ids
         else:
-            for track_id in track_ids:
+            for track_id in spotify_track_ids:
                 track_data = await spotify_client.get_track(track_id)
                 if not track_data:
                     continue
@@ -907,11 +938,394 @@ async def get_track_recommendations(
                     continue
                 seen.add(track_id)
                 unique_tracks.append(track)
+            if local_tracks:
+                return local_payload
             return {"tracks": unique_tracks[:limit], "artists": []}
     except Exception as fallback_exc:
         logger.warning("[tracks/recommendations] fallback failed: %s", fallback_exc)
 
-    raise HTTPException(status_code=502, detail="Spotify recommendations failed")
+    if mode == "spotify":
+        return {"tracks": [], "artists": []}
+    return local_payload
+
+
+def _parse_images_field(raw) -> list:
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return raw
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        try:
+            return ast.literal_eval(raw)
+        except (ValueError, SyntaxError):
+            return []
+
+
+def _parse_genres_field(raw) -> list:
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [g.strip() for g in raw if isinstance(g, str) and g.strip()]
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [g.strip() for g in parsed if isinstance(g, str) and g.strip()]
+    except (json.JSONDecodeError, TypeError):
+        try:
+            parsed = ast.literal_eval(raw)
+            if isinstance(parsed, list):
+                return [g.strip() for g in parsed if isinstance(g, str) and g.strip()]
+        except (ValueError, SyntaxError):
+            return []
+    if isinstance(raw, str) and "," in raw:
+        return [g.strip() for g in raw.split(",") if g.strip()]
+    return []
+
+
+def _track_to_recommendation_payload(track: Track, artist: Artist | None, album: Album | None) -> dict:
+    album_payload = None
+    if album:
+        album_payload = {
+            "id": album.spotify_id or str(album.id),
+            "name": album.name,
+            "release_date": album.release_date,
+            "images": proxy_image_list(_parse_images_field(album.images), size=384),
+        }
+    artist_payload = []
+    if artist:
+        artist_payload.append({
+            "id": artist.spotify_id or str(artist.id),
+            "name": artist.name,
+            "images": proxy_image_list(_parse_images_field(artist.images), size=384),
+            "genres": _parse_genres_field(artist.genres),
+            "popularity": artist.popularity or 0,
+            "followers": {"total": artist.followers or 0},
+        })
+    payload = {
+        "id": track.spotify_id or str(track.id),
+        "name": track.name,
+        "duration_ms": track.duration_ms,
+        "popularity": track.popularity,
+        "preview_url": track.preview_url,
+        "artists": artist_payload,
+        "album": album_payload or {},
+    }
+    if track.external_url:
+        payload["external_urls"] = {"spotify": track.external_url}
+    return payload
+
+
+async def _local_track_recommendations(
+    session: AsyncSession,
+    seed_track_ids: list[str],
+    seed_artist_ids: list[str],
+    limit: int,
+) -> dict:
+    artist_ids: set[int] = set()
+    track_seed_ids: set[int] = set()
+
+    if seed_track_ids:
+        spotify_seeds = [track_id for track_id in seed_track_ids if _is_spotify_id(track_id)]
+        local_seeds = [
+            int(track_id)
+            for track_id in seed_track_ids
+            if track_id.isdigit()
+        ]
+        if spotify_seeds:
+            rows = (await session.exec(
+                select(Track.id, Track.artist_id)
+                .where(Track.spotify_id.in_(spotify_seeds))
+            )).all()
+            for track_id, artist_id in rows:
+                if track_id:
+                    track_seed_ids.add(track_id)
+                if artist_id:
+                    artist_ids.add(artist_id)
+        if local_seeds:
+            rows = (await session.exec(
+                select(Track.id, Track.artist_id)
+                .where(Track.id.in_(local_seeds))
+            )).all()
+            for track_id, artist_id in rows:
+                if track_id:
+                    track_seed_ids.add(track_id)
+                if artist_id:
+                    artist_ids.add(artist_id)
+
+    if seed_artist_ids:
+        spotify_artist_seeds = [
+            artist_id for artist_id in seed_artist_ids if _is_spotify_id(artist_id)
+        ]
+        local_artist_seeds = [
+            int(artist_id)
+            for artist_id in seed_artist_ids
+            if artist_id.isdigit()
+        ]
+        if spotify_artist_seeds:
+            artist_rows = (await session.exec(
+                select(Artist.id)
+                .where(Artist.spotify_id.in_(spotify_artist_seeds))
+            )).all()
+            for artist_id in artist_rows:
+                if artist_id:
+                    artist_ids.add(artist_id)
+        if local_artist_seeds:
+            local_rows = (await session.exec(
+                select(Artist.id)
+                .where(Artist.id.in_(local_artist_seeds))
+            )).all()
+            for artist_id in local_rows:
+                if artist_id:
+                    artist_ids.add(artist_id)
+
+    if not artist_ids:
+        return {"tracks": [], "artists": []}
+
+    candidate_rows = (await session.exec(
+        select(Track, Artist, Album)
+        .join(Artist, Track.artist_id == Artist.id)
+        .outerjoin(Album, Track.album_id == Album.id)
+        .where(Track.artist_id.in_(artist_ids))
+        .order_by(desc(Track.popularity), Track.id.asc())
+        .limit(limit * 4)
+    )).all()
+
+    tracks = []
+    seen = set()
+    for track, artist, album in candidate_rows:
+        if track.id in track_seed_ids:
+            continue
+        rec_id = track.spotify_id or str(track.id)
+        if rec_id in seen:
+            continue
+        seen.add(rec_id)
+        tracks.append(_track_to_recommendation_payload(track, artist, album))
+        if len(tracks) >= limit:
+            break
+
+    return {"tracks": tracks, "artists": []}
+
+
+def _artist_key_from_payload(payload: dict) -> str:
+    artists = payload.get("artists") or []
+    if artists and isinstance(artists[0], dict):
+        return artists[0].get("id") or artists[0].get("name") or "unknown"
+    if artists and isinstance(artists[0], str):
+        return artists[0]
+    return "unknown"
+
+
+def _dedupe_tracks(tracks: list[dict]) -> list[dict]:
+    seen = set()
+    unique = []
+    for track in tracks:
+        track_id = track.get("id")
+        if not track_id or track_id in seen:
+            continue
+        seen.add(track_id)
+        unique.append(track)
+    return unique
+
+
+def _apply_artist_diversity(tracks: list[dict], limit: int, max_per_artist: int) -> list[dict]:
+    counts: dict[str, int] = {}
+    output: list[dict] = []
+    for track in tracks:
+        key = _artist_key_from_payload(track)
+        if counts.get(key, 0) >= max_per_artist:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+        output.append(track)
+        if len(output) >= limit:
+            break
+    return output
+
+
+def _merge_hybrid_recommendations(local_tracks: list[dict], spotify_tracks: list[dict], limit: int) -> list[dict]:
+    local = _dedupe_tracks(local_tracks)
+    spotify = _dedupe_tracks(spotify_tracks)
+    interleaved: list[dict] = []
+    li = si = 0
+    while li < len(local) or si < len(spotify):
+        if li < len(local):
+            interleaved.append(local[li])
+            li += 1
+        if si < len(spotify):
+            interleaved.append(spotify[si])
+            si += 1
+        if len(interleaved) >= limit * 3:
+            break
+    diversified = _apply_artist_diversity(interleaved, limit, max_per_artist=2)
+    if len(diversified) >= limit:
+        return diversified
+
+    relaxed = _apply_artist_diversity(_dedupe_tracks(local + spotify), limit, max_per_artist=4)
+    if len(relaxed) >= limit:
+        return relaxed[:limit]
+
+    remaining = _dedupe_tracks(local + spotify)
+    seen = {track.get("id") for track in relaxed}
+    for track in remaining:
+        track_id = track.get("id")
+        if not track_id or track_id in seen:
+            continue
+        relaxed.append(track)
+        if len(relaxed) >= limit:
+            break
+    return relaxed[:limit]
+
+
+async def _resolve_seed_artist_ids(
+    session: AsyncSession,
+    seed_track_ids: list[str],
+    seed_artist_ids: list[str],
+) -> tuple[set[int], set[int]]:
+    artist_ids: set[int] = set()
+    track_seed_ids: set[int] = set()
+
+    if seed_track_ids:
+        spotify_seeds = [track_id for track_id in seed_track_ids if _is_spotify_id(track_id)]
+        local_seeds = [
+            int(track_id)
+            for track_id in seed_track_ids
+            if track_id.isdigit()
+        ]
+        if spotify_seeds:
+            rows = (await session.exec(
+                select(Track.id, Track.artist_id)
+                .where(Track.spotify_id.in_(spotify_seeds))
+            )).all()
+            for track_id, artist_id in rows:
+                if track_id:
+                    track_seed_ids.add(track_id)
+                if artist_id:
+                    artist_ids.add(artist_id)
+        if local_seeds:
+            rows = (await session.exec(
+                select(Track.id, Track.artist_id)
+                .where(Track.id.in_(local_seeds))
+            )).all()
+            for track_id, artist_id in rows:
+                if track_id:
+                    track_seed_ids.add(track_id)
+                if artist_id:
+                    artist_ids.add(artist_id)
+
+    if seed_artist_ids:
+        spotify_artist_seeds = [
+            artist_id for artist_id in seed_artist_ids if _is_spotify_id(artist_id)
+        ]
+        local_artist_seeds = [
+            int(artist_id)
+            for artist_id in seed_artist_ids
+            if artist_id.isdigit()
+        ]
+        if spotify_artist_seeds:
+            artist_rows = (await session.exec(
+                select(Artist.id)
+                .where(Artist.spotify_id.in_(spotify_artist_seeds))
+            )).all()
+            for artist_id in artist_rows:
+                if artist_id:
+                    artist_ids.add(artist_id)
+        if local_artist_seeds:
+            local_rows = (await session.exec(
+                select(Artist.id)
+                .where(Artist.id.in_(local_artist_seeds))
+            )).all()
+            for artist_id in local_rows:
+                if artist_id:
+                    artist_ids.add(artist_id)
+
+    return artist_ids, track_seed_ids
+
+
+async def _hybrid_local_recommendations(
+    session: AsyncSession,
+    seed_track_ids: list[str],
+    seed_artist_ids: list[str],
+    limit: int,
+    user_id: int | None,
+) -> dict:
+    artist_ids, track_seed_ids = await _resolve_seed_artist_ids(session, seed_track_ids, seed_artist_ids)
+    candidate_artist_ids: set[int] = set(artist_ids)
+
+    if user_id:
+        fav_artist_rows = (await session.exec(
+            select(UserFavorite.artist_id)
+            .where(UserFavorite.user_id == user_id)
+            .where(UserFavorite.artist_id.is_not(None))
+        )).all()
+        for row in fav_artist_rows:
+            if isinstance(row, int):
+                candidate_artist_ids.add(row)
+            elif row:
+                candidate_artist_ids.add(row[0])
+
+        fav_track_rows = (await session.exec(
+            select(Track.artist_id)
+            .join(UserFavorite, UserFavorite.track_id == Track.id)
+            .where(UserFavorite.user_id == user_id)
+        )).all()
+        for row in fav_track_rows:
+            if isinstance(row, int):
+                candidate_artist_ids.add(row)
+            elif row:
+                candidate_artist_ids.add(row[0])
+
+        play_rows = (await session.exec(
+            select(Track.artist_id, func.count(PlayHistory.id))
+            .join(PlayHistory, PlayHistory.track_id == Track.id)
+            .where(PlayHistory.user_id == user_id)
+            .group_by(Track.artist_id)
+            .order_by(desc(func.count(PlayHistory.id)))
+            .limit(12)
+        )).all()
+        for artist_id, _count in play_rows:
+            if artist_id:
+                candidate_artist_ids.add(artist_id)
+
+    if not candidate_artist_ids:
+        return {"tracks": [], "artists": []}
+
+    played_subquery = None
+    if user_id:
+        played_subquery = select(PlayHistory.track_id).where(PlayHistory.user_id == user_id)
+
+    base_query = (
+        select(Track, Artist, Album)
+        .join(Artist, Track.artist_id == Artist.id)
+        .outerjoin(Album, Track.album_id == Album.id)
+        .where(Track.artist_id.in_(candidate_artist_ids))
+        .order_by(desc(Track.popularity), Track.id.asc())
+    )
+    query = base_query
+    if played_subquery is not None:
+        query = query.where(~Track.id.in_(played_subquery))
+
+    candidate_rows = (await session.exec(query.limit(limit * 6))).all()
+    if not candidate_rows and played_subquery is not None:
+        candidate_rows = (await session.exec(base_query.limit(limit * 6))).all()
+
+    tracks = []
+    seen = set()
+    for track, artist, album in candidate_rows:
+        if track.id in track_seed_ids:
+            continue
+        rec_id = track.spotify_id or str(track.id)
+        if rec_id in seen:
+            continue
+        seen.add(rec_id)
+        tracks.append(_track_to_recommendation_payload(track, artist, album))
+
+    diversified = _apply_artist_diversity(tracks, limit, max_per_artist=2)
+    if len(diversified) < limit:
+        diversified = _apply_artist_diversity(tracks, limit, max_per_artist=4)
+        if len(diversified) < limit:
+            diversified = _dedupe_tracks(tracks)[:limit]
+    return {"tracks": diversified, "artists": []}
 
 
 @router.get("/id/{track_id}")

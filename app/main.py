@@ -16,21 +16,17 @@ from .api.youtube import router as youtube_router
 from .api.auth import router as auth_router
 from .api.favorites import router as favorites_router
 from .api.images import router as images_router
+from .api.maintenance import router as maintenance_router
 from .core.config import settings
 from .core.db import get_session
-from .core.maintenance import (
-    daily_refresh_loop,
-    genre_backfill_loop,
-    full_library_refresh_loop,
-    chart_scrape_loop,
-    chart_match_loop,
-)
+from .core.maintenance import start_maintenance_background
 from .core.security import get_current_user_id_from_token
+from .core.log_buffer import install_log_buffer
 from .models.base import User
 from sqlmodel import select
-import asyncio
 
 app = FastAPI(title="Audio2 API", description="Personal Music API Backend")
+install_log_buffer()
 
 app.add_middleware(
     CORSMiddleware,
@@ -109,7 +105,13 @@ async def require_authenticated_user(request: Request, call_next):
 
         request.state.user_id = user_id
 
-    return await call_next(request)
+    response = await call_next(request)
+    if settings.MAINTENANCE_START_ON_FIRST_REQUEST:
+        start_maintenance_background(
+            delay_seconds=settings.MAINTENANCE_STARTUP_DELAY_SECONDS,
+            stagger_seconds=settings.MAINTENANCE_STAGGER_SECONDS,
+        )
+    return response
 
 app.include_router(health_router)
 app.include_router(artists_router)
@@ -125,12 +127,14 @@ app.include_router(youtube_router)
 app.include_router(auth_router)
 app.include_router(favorites_router)
 app.include_router(images_router)
+app.include_router(maintenance_router)
 
 
 @app.on_event("startup")
-async def _start_maintenance():
-    asyncio.create_task(daily_refresh_loop())
-    asyncio.create_task(genre_backfill_loop())
-    asyncio.create_task(full_library_refresh_loop())
-    asyncio.create_task(chart_scrape_loop())
-    asyncio.create_task(chart_match_loop())
+async def _start_maintenance_on_boot():
+    if settings.MAINTENANCE_START_ON_FIRST_REQUEST:
+        return
+    start_maintenance_background(
+        delay_seconds=settings.MAINTENANCE_STARTUP_DELAY_SECONDS,
+        stagger_seconds=settings.MAINTENANCE_STAGGER_SECONDS,
+    )

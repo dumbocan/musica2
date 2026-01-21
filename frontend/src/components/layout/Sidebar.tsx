@@ -167,6 +167,7 @@ export function Sidebar() {
                 </div>
               </div>
             )}
+            <div style={{ marginTop: 12 }} />
             Audio2 Frontend · v0.1.0
           </div>
         </div>

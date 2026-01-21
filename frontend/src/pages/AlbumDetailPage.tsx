@@ -42,6 +42,7 @@ type TrackChartStat = {
 type YoutubeAvailability =
   | { status: 'pending' }
   | { status: 'available'; videoId: string; videoUrl: string; title?: string }
+  | { status: 'missing' }
   | { status: 'not_found' }
   | { status: 'error'; message?: string };
 type StreamUiState = { status: 'idle' | 'loading' | 'error'; message?: string };
@@ -300,27 +301,31 @@ export function AlbumDetailPage() {
         const data = res.data;
         if (!isMounted) return;
         setAlbum(data);
-        // Spotify returns tracks as items inside "tracks"
-        if (data?.tracks?.items) {
-          setTracks(data.tracks.items);
-        } else if (data?.tracks) {
-          setTracks(data.tracks);
+        const embeddedTracks = Array.isArray(data?.tracks?.items)
+          ? data.tracks.items
+          : Array.isArray(data?.tracks)
+            ? data.tracks
+            : null;
+        if (embeddedTracks) {
+          setTracks(embeddedTracks);
         } else {
           // Fallback: fetch tracks endpoint
           const tracksRes = await audio2Api.getAlbumTracks(spotifyId);
           if (!isMounted) return;
           setTracks(tracksRes.data || []);
         }
-        // Try to persist album to get local ID for favorites
-        try {
-          const saveRes = await audio2Api.saveAlbumToDb(spotifyId);
-          const albumId = saveRes.data?.album?.id;
-          if (albumId && isMounted) {
-            setLocalAlbumId(albumId);
-          }
-        } catch {
-          // best effort; ignore
-        }
+        // Persist album in the background to resolve local ID for favorites
+        void audio2Api
+          .saveAlbumToDb(spotifyId)
+          .then((saveRes) => {
+            const albumId = saveRes.data?.album?.id;
+            if (albumId && isMounted) {
+              setLocalAlbumId(albumId);
+            }
+          })
+          .catch(() => {
+            // best effort; ignore
+          });
       } catch (err: unknown) {
         if (!isMounted) return;
         const message =
@@ -776,7 +781,7 @@ export function AlbumDetailPage() {
                       </span>
                     ) : null}
                   </button>
-                  {youtubeInfo?.status === 'available' && (
+                  {youtubeInfo?.status === 'available' ? (
                     <span
                       title={youtubeInfo.title || 'Disponible para streaming en YouTube'}
                       style={{
@@ -795,7 +800,26 @@ export function AlbumDetailPage() {
                     >
                       ✓
                     </span>
-                  )}
+                  ) : youtubeInfo?.status === 'error' ? (
+                    <span
+                      title={youtubeInfo.message || 'Error consultando YouTube'}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        width: 24,
+                        height: 24,
+                        borderRadius: '50%',
+                        border: '2px solid rgba(250, 204, 21, 0.7)',
+                        color: '#facc15',
+                        fontWeight: 900,
+                        fontSize: 16,
+                        letterSpacing: 0.5,
+                      }}
+                    >
+                      !
+                    </span>
+                  ) : null}
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--muted)' }}>
                   {t.duration_ms ? `${Math.floor(t.duration_ms / 60000)}:${String(Math.floor((t.duration_ms % 60000) / 1000)).padStart(2, '0')}` : ''}

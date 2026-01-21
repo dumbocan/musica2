@@ -814,6 +814,9 @@ export function TracksPage() {
                     ? `#${track.chart_best_position}`
                     : null;
                   const chartDate = formatChartDate(track.chart_best_position_date);
+                  const youtubeStatus = track.youtube_status || '';
+                  const hasYoutube = !!track.youtube_video_id;
+                  const isYoutubeError = !hasYoutube && ['error', 'failed'].includes(youtubeStatus);
 
                   return (
                     <tr
@@ -876,7 +879,7 @@ export function TracksPage() {
                   </td>
                   <td style={cellStyle}>{formatDuration(track.duration_ms)}</td>
                   <td style={{ ...cellStyle, textAlign: 'center' }}>
-                    {track.youtube_video_id ? (
+                    {hasYoutube ? (
                       <span
                         title={`Disponible (${track.youtube_status || 'link'})`}
                         style={{
@@ -893,6 +896,24 @@ export function TracksPage() {
                         }}
                       >
                         ✓
+                      </span>
+                    ) : isYoutubeError ? (
+                      <span
+                        title="Error consultando YouTube"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          width: 24,
+                          height: 24,
+                          borderRadius: '50%',
+                          border: '2px solid rgba(250, 204, 21, 0.7)',
+                          color: '#facc15',
+                          fontWeight: 900,
+                          fontSize: 16,
+                        }}
+                      >
+                        !
                       </span>
                     ) : null}
                   </td>

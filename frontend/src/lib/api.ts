@@ -156,6 +156,24 @@ export const audio2Api = {
         limit: params.limit,
       },
     }),
+  getMaintenanceStatus: (params?: { start?: boolean }) => api.get('/maintenance/status', { params }),
+  startMaintenance: () => api.post('/maintenance/start'),
+  stopMaintenance: () => api.post('/maintenance/stop'),
+  auditLibrary: (params?: { fresh_days?: number; json?: boolean }) =>
+    api.post('/maintenance/audit', null, { params }),
+  backfillAlbumTracks: (params?: { mode?: 'missing' | 'incomplete' | 'both'; limit?: number; concurrency?: number }) =>
+    api.post('/maintenance/backfill-album-tracks', null, { params }),
+  backfillYoutubeLinks: (params?: { limit?: number; retry_failed?: boolean }) =>
+    api.post('/maintenance/backfill-youtube-links', null, { params }),
+  backfillChart: (params?: { chart_source?: string; chart_name?: string; weeks?: number; force_reset?: boolean }) =>
+    api.post('/maintenance/chart-backfill', null, { params }),
+  purgeArtist: (params: { spotify_id?: string; name?: string }) =>
+    api.post('/maintenance/purge-artist', null, { params: { ...params, confirm: true } }),
+  refreshMissingArtists: (params?: { limit?: number; use_spotify?: boolean; use_lastfm?: boolean }) =>
+    api.post('/artists/refresh-missing', null, { params }),
+  getMaintenanceLogs: (params?: { since_id?: number; limit?: number; scope?: 'all' | 'maintenance' | 'errors' }) =>
+    api.get('/maintenance/logs', { params }),
+  clearMaintenanceLogs: () => api.post('/maintenance/logs/clear'),
   getTrackChartStats: (spotifyTrackIds: string[]) =>
     api.get('/tracks/chart-stats', {
       params: { spotify_ids: spotifyTrackIds.join(',') },

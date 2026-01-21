@@ -6,6 +6,8 @@ export function YoutubeRequestCounter() {
 
   useEffect(() => {
     let isMounted = true;
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const pollIntervalMs = 5 * 60 * 1000;
     const load = async () => {
       try {
         const res = await audio2Api.getYoutubeUsage();
@@ -18,11 +20,34 @@ export function YoutubeRequestCounter() {
       }
     };
 
-    load();
-    const interval = setInterval(load, 30000);
+    const stopPolling = () => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+    };
+
+    const startPolling = () => {
+      if (!interval) {
+        interval = setInterval(load, pollIntervalMs);
+      }
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        load();
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    };
+
+    handleVisibility();
+    document.addEventListener('visibilitychange', handleVisibility);
     return () => {
       isMounted = false;
-      clearInterval(interval);
+      stopPolling();
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, []);
 
