@@ -59,6 +59,7 @@ export function ArtistsPage() {
   const [sortOption, setSortOption] = useState<'pop-desc' | 'pop-asc' | 'name-asc' | 'favorites'>('pop-desc');
   const apiSortOption = sortOption === 'favorites' ? 'pop-desc' : sortOption;
   const [genreFilter, setGenreFilter] = useState('');
+  const { isArtistsLoading, userId } = useApiStore();
   const {
     artists,
     isLoading,
@@ -69,7 +70,6 @@ export function ArtistsPage() {
     loadMore,
     reload,
   } = usePaginatedArtists({ limit: 200, sortOption: apiSortOption, userId });
-  const { isArtistsLoading, userId } = useApiStore();
   const navigate = useNavigate();
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const prefetchKeyRef = useRef('');

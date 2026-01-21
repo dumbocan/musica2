@@ -40,6 +40,7 @@ export function TracksPage() {
     missing_link: number;
     missing_file: number;
   } | null>(null);
+  const [favoriteTotal, setFavoriteTotal] = useState<number | null>(null);
   const [filteredTotal, setFilteredTotal] = useState<number | null>(null);
   const [nextAfter, setNextAfter] = useState<number | null>(null);
   const [hasMore, setHasMore] = useState<boolean>(false);
@@ -158,20 +159,13 @@ export function TracksPage() {
     return { collapsedTracks: selected, groupIds: idsMap, groupFavorites: favoriteMap };
   }, [tracks, favoriteTrackIds, groupKeyForTrack]);
 
-  const groupFavoriteCount = useMemo(() => {
-    let count = 0;
-    groupFavorites.forEach((value) => {
-      if (value) count += 1;
-    });
-    return count;
-  }, [groupFavorites]);
-
   const toggleGroupFavorite = useCallback(
     async (track: TrackOverview) => {
       if (!effectiveTrackUserId) return;
       const key = groupKeyForTrack(track);
       const ids = groupIds.get(key) || [track.track_id];
       const shouldRemove = ids.some((id) => favoriteTrackIds.has(id));
+      const removeCount = ids.filter((id) => favoriteTrackIds.has(id)).length;
       try {
         if (shouldRemove) {
           await Promise.all(ids.map((id) => audio2Api.removeFavorite('track', id, effectiveTrackUserId)));
@@ -180,6 +174,9 @@ export function TracksPage() {
             ids.forEach((id) => next.delete(id));
             return next;
           });
+          setFavoriteTotal((prev) =>
+            prev === null ? prev : Math.max(prev - removeCount, 0)
+          );
         } else {
           await Promise.all(ids.map((id) => audio2Api.addFavorite('track', id, effectiveTrackUserId)));
           setFavoriteTrackIds((prev) => {
@@ -187,6 +184,9 @@ export function TracksPage() {
             ids.forEach((id) => next.add(id));
             return next;
           });
+          setFavoriteTotal((prev) =>
+            prev === null ? prev : prev + ids.length
+          );
         }
       } catch (err) {
         console.error('Failed to toggle favorite group', err);
@@ -209,14 +209,11 @@ export function TracksPage() {
           verify_files: false,
           offset: 0,
           limit,
-          include_summary: !isFiltered,
+          include_summary: false,
           filter: isFiltered && filter !== 'all' ? filter : undefined,
           search: isFiltered ? activeSearch : undefined,
         });
         setTracks(dedupeTracks(response.data.items || []));
-        if (!isFiltered) {
-          setSummary(response.data.summary || null);
-        }
         setFilteredTotal(response.data.filtered_total ?? null);
         setHasMore(Boolean(response.data.has_more));
         setNextAfter(response.data.next_after ?? null);
@@ -238,6 +235,57 @@ export function TracksPage() {
     const timeout = setTimeout(load, activeSearch.length > 0 ? 250 : 0);
     return () => clearTimeout(timeout);
   }, [filter, limit, search]);
+
+  useEffect(() => {
+    if (!hasLoadedOnce) return;
+    let cancelled = false;
+    const loadSummary = async () => {
+      try {
+        const response = await audio2Api.getTracksOverview({
+          verify_files: false,
+          offset: 0,
+          limit: 1,
+          include_summary: true,
+        });
+        if (cancelled) return;
+        setSummary(response.data.summary || null);
+      } catch {
+        if (cancelled) return;
+      }
+    };
+    const timer = setTimeout(loadSummary, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [hasLoadedOnce]);
+
+  useEffect(() => {
+    if (!hasLoadedOnce) return;
+    if (!effectiveTrackUserId) return;
+    let cancelled = false;
+    const loadFavoriteTotal = async () => {
+      try {
+        const response = await audio2Api.getTracksOverview({
+          verify_files: false,
+          limit: 1,
+          include_summary: false,
+          filter: 'favorites',
+        });
+        if (cancelled) return;
+        if (typeof response.data.filtered_total === 'number') {
+          setFavoriteTotal(response.data.filtered_total);
+        }
+      } catch {
+        if (cancelled) return;
+      }
+    };
+    const timer = setTimeout(loadFavoriteTotal, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [effectiveTrackUserId, hasLoadedOnce]);
 
   useEffect(() => {
     if (!lastDownloadedVideo) return;
@@ -312,45 +360,17 @@ export function TracksPage() {
   }, [loadingMore, hasMore, search, filter, limit, nextAfter, tracks]);
 
   const stats = useMemo(() => {
-    if (summary) {
-      return {
-        total: summary.total,
-        withLink: summary.with_link,
-        withFile: summary.with_file,
-        missingLink: summary.missing_link,
-        missingFile: summary.missing_file,
-      };
-    }
-    const total = collapsedTracks.length;
-    const withLink = collapsedTracks.filter((t) => !!t.youtube_video_id).length;
-    const withFile = collapsedTracks.filter((t) => t.local_file_exists).length;
-    const missingLink = total - withLink;
-    const missingFile = total - withFile;
-    return { total, withLink, withFile, missingLink, missingFile };
-  }, [collapsedTracks, summary]);
+    if (!summary) return null;
+    return {
+      total: summary.total,
+      withLink: summary.with_link,
+      withFile: summary.with_file,
+      missingLink: summary.missing_link,
+      missingFile: summary.missing_file,
+    };
+  }, [summary]);
 
-  const filteredTracks = useMemo(() => {
-    const normalizedQuery = normalizeSearchText(search);
-    return collapsedTracks.filter((track) => {
-      const text = normalizeSearchText(`${track.track_name || ''} ${track.artist_name || ''} ${track.album_name || ''}`);
-      const passesSearch = normalizedQuery.length === 0 || text.includes(normalizedQuery);
-
-      const hasLink = !!track.youtube_video_id;
-      const hasFile = track.local_file_exists;
-      const groupKey = groupKeyForTrack(track);
-      const isFavoriteGroup = groupFavorites.get(groupKey) ?? favoriteTrackIds.has(track.track_id);
-
-      const passesFilter =
-        filter === 'all' ||
-        (filter === 'favorites' && isFavoriteGroup) ||
-        (filter === 'withLink' && hasLink) ||
-        (filter === 'noLink' && !hasLink) ||
-        (filter === 'hasFile' && hasFile) ||
-        (filter === 'missingFile' && !hasFile);
-
-      return passesSearch && passesFilter;
-    });
-  }, [collapsedTracks, search, filter, favoriteTrackIds, groupFavorites, groupKeyForTrack]);
+  const filteredTracks = useMemo(() => collapsedTracks, [collapsedTracks]);
   const buildQueueItems = useCallback(
     (override?: { trackKey: string; videoId: string }) =>
       filteredTracks
@@ -464,29 +484,33 @@ export function TracksPage() {
   const isSearchActive = search.trim().length > 0;
   const isFilteredView = filter !== 'all' || isSearchActive;
   const filterTotal = useMemo(() => {
-    if (isFilteredView && filteredTotal !== null) {
-      return filteredTotal;
+    if (isFilteredView) {
+      if (filteredTotal !== null) return filteredTotal;
+      if (filter === 'favorites' && favoriteTotal !== null) return favoriteTotal;
+      if (summary) {
+        switch (filter) {
+          case 'withLink':
+            return summary.with_link;
+          case 'noLink':
+            return summary.missing_link;
+          case 'hasFile':
+            return summary.with_file;
+          case 'missingFile':
+            return summary.missing_file;
+          default:
+            break;
+        }
+      }
+      return null;
     }
-    if (!summary || isSearchActive) return filteredTracks.length;
-    switch (filter) {
-      case 'favorites':
-        return groupFavoriteCount;
-      case 'withLink':
-        return summary.with_link;
-      case 'noLink':
-        return summary.missing_link;
-      case 'hasFile':
-        return summary.with_file;
-      case 'missingFile':
-        return summary.missing_file;
-      default:
-      return summary.total;
-    }
-  }, [filter, filteredTracks.length, filteredTotal, isFilteredView, isSearchActive, summary, groupFavoriteCount]);
+    return summary ? summary.total : null;
+  }, [filter, filteredTotal, favoriteTotal, isFilteredView, summary]);
+  const totalKnown = filterTotal !== null;
+  const displayTotal = totalKnown ? filterTotal : filteredTracks.length;
   const prefetchTarget = useMemo(() => Math.max(80, Math.floor(limit * 0.8)), [limit]);
   const targetFilteredCount = useMemo(() => {
     if (!isFilteredView) return 0;
-    if (filterTotal > 0) return Math.min(filterTotal, prefetchTarget);
+    if (filterTotal && filterTotal > 0) return Math.min(filterTotal, prefetchTarget);
     return prefetchTarget;
   }, [filterTotal, isFilteredView, prefetchTarget]);
   const progressCount = useMemo(() => {
@@ -496,7 +520,7 @@ export function TracksPage() {
     );
     return lastVisible;
   }, [containerHeight, filteredTracks.length, rowHeight, scrollTop]);
-  const progressPercent = filterTotal > 0 ? Math.min((progressCount / filterTotal) * 100, 100) : 0;
+  const progressPercent = filterTotal && filterTotal > 0 ? Math.min((progressCount / filterTotal) * 100, 100) : 0;
 
   const shouldPrefetchMore = useMemo(() => {
     const isFilteredView = filter !== 'all' || search.trim().length > 0;
@@ -668,14 +692,14 @@ export function TracksPage() {
     <div className="space-y-4">
       <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-          <SummaryCard label="Total pistas" value={stats.total} />
-          <SummaryCard label="Favoritos" value={groupFavoriteCount} />
-            <SummaryCard label="Con link YouTube" value={stats.withLink} accent />
-            <SummaryCard label="Con MP3 local" value={stats.withFile} accent />
-            <SummaryCard label="Pendiente link" value={stats.missingLink} muted />
-            <SummaryCard label="Pendiente MP3" value={stats.missingFile} muted />
-          </div>
+          <SummaryCard label="Total pistas" value={stats?.total ?? null} />
+          <SummaryCard label="Favoritos" value={favoriteTotal ?? null} />
+          <SummaryCard label="Con link YouTube" value={stats?.withLink ?? null} accent />
+          <SummaryCard label="Con MP3 local" value={stats?.withFile ?? null} accent />
+          <SummaryCard label="Pendiente link" value={stats?.missingLink ?? null} muted />
+          <SummaryCard label="Pendiente MP3" value={stats?.missingFile ?? null} muted />
         </div>
+      </div>
 
       <div
         className="card"
@@ -733,8 +757,12 @@ export function TracksPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div style={{ color: 'var(--muted)', fontSize: 12 }}>
               {isFilteredView
-                ? `Mostrando ${filteredTracks.length} de ${filterTotal} pistas (filtrado).`
-                : `Mostrando ${tracks.length} de ${stats.total} pistas.`}
+                ? totalKnown
+                  ? `Mostrando ${filteredTracks.length} de ${displayTotal} pistas (filtrado).`
+                  : `Mostrando ${filteredTracks.length} pistas (filtrado).`
+                : totalKnown
+                  ? `Mostrando ${tracks.length} de ${displayTotal} pistas.`
+                  : `Mostrando ${tracks.length} pistas.`}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, color: 'var(--muted)' }}>
               <div
@@ -757,7 +785,7 @@ export function TracksPage() {
                 />
               </div>
               <span>
-                {progressCount}/{filterTotal}
+                {progressCount}/{totalKnown ? displayTotal : '—'}
               </span>
             </div>
           </div>
@@ -996,7 +1024,7 @@ export function TracksPage() {
   );
 }
 
-function SummaryCard({ label, value, accent, muted }: { label: string; value: number; accent?: boolean; muted?: boolean }) {
+function SummaryCard({ label, value, accent, muted }: { label: string; value: number | null; accent?: boolean; muted?: boolean }) {
   const background = accent ? 'rgba(5, 247, 165, 0.12)' : muted ? 'rgba(255, 255, 255, 0.04)' : 'var(--panel)';
   const borderColor = accent ? 'rgba(5, 247, 165, 0.4)' : 'var(--border)';
 
@@ -1015,7 +1043,7 @@ function SummaryCard({ label, value, accent, muted }: { label: string; value: nu
       }}
     >
       <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--muted)', letterSpacing: 0.5 }}>{label}</div>
-      <div style={{ fontSize: 20, fontWeight: 700 }}>{value}</div>
+      <div style={{ fontSize: 20, fontWeight: 700 }}>{value ?? '—'}</div>
     </div>
   );
 }

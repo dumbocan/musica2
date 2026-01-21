@@ -23,6 +23,7 @@ from ..models.base import (
     Album,
     YouTubeDownload,
     UserFavorite,
+    FavoriteTargetType,
     UserHiddenArtist,
     TrackChartStats,
     ChartEntryRaw,
@@ -458,6 +459,7 @@ def get_tracks_overview(
                 .join(Artist, Artist.id == Track.artist_id)
                 .outerjoin(Album, Album.id == Track.album_id)
                 .where(UserFavorite.user_id == user_id)
+                .where(UserFavorite.target_type == FavoriteTargetType.TRACK)
                 .order_by(UserFavorite.created_at.desc(), Track.id.asc())
             )
             if hidden_exists is not None:
@@ -467,6 +469,16 @@ def get_tracks_overview(
             else:
                 base_query = base_query.offset(offset)
             rows = session.exec(base_query.limit(limit + 1)).all()
+            favorite_total_query = (
+                select(func.count(func.distinct(Track.id)))
+                .join(UserFavorite, UserFavorite.track_id == Track.id)
+                .join(Artist, Artist.id == Track.artist_id)
+                .where(UserFavorite.user_id == user_id)
+                .where(UserFavorite.target_type == FavoriteTargetType.TRACK)
+            )
+            if hidden_exists is not None:
+                favorite_total_query = favorite_total_query.where(~hidden_exists)
+            favorite_total = session.exec(favorite_total_query).one()
 
         raw_rows = rows
         has_more = len(raw_rows) > limit
@@ -488,14 +500,6 @@ def get_tracks_overview(
                 stats_rows = session.exec(
                     select(TrackChartStats).where(TrackChartStats.track_id.in_(track_ids))
                 ).all()
-                existing_ids = {row.track_id for row in stats_rows}
-                raw_cache: dict[str, list[ChartEntryRaw]] = {}
-                for track, artist, _ in track_rows:
-                    if track.id in existing_ids:
-                        continue
-                    stats_rows.extend(
-                        _compute_chart_stats_from_raw(session, track, artist.name if artist else None, raw_cache)
-                    )
             priority = {
                 "billboard-global-200": 0,
                 "hot-100": 1,
@@ -509,7 +513,8 @@ def get_tracks_overview(
                 next_rank = priority.get(row.chart_name, 99)
                 if next_rank < current_rank:
                     chart_stats_map[row.track_id] = row
-            best_date_map = _load_best_position_dates(session, list(chart_stats_map.keys()))
+            with get_session() as session:
+                best_date_map = _load_best_position_dates(session, list(chart_stats_map.keys()))
 
         items = []
         for track, artist, album in track_rows:
@@ -564,6 +569,7 @@ def get_tracks_overview(
             "limit": limit,
             "has_more": has_more,
             "next_after": next_after if has_more else None,
+            "filtered_total": int(favorite_total or 0),
         }
 
     with get_session() as session:
@@ -609,6 +615,7 @@ def get_tracks_overview(
                     select(1).where(
                         (UserFavorite.user_id == user_id)
                         & (UserFavorite.track_id == Track.id)
+                        & (UserFavorite.target_type == FavoriteTargetType.TRACK)
                     )
                 )
             if filter == "withLink":
@@ -669,6 +676,7 @@ def get_tracks_overview(
                         select(1).where(
                             (UserFavorite.user_id == user_id)
                             & (UserFavorite.track_id == Track.id)
+                            & (UserFavorite.target_type == FavoriteTargetType.TRACK)
                         )
                     )
                 if filter == "withLink":
@@ -704,14 +712,6 @@ def get_tracks_overview(
             stats_rows = session.exec(
                 select(TrackChartStats).where(TrackChartStats.track_id.in_(track_ids))
             ).all()
-            existing_ids = {row.track_id for row in stats_rows}
-            raw_cache: dict[str, list[ChartEntryRaw]] = {}
-            for track, artist, _ in track_rows:
-                if track.id in existing_ids:
-                    continue
-                stats_rows.extend(
-                    _compute_chart_stats_from_raw(session, track, artist.name if artist else None, raw_cache)
-                )
         priority = {
             "billboard-global-200": 0,
             "hot-100": 1,
@@ -725,7 +725,8 @@ def get_tracks_overview(
             next_rank = priority.get(row.chart_name, 99)
             if next_rank < current_rank:
                 chart_stats_map[row.track_id] = row
-        best_date_map = _load_best_position_dates(session, list(chart_stats_map.keys()))
+        with get_session() as session:
+            best_date_map = _load_best_position_dates(session, list(chart_stats_map.keys()))
 
     items = []
     for track, artist, album in track_rows:
