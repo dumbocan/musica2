@@ -60,6 +60,12 @@ class SpotifyClient:
         except ValueError:
             return None
 
+    def is_cooldown_active(self) -> bool:
+        return time.monotonic() < self._cooldown_until
+
+    def cooldown_remaining(self) -> float:
+        return max(0.0, self._cooldown_until - time.monotonic())
+
     async def _request(
         self,
         method: str,

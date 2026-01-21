@@ -551,6 +551,9 @@ async def full_library_refresh_loop():
                     return
                 if not artist.spotify_id:
                     continue
+                if spotify_client.is_cooldown_active():
+                    await asyncio.sleep(max(1.0, spotify_client.cooldown_remaining()))
+                    continue
                 local_album_count = album_counts.get(artist.id, 0)
                 needs_discography = local_album_count == 0
                 if not needs_discography:
@@ -565,12 +568,22 @@ async def full_library_refresh_loop():
                         if total is not None and total > local_album_count:
                             needs_discography = True
                     except Exception as exc:
-                        logger.info(
-                            "[maintenance] Spotify albums total check failed for %s: %r",
-                            artist.spotify_id,
-                            exc,
-                            exc_info=True,
-                        )
+                        is_timeout = isinstance(exc, (asyncio.TimeoutError, TimeoutError, asyncio.CancelledError))
+                        cause = getattr(exc, "__cause__", None)
+                        if isinstance(cause, asyncio.CancelledError):
+                            is_timeout = True
+                        if is_timeout:
+                            logger.debug(
+                                "[maintenance] Spotify albums total check timed out for %s",
+                                artist.spotify_id,
+                            )
+                        else:
+                            logger.info(
+                                "[maintenance] Spotify albums total check failed for %s: %r",
+                                artist.spotify_id,
+                                exc,
+                                exc_info=True,
+                            )
                 if needs_discography:
                     await save_artist_discography(artist.spotify_id)
                     backfilled += 1
