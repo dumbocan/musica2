@@ -108,7 +108,7 @@ function AppShell() {
   useEffect(() => {
     if (!isAuthenticated) return;
     let cancelled = false;
-    const loadStatus = async () => {
+    const timer = window.setTimeout(async () => {
       try {
         const res = await audio2Api.healthDetailed?.();
         if (!cancelled) {
@@ -119,10 +119,10 @@ function AppShell() {
           setServiceStatus((prev) => prev ?? null);
         }
       }
-    };
-    loadStatus();
+    }, 8000);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [isAuthenticated, setServiceStatus]);
 

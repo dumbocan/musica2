@@ -430,6 +430,123 @@ def get_tracks_overview(
             "missing_file": max(total - with_file, 0),
         }
 
+    if filter == "favorites" and not search_term and not include_summary:
+        user_id = getattr(request.state, "user_id", None)
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        with get_session() as session:
+            base_query = (
+                select(Track, Artist, Album)
+                .join(UserFavorite, UserFavorite.track_id == Track.id)
+                .join(Artist, Artist.id == Track.artist_id)
+                .outerjoin(Album, Album.id == Track.album_id)
+                .where(UserFavorite.user_id == user_id)
+                .order_by(UserFavorite.created_at.desc(), Track.id.asc())
+            )
+            if after_id is not None:
+                base_query = base_query.where(Track.id > after_id)
+            else:
+                base_query = base_query.offset(offset)
+            rows = session.exec(base_query.limit(limit + 1)).all()
+
+        raw_rows = rows
+        has_more = len(raw_rows) > limit
+        track_rows = raw_rows[:limit]
+        track_ids = [track.id for track, _, _ in track_rows]
+        spotify_ids = [track.spotify_id for track, _, _ in track_rows if track.spotify_id]
+        downloads = []
+        if spotify_ids:
+            with get_session() as session:
+                downloads = session.exec(
+                    select(YouTubeDownload).where(YouTubeDownload.spotify_track_id.in_(spotify_ids))
+                ).all()
+
+        download_map = _select_best_downloads(downloads)
+        chart_stats_map: dict[int, TrackChartStats] = {}
+        best_date_map: dict[tuple[int, str, str], date] = {}
+        if track_ids:
+            with get_session() as session:
+                stats_rows = session.exec(
+                    select(TrackChartStats).where(TrackChartStats.track_id.in_(track_ids))
+                ).all()
+                existing_ids = {row.track_id for row in stats_rows}
+                raw_cache: dict[str, list[ChartEntryRaw]] = {}
+                for track, artist, _ in track_rows:
+                    if track.id in existing_ids:
+                        continue
+                    stats_rows.extend(
+                        _compute_chart_stats_from_raw(session, track, artist.name if artist else None, raw_cache)
+                    )
+            priority = {
+                "billboard-global-200": 0,
+                "hot-100": 1,
+            }
+            for row in stats_rows:
+                current = chart_stats_map.get(row.track_id)
+                if not current:
+                    chart_stats_map[row.track_id] = row
+                    continue
+                current_rank = priority.get(current.chart_name, 99)
+                next_rank = priority.get(row.chart_name, 99)
+                if next_rank < current_rank:
+                    chart_stats_map[row.track_id] = row
+            best_date_map = _load_best_position_dates(session, list(chart_stats_map.keys()))
+
+        items = []
+        for track, artist, album in track_rows:
+            download = download_map.get(track.spotify_id) if track.spotify_id else None
+            youtube_video_id = (download.youtube_video_id or None) if download else None
+            youtube_status = download.download_status if download else None
+            youtube_url = f"https://www.youtube.com/watch?v={youtube_video_id}" if youtube_video_id else None
+            file_path = download.download_path if download else None
+            if file_path:
+                file_exists = FsPath(file_path).exists() if verify_files else True
+            else:
+                file_exists = False
+            if file_exists:
+                youtube_status = "completed"
+            elif youtube_video_id and not youtube_status:
+                youtube_status = "link_found"
+            chart_stats = chart_stats_map.get(track.id)
+            best_date = None
+            if chart_stats:
+                best_date = best_date_map.get(
+                    (track.id, chart_stats.chart_source, chart_stats.chart_name)
+                )
+
+            items.append({
+                "track_id": track.id,
+                "track_name": track.name,
+                "spotify_track_id": track.spotify_id,
+                "artist_name": artist.name if artist else None,
+                "artist_spotify_id": artist.spotify_id if artist else None,
+                "album_name": album.name if album else None,
+                "album_spotify_id": album.spotify_id if album else None,
+                "duration_ms": track.duration_ms,
+                "popularity": track.popularity,
+                "youtube_video_id": youtube_video_id,
+                "youtube_status": youtube_status,
+                "youtube_url": youtube_url,
+                "local_file_path": file_path,
+                "local_file_exists": file_exists,
+                "chart_source": chart_stats.chart_source if chart_stats else None,
+                "chart_name": chart_stats.chart_name if chart_stats else None,
+                "chart_best_position": chart_stats.best_position if chart_stats else None,
+                "chart_best_position_date": best_date.isoformat() if best_date else None,
+                "chart_weeks_at_one": chart_stats.weeks_at_one if chart_stats else 0,
+                "chart_weeks_top5": chart_stats.weeks_top5 if chart_stats else 0,
+                "chart_weeks_top10": chart_stats.weeks_top10 if chart_stats else 0,
+            })
+
+        next_after = track_rows[-1][0].id if track_rows else after_id
+        return {
+            "items": items,
+            "offset": offset,
+            "limit": limit,
+            "has_more": has_more,
+            "next_after": next_after if has_more else None,
+        }
+
     with get_session() as session:
         base_query = (
             select(Track, Artist, Album)

@@ -18,7 +18,7 @@ from .api.favorites import router as favorites_router
 from .api.images import router as images_router
 from .api.maintenance import router as maintenance_router
 from .core.config import settings
-from .core.db import get_session
+from .core.db import get_session, create_db_and_tables
 from .core.maintenance import start_maintenance_background
 from .core.security import get_current_user_id_from_token
 from .core.log_buffer import install_log_buffer
@@ -27,6 +27,7 @@ from sqlmodel import select
 
 app = FastAPI(title="Audio2 API", description="Personal Music API Backend")
 install_log_buffer()
+create_db_and_tables()
 
 app.add_middleware(
     CORSMiddleware,
