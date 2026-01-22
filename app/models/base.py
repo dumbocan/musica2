@@ -88,6 +88,18 @@ class SearchAlias(SQLModel, table=True):
     )
 
 
+class SearchCacheEntry(SQLModel, table=True):
+    """Persistent cache for normalized search payloads."""
+    __tablename__ = "search_cache_entry"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    cache_key: str = Field(max_length=250, index=True)
+    context: Optional[str] = Field(default=None, max_length=50)
+    payload: str = Field(default="", nullable=False)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class Album(SQLModel, table=True):
     """Album from Spotify."""
     id: Optional[int] = Field(default=None, primary_key=True)

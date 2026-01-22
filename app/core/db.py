@@ -72,5 +72,6 @@ def create_db_and_tables() -> None:
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_userhiddenartist_user_artist ON userhiddenartist (user_id, artist_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_artist_popularity ON artist (popularity DESC, id ASC)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_artist_name_order ON artist (name ASC, id ASC)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_searchcache_cache_key ON search_cache_entry (cache_key)"))
     except Exception as exc:
         logger.warning("Index setup skipped: %s", exc)

@@ -21,6 +21,7 @@ from ..core.image_proxy import proxy_image_list
 from ..core.lastfm import lastfm_client
 from ..core.spotify import spotify_client
 from ..core.time_utils import utc_now
+from ..core.search_cache import read_cached_search, write_cached_search
 from ..models.base import (
     Artist,
     Album,
@@ -33,7 +34,12 @@ from ..models.base import (
     UserHiddenArtist,
 )
 from ..services.library_expansion import save_artist_discography, schedule_artist_expansion
-from ..crud import normalize_name, save_artist, update_artist_bio
+from ..crud import (
+    normalize_name,
+    save_artist,
+    update_artist_bio,
+    unhide_artist_for_user,
+)
 from ..core.search_index import normalize_search_text
 from sqlmodel.ext.asyncio.session import AsyncSession
 from ..core.search_metrics import (
@@ -41,7 +47,6 @@ from ..core.search_metrics import (
     record_external_resolution,
     record_local_resolution,
 )
-from ..models.base import UserHiddenArtist
 
 router = APIRouter(prefix="/search", tags=["search"])
 logger = logging.getLogger(__name__)
@@ -277,6 +282,36 @@ async def _hidden_artist_ids(session: AsyncSession, user_id: int | None) -> set[
     return {row for row in rows if row is not None}
 
 
+async def _auto_unhide_hidden_artist(
+    session: AsyncSession,
+    user_id: int | None,
+    normalized_query: str,
+    hidden_ids: set[int],
+) -> set[int]:
+    if not user_id or not normalized_query or not hidden_ids:
+        return set()
+    stmt = (
+        select(SearchAlias.entity_id)
+        .where(SearchAlias.entity_type == SearchEntityType.ARTIST)
+        .where(SearchAlias.entity_id.in_(hidden_ids))
+        .where(SearchAlias.normalized_alias == normalized_query)
+    )
+    matches = {row for row in (await session.exec(stmt)).all() if row}
+    if not matches:
+        stmt = (
+            select(Artist.id)
+            .where(Artist.id.in_(hidden_ids))
+            .where(func.lower(Artist.normalized_name) == normalized_query)
+        )
+        matches = {row for row in (await session.exec(stmt)).all() if row}
+    for artist_id in matches:
+        try:
+            unhide_artist_for_user(user_id, artist_id)
+        except Exception as exc:
+            logger.warning("failed to auto-unhide artist %s for user %s: %s", artist_id, user_id, exc)
+    return matches
+
+
 def _merge_scores(primary: dict[int, float], secondary: dict[int, float]) -> dict[int, float]:
     merged = dict(primary)
     for key, score in secondary.items():
@@ -485,6 +520,9 @@ async def _search_local_artists(
     if not scores:
         return []
     hidden_ids = await _hidden_artist_ids(session, user_id)
+    auto_unhidden = await _auto_unhide_hidden_artist(session, user_id, normalized_query, hidden_ids)
+    if auto_unhidden:
+        hidden_ids = hidden_ids.difference(auto_unhidden)
     stmt = select(Artist).where(Artist.id.in_(scores.keys()))
     if hidden_ids:
         stmt = stmt.where(Artist.id.notin_(hidden_ids))
@@ -824,6 +862,10 @@ async def orchestrated_search(
     cached = _cache_get(_orchestrated_cache, cache_key)
     if cached:
         return cached
+    persistent_cache = await read_cached_search(session, cache_key)
+    if persistent_cache:
+        _cache_set(_orchestrated_cache, cache_key, persistent_cache)
+        return persistent_cache
 
     genre_keys = _infer_genre_keywords(q)
     timeout_spotify = 4.0
@@ -885,6 +927,7 @@ async def orchestrated_search(
             "tracks": tracks,
             "lastfm_top": []
         }
+        await write_cached_search(session, cache_key, payload, context="orchestrated_local")
         _cache_set(_orchestrated_cache, cache_key, payload)
         return payload
 
@@ -902,6 +945,7 @@ async def orchestrated_search(
             "tracks": [],
             "lastfm_top": []
         }
+        await write_cached_search(session, cache_key, payload, context="orchestrated_empty")
         _cache_set(_orchestrated_cache, cache_key, payload)
         return payload
 
@@ -1110,6 +1154,7 @@ async def orchestrated_search(
         "tracks": tracks,
         "lastfm_top": lastfm_enriched
     }
+    await write_cached_search(session, cache_key, payload, context="orchestrated_full")
     _cache_set(_orchestrated_cache, cache_key, payload)
     return payload
 
