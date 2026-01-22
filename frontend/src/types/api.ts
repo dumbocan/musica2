@@ -217,6 +217,7 @@ export interface CuratedTrackItem {
     name: string;
     spotify_id: string | null;
   }>;
+  videoId: string | null;
 }
 
 export interface PlaylistSection {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { usePlayerStore } from '@/store/usePlayerStore';
+import { Shuffle } from 'lucide-react';
+import { usePlayerStore, PlayerQueueItem } from '@/store/usePlayerStore';
 import { audio2Api } from '@/lib/api';
 
 export function PlayerFooter() {
@@ -35,6 +36,8 @@ export function PlayerFooter() {
   const pauseAudio = usePlayerStore((s) => s.pauseAudio);
   const stopAudio = usePlayerStore((s) => s.stopAudio);
   const seekAudio = usePlayerStore((s) => s.seekAudio);
+  const setQueue = usePlayerStore((s) => s.setQueue);
+  const setCurrentIndex = usePlayerStore((s) => s.setCurrentIndex);
   const upgradeInFlightRef = useRef(false);
   const lastVolumeRef = useRef(volume);
   const downloadRequestedRef = useRef(new Set<string>());
@@ -53,6 +56,15 @@ export function PlayerFooter() {
 
   const prevItem = currentIndex > 0 ? queue[currentIndex - 1] : null;
   const nextItem = currentIndex >= 0 && currentIndex < queue.length - 1 ? queue[currentIndex + 1] : null;
+
+  const shuffleQueue = useCallback((items: PlayerQueueItem[]) => {
+    const clone = [...items];
+    for (let i = clone.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [clone[i], clone[j]] = [clone[j], clone[i]];
+    }
+    return clone;
+  }, []);
 
   useEffect(() => {
     if (!audioRef.current) return;
@@ -311,6 +323,14 @@ export function PlayerFooter() {
     stopAudio();
   }, [stopAudio]);
 
+  const handleShuffle = useCallback(() => {
+    if (queue.length < 2 || !onPlayTrack) return;
+    const randomized = shuffleQueue(queue);
+    setQueue(randomized, 0);
+    setCurrentIndex(0);
+    onPlayTrack(randomized[0]);
+  }, [queue, onPlayTrack, setCurrentIndex, setQueue, shuffleQueue]);
+
   const handleSeek = useCallback((value: number) => {
     seekAudio(value);
     if (playbackMode === 'video' && videoController) {
@@ -449,6 +469,14 @@ export function PlayerFooter() {
             <path d="M5 5L13 12L5 19V5z" />
             <path d="M11 5L19 12L11 19V5z" />
           </svg>
+        </button>
+        <button
+          className="album-player__btn"
+          onClick={handleShuffle}
+          disabled={queue.length < 2 || !onPlayTrack}
+          title="Shuffle"
+        >
+          <Shuffle className="h-4 w-4" />
         </button>
         <button className="album-player__btn" onClick={handleStop} disabled={!nowPlaying} title={isVideo ? 'Cerrar video' : 'Detener'}>
           <svg viewBox="0 0 24 24" aria-hidden="true">

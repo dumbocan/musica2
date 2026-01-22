@@ -19,6 +19,7 @@ from ..models.base import (
     Artist,
     Track,
     UserFavorite,
+    YouTubeDownload,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,7 @@ def _parse_genres(raw: str | None) -> list[str]:
     return []
 
 
-def _track_payload(track: Track, artist: Artist | None, album: Album | None) -> dict:
+def _track_payload(track: Track, artist: Artist | None, album: Album | None, download: YouTubeDownload | None) -> dict:
     payload = {
         "id": track.id,
         "spotify_id": track.spotify_id,
@@ -57,6 +58,7 @@ def _track_payload(track: Track, artist: Artist | None, album: Album | None) -> 
         "download_path": track.download_path,
         "artists": [],
         "album": None,
+        "videoId": download.youtube_video_id if download else None,
     }
     if artist:
         payload["artists"].append({
@@ -85,13 +87,17 @@ async def _fetch_tracks(
     for row in rows:
         if not row:
             continue
-        track, artist, album = row
+        if len(row) == 4:
+            track, artist, album, download = row
+        else:
+            track, artist, album = row
+            download = None
         if not isinstance(track, Track):
             continue
         if track.id in seen:
             continue
         seen.add(track.id)
-        results.append(_track_payload(track, artist, album))
+        results.append(_track_payload(track, artist, album, download))
         if len(results) >= limit:
             break
     return results
@@ -99,12 +105,16 @@ async def _fetch_tracks(
 
 async def _get_favorite_tracks(session: AsyncSession, user_id: int, limit: int, seen: set[int]) -> list[dict]:
     stmt = (
-        select(Track, Artist, Album)
+        select(Track, Artist, Album, YouTubeDownload)
         .join(Artist, Track.artist_id == Artist.id)
         .outerjoin(Album, Track.album_id == Album.id)
+        .outerjoin(
+            YouTubeDownload,
+            (YouTubeDownload.spotify_track_id == Track.spotify_id) & YouTubeDownload.youtube_video_id.is_not(None)
+        )
         .where(Track.is_favorite.is_(True))
         .where(Track.artist_id.is_not(None))
-        .order_by(desc(Track.popularity))
+        .order_by(desc(Track.popularity), desc(YouTubeDownload.updated_at))
     )
     return await _fetch_tracks(session, stmt, seen, limit)
 
@@ -147,11 +157,15 @@ async def _genre_suggestions(
         return []
     genre_filters = [Artist.genres.ilike(f"%{genre}%") for genre in genres]
     stmt = (
-        select(Track, Artist, Album)
+        select(Track, Artist, Album, YouTubeDownload)
         .join(Artist, Track.artist_id == Artist.id)
         .outerjoin(Album, Track.album_id == Album.id)
+        .outerjoin(
+            YouTubeDownload,
+            (YouTubeDownload.spotify_track_id == Track.spotify_id) & YouTubeDownload.youtube_video_id.is_not(None)
+        )
         .where(or_(*genre_filters))
-        .order_by(desc(Track.popularity))
+        .order_by(desc(Track.popularity), desc(YouTubeDownload.updated_at))
     )
     return await _fetch_tracks(session, stmt, seen, limit)
 
@@ -163,11 +177,15 @@ async def _artist_discography_tracks(
     limit: int,
 ) -> list[dict]:
     stmt = (
-        select(Track, Artist, Album)
+        select(Track, Artist, Album, YouTubeDownload)
         .join(Artist, Track.artist_id == Artist.id)
         .outerjoin(Album, Track.album_id == Album.id)
+        .outerjoin(
+            YouTubeDownload,
+            (YouTubeDownload.spotify_track_id == Track.spotify_id) & YouTubeDownload.youtube_video_id.is_not(None)
+        )
         .where(Track.artist_id == artist_id)
-        .order_by(desc(Track.popularity))
+        .order_by(desc(Track.popularity), desc(YouTubeDownload.updated_at))
     )
     return await _fetch_tracks(session, stmt, seen, limit)
 
@@ -184,11 +202,15 @@ async def _collaboration_tracks(
         Track.name.ilike("%with%"),
     ]
     stmt = (
-        select(Track, Artist, Album)
+        select(Track, Artist, Album, YouTubeDownload)
         .join(Artist, Track.artist_id == Artist.id)
         .outerjoin(Album, Track.album_id == Album.id)
+        .outerjoin(
+            YouTubeDownload,
+            (YouTubeDownload.spotify_track_id == Track.spotify_id) & YouTubeDownload.youtube_video_id.is_not(None)
+        )
         .where(or_(*feat_conditions))
-        .order_by(desc(Track.popularity))
+        .order_by(desc(Track.popularity), desc(YouTubeDownload.updated_at))
     )
     if genres:
         stmt = stmt.where(or_(*[Artist.genres.ilike(f"%{genre}%") for genre in genres]))
@@ -205,11 +227,15 @@ async def _related_artist_tracks(
     if not genres:
         return []
     stmt = (
-        select(Track, Artist, Album)
+        select(Track, Artist, Album, YouTubeDownload)
         .join(Artist, Track.artist_id == Artist.id)
         .outerjoin(Album, Track.album_id == Album.id)
+        .outerjoin(
+            YouTubeDownload,
+            (YouTubeDownload.spotify_track_id == Track.spotify_id) & YouTubeDownload.youtube_video_id.is_not(None)
+        )
         .where(or_(*[Artist.genres.ilike(f"%{genre}%") for genre in genres]))
-        .order_by(desc(Track.popularity))
+        .order_by(desc(Track.popularity), desc(YouTubeDownload.updated_at))
     )
     if favorite_artist_ids:
         stmt = stmt.where(Artist.id.notin_(favorite_artist_ids))
