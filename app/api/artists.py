@@ -37,6 +37,8 @@ from ..core.data_freshness import data_freshness_manager
 from ..core.image_proxy import proxy_image_list, has_valid_images
 from ..services.data_quality import collect_artist_quality_report
 from ..services.library_expansion import schedule_artist_expansion
+from ..core.action_status import set_action_status
+from ..core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -446,9 +448,6 @@ async def get_artist_recommendations(spotify_id: str = Path(..., description="Sp
 @router.get("/{spotify_id}/related")
 async def get_related_artists(spotify_id: str = Path(..., description="Spotify artist ID")):
     """Get related artists using Last.fm (with listeners/playcount) enriched with Spotify search."""
-from ..core.action_status import set_action_status
-from ..core.config import settings
-    from ..core.lastfm import lastfm_client
     if not settings.LASTFM_API_KEY:
         return {"top": [], "discover": []}
 
@@ -758,67 +757,67 @@ async def refresh_missing_artist_metadata(
             if use_spotify and spotify_id:
                 try:
                     data = await spotify_client.get_artist(spotify_id)
-                if data:
-                    save_artist(data)
-                    spotify_updated += 1
+                    if data:
+                        save_artist(data)
+                        spotify_updated += 1
+                except Exception as exc:
+                    logger.warning(
+                        "[refresh-missing] Spotify refresh failed for %s: %r",
+                        entry.get("name") or spotify_id,
+                        exc,
+                        exc_info=True
+                    )
+
+            if not use_lastfm or not entry.get("name"):
+                skipped += 1
+                continue
+
+            with get_session() as session:
+                artist = session.exec(select(Artist).where(Artist.id == entry["id"])).first()
+            if not artist:
+                skipped += 1
+                continue
+
+            missing_fields = set()
+            if not artist.bio_summary:
+                missing_fields.add("bio")
+            if not artist.genres or artist.genres.strip() in {"", "[]"}:
+                missing_fields.add("genres")
+            if not artist.images or artist.images.strip() in {"", "[]"}:
+                missing_fields.add("image")
+
+            if not missing_fields:
+                skipped += 1
+                continue
+
+            try:
+                lastfm = await lastfm_client.get_artist_info(entry["name"])
             except Exception as exc:
                 logger.warning(
-                    "[refresh-missing] Spotify refresh failed for %s: %r",
-                    entry.get("name") or spotify_id,
+                    "[refresh-missing] Last.fm fetch failed for %s: %r",
+                    entry.get("name"),
                     exc,
                     exc_info=True
                 )
-
-        if not use_lastfm or not entry.get("name"):
-            skipped += 1
-            continue
-
-        with get_session() as session:
-            artist = session.exec(select(Artist).where(Artist.id == entry["id"])).first()
-        if not artist:
-            skipped += 1
-            continue
-
-        missing_fields = set()
-        if not artist.bio_summary:
-            missing_fields.add("bio")
-        if not artist.genres or artist.genres.strip() in {"", "[]"}:
-            missing_fields.add("genres")
-        if not artist.images or artist.images.strip() in {"", "[]"}:
-            missing_fields.add("image")
-
-        if not missing_fields:
-            skipped += 1
-            continue
-
-        try:
-            lastfm = await lastfm_client.get_artist_info(entry["name"])
-        except Exception as exc:
-            logger.warning(
-                "[refresh-missing] Last.fm fetch failed for %s: %r",
-                entry.get("name"),
-                exc,
-                exc_info=True
-            )
-            continue
-
-        summary = lastfm.get("summary")
-        tags = lastfm.get("tags")
-        images = lastfm.get("images")
-        needs_commit = False
-        with get_session() as session:
-            target = session.exec(select(Artist).where(Artist.id == entry["id"])).first()
-            if not target:
                 continue
-            if "bio" in missing_fields and summary:
-                target.bio_summary = summary
-                target.bio_content = lastfm.get("content", target.bio_content)
-                needs_commit = True
-            if "genres" in missing_fields and tags:
-                genres = extract_genres_from_lastfm_tags(tags, artist_name=entry["name"])
-                if genres:
-                    target.genres = json.dumps(genres)
+
+            summary = lastfm.get("summary")
+            tags = lastfm.get("tags")
+            images = lastfm.get("images")
+            needs_commit = False
+            with get_session() as session:
+                target = session.exec(select(Artist).where(Artist.id == entry["id"])).first()
+                if not target:
+                    continue
+                if "bio" in missing_fields and summary:
+                    target.bio_summary = summary
+                    target.bio_content = lastfm.get("content", target.bio_content)
                     needs_commit = True
+                if "genres" in missing_fields and tags:
+                    genres = extract_genres_from_lastfm_tags(tags, artist_name=entry["name"])
+                    if genres:
+                        target.genres = json.dumps(genres)
+                        needs_commit = True
             if "image" in missing_fields and images:
                 proxied = proxy_image_list(images, size=384)
                 if proxied:
@@ -831,6 +830,10 @@ async def refresh_missing_artist_metadata(
             session.add(target)
             session.commit()
             lastfm_updated += 1
+
+    except Exception as exc:
+        logger.error("[refresh-missing] unexpected error: %r", exc, exc_info=True)
+        raise
 
     finally:
         set_action_status('metadata_refresh', False)
