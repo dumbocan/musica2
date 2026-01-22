@@ -336,12 +336,17 @@ a {
   }
 
   .artists-grid {
+    --artist-card-width: clamp(200px, 30vw, 240px);
+    --artist-gap-min: calc(var(--artist-card-width) * 0.3);
+    --artist-gap: max(var(--artist-gap-min), clamp(30px, 4vw, 48px));
     grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
-    gap: clamp(20px, 4vw, 20%);
+    gap: var(--artist-gap);
     --artist-avatar-size: 150px;
     --artist-card-height: 320px;
+    padding-inline: clamp(12px, 4vw, 30px);
     max-width: 100%;
-    padding-inline: clamp(12px, 4vw, 36px);
+    width: 100%;
+    margin: 0;
   }
 
   .mobile-bottom-nav {
@@ -388,10 +393,16 @@ a {
 
 @media (max-width: 600px) {
   .artists-grid {
+    --artist-card-width: clamp(160px, 45vw, 200px);
+    --artist-gap-min: calc(var(--artist-card-width) * 0.3);
+    --artist-gap: max(var(--artist-gap-min), clamp(26px, 5vw, 40px));
     grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
-    gap: clamp(18px, 5vw, 20%);
+    gap: var(--artist-gap);
     --artist-avatar-size: 120px;
     --artist-card-height: 300px;
+    padding-inline: clamp(8px, 6vw, 20px);
+    width: 100%;
+    margin: 0;
   }
 }
 
@@ -626,11 +637,15 @@ a {
 .artists-grid {
   display: grid;
   width: 100%;
-  max-width: 1240px;
-  margin: 0 auto;
-  gap: clamp(20px, 3vw, 20%);
-  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  max-width: 100%;
+  margin: 0;
   justify-content: center;
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  --artist-card-width: clamp(220px, 18vw, 260px);
+  --artist-gap-min: calc(var(--artist-card-width) * 0.3);
+  --artist-gap: max(var(--artist-gap-min), clamp(32px, 3vw, 64px));
+  gap: var(--artist-gap);
+  padding-inline: clamp(12px, 3vw, 32px);
   --artist-avatar-size: 180px;
   --artist-card-height: 360px;
 }
