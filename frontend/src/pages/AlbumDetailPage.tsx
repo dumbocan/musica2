@@ -13,10 +13,10 @@ type Track = {
   external_urls?: { spotify?: string };
   popularity?: number;
   explicit?: boolean;
-  artists?: ArtistMini[];
+  artists?: Array<{ id?: string; name?: string }>;
 };
 type AlbumImage = { url: string };
-type ArtistMini = { name: string };
+type ArtistMini = { id?: string; spotify_id?: string; name: string };
 type YouTubeLinkStatus = {
   spotify_track_id: string;
   youtube_video_id?: string;
@@ -41,10 +41,10 @@ type TrackChartStat = {
 };
 type YoutubeAvailability =
   | { status: 'pending' }
-  | { status: 'available'; videoId: string; videoUrl: string; title?: string }
-  | { status: 'missing' }
-  | { status: 'not_found' }
-  | { status: 'error'; message?: string };
+  | { status: 'available'; videoId: string; videoUrl?: string; title?: string }
+  | { status: 'missing'; title?: string }
+  | { status: 'not_found'; title?: string }
+  | { status: 'error'; message?: string; title?: string };
 type StreamUiState = { status: 'idle' | 'loading' | 'error'; message?: string };
 type Album = {
   id: string;
@@ -574,8 +574,9 @@ export function AlbumDetailPage() {
       }>;
     setQueue(queueItems);
     setOnPlayTrack((item) => {
-      if (!item.rawTrack) return;
-      void handleStreamTrack(item.rawTrack, item.spotifyTrackId);
+      const rawTrack = item.rawTrack as Track | undefined;
+      if (!rawTrack) return;
+      void handleStreamTrack(rawTrack, item.spotifyTrackId);
     });
     return () => setOnPlayTrack(null);
   }, [album?.artists, handleStreamTrack, resolveTrackId, setOnPlayTrack, setQueue, tracks, trackLocalIds]);

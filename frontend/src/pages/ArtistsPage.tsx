@@ -7,7 +7,9 @@ import type { Artist } from '@/types/api';
 import { Loader2, Heart, Trash2 } from 'lucide-react';
 import { usePaginatedArtists } from '@/hooks/usePaginatedArtists';
 
-const parseStoredJsonArray = (raw?: string | null): unknown[] => {
+type ParsedJsonEntry = string | { url: string };
+
+const parseStoredJsonArray = (raw?: string | null): ParsedJsonEntry[] => {
   if (!raw) return [];
   const trimmed = raw.trim();
   if (!trimmed) return [];
@@ -15,7 +17,26 @@ const parseStoredJsonArray = (raw?: string | null): unknown[] => {
   const tryParse = (value: string) => {
     try {
       const parsed = JSON.parse(value);
-      return Array.isArray(parsed) ? parsed : [];
+          if (Array.isArray(parsed)) {
+        return parsed
+          .map((item) => {
+            if (typeof item === 'string') return item;
+            if (item && typeof item === 'object') {
+              const candidateUrl =
+                typeof (item as { url?: string }).url === 'string'
+                  ? (item as { url?: string }).url
+                  : typeof (item as { '#text'?: string })['#text'] === 'string'
+                    ? (item as { '#text'?: string })['#text']
+                    : null;
+              if (candidateUrl) {
+                return { url: candidateUrl };
+              }
+            }
+            return null;
+          })
+          .filter((entry): entry is ParsedJsonEntry => entry !== null);
+      }
+      return [];
     } catch {
       return [];
     }
@@ -68,7 +89,6 @@ export function ArtistsPage() {
     total,
     hasMore,
     loadMore,
-    reload,
     removeArtist,
   } = usePaginatedArtists({ limit: 200, sortOption: apiSortOption, userId });
   const navigate = useNavigate();

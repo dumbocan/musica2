@@ -24,6 +24,11 @@ type LastfmImage = {
   size: 'small' | 'medium' | 'large' | 'extralarge' | 'mega' | '';
 };
 
+const toLastfmImage = (url: string, size: LastfmImage['size'] = ''): LastfmImage => ({
+  '#text': url,
+  size,
+});
+
 type LastfmArtist = {
   name: string;
   listeners: string;
@@ -375,16 +380,19 @@ export function SearchPage() {
               )}
               {Array.isArray(artistProfile.lastfm?.tags) && artistProfile.lastfm.tags.length > 0 && (
                 <div className="flex flex-wrap gap-2 text-xs">
-                  {artistProfile.lastfm.tags.slice(0, 10).map((t: { name?: string }) => (
-                    <span
-                      key={t.name || t}
-                      style={{ padding: '4px 8px', borderRadius: 8, background: 'var(--panel)', border: `1px solid var(--border)` }}
-                    >
-                      {t.name || t}
-                    </span>
-                  ))}
-                </div>
-              )}
+              {artistProfile.lastfm.tags.slice(0, 10).map((t: { name?: string } | string, idx: number) => {
+                const tagLabel = typeof t === 'string' ? t : t.name || `tag-${idx}`;
+                return (
+                  <span
+                    key={`tag-${idx}-${tagLabel}`}
+                    style={{ padding: '4px 8px', borderRadius: 8, background: 'var(--panel)', border: `1px solid var(--border)` }}
+                  >
+                    {tagLabel}
+                  </span>
+                );
+              })}
+            </div>
+          )}
             </div>
           </div>
 
@@ -477,11 +485,11 @@ export function SearchPage() {
           <h2 className="text-xl font-semibold">Top artistas (Last.fm)</h2>
           <div className="grid-cards" style={{ gap: 18 }}>
             {(lastfmEnriched.length ? lastfmEnriched : lastfmArtists).slice(0, visibleCount).map((a: LastfmArtist, idx: number) => {
-              const images = Array.isArray(a.spotify?.images) && a.spotify?.images.length
-                ? a.spotify.images.map((im: { url: string }) => ({ '#text': im.url }))
-                : Array.isArray(a.image)
-                  ? a.image
-                  : [];
+            const images: LastfmImage[] = Array.isArray(a.spotify?.images) && a.spotify.images.length
+              ? a.spotify.images.map((im: { url: string }) => toLastfmImage(im.url, 'mega'))
+              : Array.isArray(a.image)
+                ? a.image
+                : [];
               const preferred =
                 images.find((im: LastfmImage) => im?.size === 'large') ||
                 images.find((im: LastfmImage) => im?.size === 'extralarge') ||

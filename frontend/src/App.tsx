@@ -22,14 +22,6 @@ import { ArtistDiscographyPage } from '@/pages/ArtistDiscographyPage';
 import { HistoricalDbPage } from '@/pages/HistoricalDbPage';
 
 type JwtPayload = { exp?: number };
-type ServiceStatus = {
-  status?: string | null;
-  last_error?: string | null;
-};
-type ServiceStatusMap = {
-  spotify?: ServiceStatus;
-  lastfm?: ServiceStatus;
-};
 
 function ServiceDot({ label, color, status, lastError }: { label: string; color: string; status?: string | null; lastError?: string | null }) {
   const isOnline = status === 'online';
