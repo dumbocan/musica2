@@ -23,7 +23,7 @@ from ..core.spotify import spotify_client
 from ..core.time_utils import utc_now
 from ..models.base import Artist, Album, Track, Tag, TrackTag, SearchAlias, SearchEntityType, UserFavorite
 from ..services.library_expansion import save_artist_discography, schedule_artist_expansion
-from ..crud import normalize_name
+from ..crud import normalize_name, save_artist, update_artist_bio
 from ..core.search_index import normalize_search_text
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -122,6 +122,17 @@ def _track_to_spotify_lite(track: Track, artist: Artist | None, album: Album | N
             "id": artist.spotify_id or str(artist.id),
             "name": artist.name,
         })
+    entries_to_materialize: list[dict] = []
+    if main:
+        entries_to_materialize.append({
+            "spotify": main.get("spotify"),
+            "lastfm": main.get("lastfm") or {},
+            "name": main_name,
+        })
+    entries_to_materialize.extend(similar or [])
+    if entries_to_materialize:
+        await _materialize_spotify_entries(session, entries_to_materialize, schedule_limit=8)
+
     payload = {
         "id": track.spotify_id or str(track.id),
         "name": track.name,
@@ -150,6 +161,88 @@ def _track_title_matches(query: str, title: str) -> bool:
         return False
     title_norm = normalize_search_text(title)
     return all(token in title_norm for token in q_tokens)
+
+
+async def _persist_spotify_artist_snapshot(
+    spotify_artist: dict,
+    lastfm_block: dict | None = None,
+) -> None:
+    """Persist a Spotify artist (and optional Last.fm bio) without blocking the request."""
+    if not spotify_artist:
+        return
+    spotify_id = spotify_artist.get("id")
+    if not spotify_id:
+        return
+
+    def _save() -> None:
+        try:
+            artist = save_artist(spotify_artist)
+            if artist and lastfm_block:
+                summary = (lastfm_block.get("summary") or "").strip()
+                content = (lastfm_block.get("content") or "").strip()
+                if summary or content:
+                    update_artist_bio(artist.id, summary, content)
+        except Exception as exc:
+            logger.warning(
+                "[search] failed to persist artist %s: %s",
+                spotify_artist.get("name") or spotify_id,
+                exc,
+            )
+
+    try:
+        await asyncio.to_thread(_save)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "[search] persistence worker failed for %s: %s",
+            spotify_artist.get("name") or spotify_id,
+            exc,
+        )
+
+
+async def _materialize_spotify_entries(
+    session: AsyncSession,
+    entries: list[dict],
+    schedule_limit: int = 5,
+) -> None:
+    """Ensure Spotify entries are saved locally and queue refreshing if missing."""
+    spotify_entries: list[tuple[str, dict, dict, str | None]] = []
+    for entry in entries or []:
+        spotify = entry.get("spotify")
+        if not spotify:
+            continue
+        spotify_id = spotify.get("id")
+        if not spotify_id:
+            continue
+        name = entry.get("name") or spotify.get("name")
+        lastfm_data = entry.get("lastfm") or {}
+        spotify_entries.append((spotify_id, spotify, lastfm_data, name))
+    if not spotify_entries:
+        return
+
+    unique_ids = {sid for sid, *_ in spotify_entries}
+    existing_ids: set[str] = set()
+    try:
+        rows = await session.exec(
+            select(Artist.spotify_id).where(Artist.spotify_id.in_(list(unique_ids)))
+        )
+        existing_ids = {row for row in rows if row}
+    except Exception as exc:
+        logger.warning("[search] failed to check existing artists: %s", exc)
+
+    scheduled = 0
+    for spotify_id, spotify_obj, lastfm_obj, name in spotify_entries:
+        asyncio.create_task(_persist_spotify_artist_snapshot(spotify_obj, lastfm_obj))
+        if scheduled >= schedule_limit:
+            continue
+        if spotify_id in existing_ids:
+            continue
+        schedule_artist_expansion(
+            spotify_artist_id=spotify_id,
+            artist_name=name or spotify_obj.get("name") or spotify_id,
+            include_youtube_links=True,
+        )
+        scheduled += 1
+        existing_ids.add(spotify_id)
 
 
 async def _favorite_ids(session: AsyncSession, entity_type: SearchEntityType, user_id: int | None) -> set[int]:
@@ -977,6 +1070,8 @@ async def orchestrated_search(
     tracks = _format_tracks(await tracks_task)
     if tracks:
         tracks = [t for t in tracks if _track_title_matches(q, t.get("name", ""))]
+    if lastfm_enriched:
+        await _materialize_spotify_entries(session, lastfm_enriched, schedule_limit=limit)
     payload = {
         "query": q,
         "page": max(page, 0),
@@ -1421,6 +1516,16 @@ async def search_tracks_quick(
         return {"query": q, "tracks": []}
     try:
         tracks = await spotify_client.search_tracks(q, limit=limit)
+        artist_entries = []
+        for track in tracks or []:
+            for artist in track.get("artists", []) or []:
+                artist_entries.append({
+                    "spotify": artist,
+                    "lastfm": {},
+                    "name": artist.get("name"),
+                })
+        if artist_entries:
+            await _materialize_spotify_entries(session, artist_entries, schedule_limit=5)
         return {"query": q, "tracks": _format_tracks(tracks)}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error searching tracks: {exc}")
