@@ -194,6 +194,8 @@ export const audio2Api = {
 
   // Playlists
   getAllPlaylists: () => api.get('/playlists/'),
+  getListsOverview: (params?: { limit_per_list?: number; artist_spotify_id?: string }) =>
+    api.get('/lists/overview', { params }),
 
   // Favorites
   addFavorite: (targetType: 'artist' | 'album' | 'track', targetId: number, userId: number) =>

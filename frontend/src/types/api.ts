@@ -197,6 +197,54 @@ export interface SpotifyTrack {
   };
 }
 
+export interface CuratedTrackItem {
+  id: number;
+  spotify_id: string | null;
+  name: string;
+  duration_ms: number;
+  popularity: number;
+  is_favorite: boolean;
+  download_status: string | null;
+  download_path: string | null;
+  album: {
+    id: number;
+    spotify_id: string | null;
+    name: string;
+    release_date: string;
+  } | null;
+  artists: Array<{
+    id: number;
+    name: string;
+    spotify_id: string | null;
+  }>;
+}
+
+export interface PlaylistSection {
+  key: string;
+  title: string;
+  description: string;
+  items: CuratedTrackItem[];
+  meta?: {
+    count?: number;
+    genres?: string[];
+    artist?: {
+      name: string;
+      spotify_id: string | null;
+    };
+    note?: string;
+  };
+}
+
+export interface ListsOverviewResponse {
+  lists: PlaylistSection[];
+  top_genres?: string[];
+  anchor_artist?: {
+    id: number | null;
+    name: string | null;
+    spotify_id: string | null;
+  } | null;
+}
+
 // Utility types
 export interface ApiResponse<T> {
   data: T;
