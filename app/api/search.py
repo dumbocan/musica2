@@ -138,17 +138,6 @@ def _track_to_spotify_lite(track: Track, artist: Artist | None, album: Album | N
             "id": artist.spotify_id or str(artist.id),
             "name": artist.name,
         })
-    entries_to_materialize: list[dict] = []
-    if main:
-        entries_to_materialize.append({
-            "spotify": main.get("spotify"),
-            "lastfm": main.get("lastfm") or {},
-            "name": main_name,
-        })
-    entries_to_materialize.extend(similar or [])
-    if entries_to_materialize:
-        await _materialize_spotify_entries(session, entries_to_materialize, schedule_limit=8)
-
     payload = {
         "id": track.spotify_id or str(track.id),
         "name": track.name,
