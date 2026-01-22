@@ -69,6 +69,7 @@ export function ArtistsPage() {
     hasMore,
     loadMore,
     reload,
+    removeArtist,
   } = usePaginatedArtists({ limit: 200, sortOption: apiSortOption, userId });
   const navigate = useNavigate();
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
@@ -158,7 +159,7 @@ export function ArtistsPage() {
     if (!userId) return;
     try {
       await audio2Api.hideArtist(artistId, userId);
-      reload();
+      removeArtist(artistId);
     } catch (err) {
       console.error('Failed to hide artist', err);
     }

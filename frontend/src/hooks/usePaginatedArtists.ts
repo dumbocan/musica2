@@ -88,6 +88,12 @@ export function usePaginatedArtists({ limit = 200, sortOption = 'pop-desc', user
     reload();
   }, [reload]);
 
+  const removeArtist = useCallback((artistId: number) => {
+    artistsRef.current = artistsRef.current.filter((artist) => artist.id !== artistId);
+    setArtists(artistsRef.current);
+    setTotal((prev) => (typeof prev === 'number' ? Math.max(prev - 1, 0) : null));
+  }, []);
+
   return {
     artists,
     isLoading,
@@ -97,5 +103,6 @@ export function usePaginatedArtists({ limit = 200, sortOption = 'pop-desc', user
     hasMore,
     reload,
     loadMore,
+    removeArtist,
   };
 }
