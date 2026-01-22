@@ -3,7 +3,7 @@ import { Sidebar } from '@/components/layout/Sidebar';
 import { PlayerFooter } from '@/components/PlayerFooter';
 import { useApiStore } from '@/store/useApiStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
-import { LogOut, User, ChevronDown, Search, Menu, Home, Music, ListMusic } from 'lucide-react';
+import { Activity, LogOut, User, ChevronDown, Search, Menu, Home, Music, ListMusic } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { AlbumDetailPage } from '@/pages/AlbumDetailPage';
 import { YouTubeOverlayPlayer } from '@/components/YouTubeOverlayPlayer';
@@ -17,6 +17,7 @@ import { PlaylistsPage } from '@/pages/PlaylistsPage';
 import { DownloadsPage } from '@/pages/DownloadsPage';
 import { LoginPage } from '@/pages/LoginPage';
 import { SettingsPage } from '@/pages/SettingsPage';
+import { StatusPage } from '@/pages/StatusPage';
 import { ArtistDiscographyPage } from '@/pages/ArtistDiscographyPage';
 import { HistoricalDbPage } from '@/pages/HistoricalDbPage';
 
@@ -143,6 +144,7 @@ function AppShell() {
     { name: 'Dashboard', href: '/', icon: Home },
     { name: 'Artistas', href: '/artists', icon: Music },
     { name: 'Tracks', href: '/tracks', icon: ListMusic },
+    { name: 'Status', href: '/status', icon: Activity },
   ];
 
   // Si no está autenticado, forzar login
@@ -313,6 +315,7 @@ function AppShell() {
             <Route path="/downloads" element={<DownloadsPage />} />
             <Route path="/bd-historico" element={<HistoricalDbPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/status" element={<StatusPage />} />
           </Routes>
         </main>
 

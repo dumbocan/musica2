@@ -36,7 +36,11 @@ from ..services.library_expansion import save_artist_discography, schedule_artis
 from ..crud import normalize_name, save_artist, update_artist_bio
 from ..core.search_index import normalize_search_text
 from sqlmodel.ext.asyncio.session import AsyncSession
-from ..core.search_metrics import record_external_resolution, record_local_resolution
+from ..core.search_metrics import (
+    get_search_metrics as fetch_search_metrics,
+    record_external_resolution,
+    record_local_resolution,
+)
 from ..models.base import UserHiddenArtist
 
 router = APIRouter(prefix="/search", tags=["search"])
@@ -1567,6 +1571,12 @@ async def search_tracks_quick(
         return {"query": q, "tracks": _format_tracks(tracks)}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error searching tracks: {exc}")
+
+
+@router.get("/metrics")
+def search_metrics() -> dict:
+    """Search resolution metrics snapshot (local vs external)."""
+    return fetch_search_metrics()
 
 @router.get("/advanced")
 async def advanced_search(

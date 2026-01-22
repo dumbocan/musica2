@@ -109,6 +109,7 @@ export const audio2Api = {
     api.get('/search/artist-profile', { params }),
   searchTracksQuick: (params: { q: string; limit?: number }) =>
     api.get('/search/tracks-quick', { params }),
+  getSearchMetrics: () => api.get('/search/metrics'),
 
   getAllArtists: (params?: { offset?: number; limit?: number; order?: 'pop-desc' | 'pop-asc' | 'name-asc'; user_id?: number }) =>
     api.get('/artists/', { params }),

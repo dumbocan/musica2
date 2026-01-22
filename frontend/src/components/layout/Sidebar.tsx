@@ -3,6 +3,7 @@ import { useApiStore } from '@/store/useApiStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import { YouTubeOverlayPlayer } from '@/components/YouTubeOverlayPlayer';
 import {
+  Activity,
   Home,
   Music,
   ListMusic,
@@ -19,6 +20,7 @@ const navigation = [
   { name: 'Playlists', href: '/playlists', icon: ListMusic },
   { name: 'Downloads', href: '/downloads', icon: Download },
   { name: 'BD historico', href: '/bd-historico', icon: Database },
+  { name: 'Status', href: '/status', icon: Activity },
   { name: 'Settings', href: '/settings', icon: Settings },
 ];
 
