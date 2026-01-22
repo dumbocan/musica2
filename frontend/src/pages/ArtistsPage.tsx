@@ -45,7 +45,7 @@ const getArtistAssets = (artist: Artist) => {
   if (candidate) {
     proxyUrl = candidate.startsWith('/images/proxy')
       ? `${API_BASE_URL}${candidate}`
-      : `${API_BASE_URL}/images/proxy?url=${encodeURIComponent(candidate)}&size=256`;
+      : `${API_BASE_URL}/images/proxy?url=${encodeURIComponent(candidate)}&size=192`;
   }
 
   return {

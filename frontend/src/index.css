@@ -337,7 +337,7 @@ a {
 
   .artists-grid {
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 16px;
+    gap: clamp(16px, 3vw, 20%);
     --artist-avatar-size: 140px;
     --artist-card-height: 320px;
   }
@@ -387,7 +387,7 @@ a {
 @media (max-width: 600px) {
   .artists-grid {
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 14px;
+    gap: clamp(14px, 4vw, 20%);
     --artist-avatar-size: 120px;
     --artist-card-height: 300px;
   }
