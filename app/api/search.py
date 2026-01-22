@@ -21,11 +21,23 @@ from ..core.image_proxy import proxy_image_list
 from ..core.lastfm import lastfm_client
 from ..core.spotify import spotify_client
 from ..core.time_utils import utc_now
-from ..models.base import Artist, Album, Track, Tag, TrackTag, SearchAlias, SearchEntityType, UserFavorite
+from ..models.base import (
+    Artist,
+    Album,
+    Track,
+    Tag,
+    TrackTag,
+    SearchAlias,
+    SearchEntityType,
+    UserFavorite,
+    UserHiddenArtist,
+)
 from ..services.library_expansion import save_artist_discography, schedule_artist_expansion
 from ..crud import normalize_name, save_artist, update_artist_bio
 from ..core.search_index import normalize_search_text
 from sqlmodel.ext.asyncio.session import AsyncSession
+from ..core.search_metrics import record_external_resolution, record_local_resolution
+from ..models.base import UserHiddenArtist
 
 router = APIRouter(prefix="/search", tags=["search"])
 logger = logging.getLogger(__name__)
@@ -262,6 +274,16 @@ async def _favorite_ids(session: AsyncSession, entity_type: SearchEntityType, us
     return {row for row in rows if row is not None}
 
 
+async def _hidden_artist_ids(session: AsyncSession, user_id: int | None) -> set[int]:
+    if not user_id:
+        return set()
+    rows = (await session.exec(
+        select(UserHiddenArtist.artist_id)
+        .where(UserHiddenArtist.user_id == user_id)
+    )).all()
+    return {row for row in rows if row is not None}
+
+
 def _merge_scores(primary: dict[int, float], secondary: dict[int, float]) -> dict[int, float]:
     merged = dict(primary)
     for key, score in secondary.items():
@@ -469,9 +491,11 @@ async def _search_local_artists(
 
     if not scores:
         return []
-    artists = (await session.exec(
-        select(Artist).where(Artist.id.in_(scores.keys()))
-    )).all()
+    hidden_ids = await _hidden_artist_ids(session, user_id)
+    stmt = select(Artist).where(Artist.id.in_(scores.keys()))
+    if hidden_ids:
+        stmt = stmt.where(Artist.id.notin_(hidden_ids))
+    artists = (await session.exec(stmt)).all()
     favorite_ids = await _favorite_ids(session, SearchEntityType.ARTIST, user_id)
     return _apply_boosts(artists, scores, favorite_ids, popularity_attr="popularity")
 
@@ -496,9 +520,11 @@ async def _search_local_albums(
         scores = _merge_scores(scores, name_scores)
     if not scores:
         return []
-    albums = (await session.exec(
-        select(Album).where(Album.id.in_(scores.keys()))
-    )).all()
+    hidden_ids = await _hidden_artist_ids(session, user_id)
+    stmt = select(Album).where(Album.id.in_(scores.keys()))
+    if hidden_ids:
+        stmt = stmt.where(Album.artist_id.notin_(hidden_ids))
+    albums = (await session.exec(stmt)).all()
     favorite_ids = await _favorite_ids(session, SearchEntityType.ALBUM, user_id)
     return _apply_boosts(albums, scores, favorite_ids)
 
@@ -523,9 +549,11 @@ async def _search_local_tracks(
         scores = _merge_scores(scores, name_scores)
     if not scores:
         return []
-    tracks = (await session.exec(
-        select(Track).where(Track.id.in_(scores.keys()))
-    )).all()
+    hidden_ids = await _hidden_artist_ids(session, user_id)
+    stmt = select(Track).where(Track.id.in_(scores.keys()))
+    if hidden_ids:
+        stmt = stmt.where(Track.artist_id.notin_(hidden_ids))
+    tracks = (await session.exec(stmt)).all()
     favorite_ids = await _favorite_ids(session, SearchEntityType.TRACK, user_id)
     return _apply_boosts(tracks, scores, favorite_ids, popularity_attr="popularity")
 
@@ -537,6 +565,7 @@ async def _local_similar_artists(
     limit: int,
     user_id: int | None = None,
 ) -> list[dict]:
+    hidden_ids = await _hidden_artist_ids(session, user_id)
     if main_artist:
         genres = _parse_genres_field(main_artist.genres)
         genre_filters = [Artist.genres.ilike(f"%{genre}%") for genre in genres if genre]
@@ -548,6 +577,8 @@ async def _local_similar_artists(
                 .order_by(desc(Artist.popularity))
                 .limit(limit)
             )).all()
+            if hidden_ids:
+                rows = [artist for artist in rows if artist.id not in hidden_ids]
             return [
                 {
                     "name": artist.name,
@@ -824,6 +855,7 @@ async def orchestrated_search(
         hit for hit in local_track_hits if _track_title_matches(q, hit[0].name)
     ]
     if confident_artist_hits or confident_track_hits:
+        record_local_resolution(user_id)
         artists_for_grid = [
             _artist_to_spotify_dict(hit[0], size=384)
             for hit in confident_artist_hits[:limit]
@@ -863,6 +895,7 @@ async def orchestrated_search(
         _cache_set(_orchestrated_cache, cache_key, payload)
         return payload
 
+    record_external_resolution(user_id)
     if not settings.LASTFM_API_KEY:
         payload = {
             "query": q,
@@ -1217,6 +1250,7 @@ async def search_artist_profile(
                     continue
                 track, artist, album = row
                 tracks.append(_track_to_spotify_lite(track, artist, album))
+        record_local_resolution(user_id)
         payload = {
             "query": q,
             "mode": "artist",
@@ -1262,6 +1296,7 @@ async def search_artist_profile(
                 "similar": similars,
                 "tracks": tracks
             }
+            record_local_resolution(user_id)
             _cache_set(_artist_profile_cache, cache_key, payload)
             return payload
 
@@ -1481,6 +1516,7 @@ async def search_artist_profile(
         "similar": similars,
         "tracks": tracks
     }
+    record_external_resolution(user_id)
     _cache_set(_artist_profile_cache, cache_key, payload)
     return payload
 
@@ -1511,7 +1547,9 @@ async def search_tracks_quick(
                 continue
             track, artist, album = row
             tracks.append(_track_to_spotify_lite(track, artist, album))
+        record_local_resolution(user_id)
         return {"query": q, "tracks": tracks}
+    record_external_resolution(user_id)
     if not settings.SPOTIFY_CLIENT_ID or not settings.SPOTIFY_CLIENT_SECRET:
         return {"query": q, "tracks": []}
     try:
