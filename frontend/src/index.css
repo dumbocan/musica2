@@ -635,6 +635,12 @@ a {
   --artist-card-height: 360px;
 }
 
+@media (min-width: 1280px) {
+  .artists-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
 .dashboard-hero {
   display: flex;
   flex-direction: column;
