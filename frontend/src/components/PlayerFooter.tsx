@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Shuffle } from 'lucide-react';
-import { usePlayerStore, PlayerQueueItem } from '@/store/usePlayerStore';
+import { usePlayerStore } from '@/store/usePlayerStore';
+import type { PlayerQueueItem } from '@/store/usePlayerStore';
 import { audio2Api } from '@/lib/api';
 
 export function PlayerFooter() {
@@ -38,6 +39,8 @@ export function PlayerFooter() {
   const seekAudio = usePlayerStore((s) => s.seekAudio);
   const setQueue = usePlayerStore((s) => s.setQueue);
   const setCurrentIndex = usePlayerStore((s) => s.setCurrentIndex);
+  const shuffleMode = usePlayerStore((s) => s.shuffleMode);
+  const setShuffleMode = usePlayerStore((s) => s.setShuffleMode);
   const upgradeInFlightRef = useRef(false);
   const lastVolumeRef = useRef(volume);
   const downloadRequestedRef = useRef(new Set<string>());
@@ -331,6 +334,10 @@ export function PlayerFooter() {
     onPlayTrack(randomized[0]);
   }, [queue, onPlayTrack, setCurrentIndex, setQueue, shuffleQueue]);
 
+  const handleToggleShuffleMode = useCallback(() => {
+    setShuffleMode(!shuffleMode);
+  }, [setShuffleMode, shuffleMode]);
+
   const handleSeek = useCallback((value: number) => {
     seekAudio(value);
     if (playbackMode === 'video' && videoController) {
@@ -344,9 +351,20 @@ export function PlayerFooter() {
   }, [prevItem, onPlayTrack]);
 
   const handleNext = useCallback(() => {
-    if (!nextItem || !onPlayTrack) return;
+    if (!queue.length || !onPlayTrack) return;
+    if (shuffleMode) {
+      const currentId = currentIndex >= 0 ? queue[currentIndex]?.videoId : undefined;
+      const candidates = queue.filter((item) => item.videoId && item.videoId !== currentId);
+      const source = candidates.length ? candidates : queue;
+      const randomItem = source[Math.floor(Math.random() * source.length)];
+      if (randomItem) {
+        onPlayTrack(randomItem);
+      }
+      return;
+    }
+    if (!nextItem) return;
     onPlayTrack(nextItem);
-  }, [nextItem, onPlayTrack]);
+  }, [currentIndex, nextItem, onPlayTrack, queue, shuffleMode]);
 
   useEffect(() => {
     const clampVolume = (value: number) => Math.max(0, Math.min(100, value));
@@ -500,6 +518,15 @@ export function PlayerFooter() {
             aria-label="Progreso"
           />
           <span className="album-player__time">{formatTime(duration)}</span>
+          <button
+            type="button"
+            className={`album-player__shuffle-toggle ${shuffleMode ? 'is-active' : ''}`}
+            onClick={handleToggleShuffleMode}
+            aria-pressed={shuffleMode}
+            title={shuffleMode ? 'Aleatorio activado' : 'Aleatorio desactivado'}
+          >
+            <Shuffle className="h-3.5 w-3.5" />
+          </button>
         </div>
       </div>
       <div className="album-player__right">

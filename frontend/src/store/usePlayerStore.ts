@@ -88,6 +88,8 @@ type PlayerStore = {
   pauseAudio: () => void;
   stopAudio: () => void;
   seekAudio: (value: number) => void;
+  shuffleMode: boolean;
+  setShuffleMode: (enabled: boolean) => void;
 };
 
 const getFormats = (audio: HTMLAudioElement | null) => {
@@ -294,4 +296,6 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
     audio.currentTime = value;
     set({ currentTime: value });
   },
+  shuffleMode: false,
+  setShuffleMode: (shuffleMode) => set({ shuffleMode }),
 }));

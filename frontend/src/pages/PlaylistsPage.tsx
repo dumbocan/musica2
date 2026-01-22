@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2, Shuffle, Play } from 'lucide-react';
 import { audio2Api } from '@/lib/api';
-import { usePlayerStore, PlayerQueueItem } from '@/store/usePlayerStore';
+import { usePlayerStore } from '@/store/usePlayerStore';
 import type { CuratedTrackItem, ListsOverviewResponse, PlaylistSection } from '@/types/api';
+import type { PlayerQueueItem } from '@/store/usePlayerStore';
 
 type LoadState = 'idle' | 'loading' | 'error';
 
