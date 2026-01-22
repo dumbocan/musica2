@@ -336,10 +336,12 @@ a {
   }
 
   .artists-grid {
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: clamp(16px, 3vw, 20%);
-    --artist-avatar-size: 140px;
+    grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+    gap: clamp(20px, 4vw, 20%);
+    --artist-avatar-size: 150px;
     --artist-card-height: 320px;
+    max-width: 100%;
+    padding-inline: clamp(12px, 4vw, 36px);
   }
 
   .mobile-bottom-nav {
@@ -386,8 +388,8 @@ a {
 
 @media (max-width: 600px) {
   .artists-grid {
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: clamp(14px, 4vw, 20%);
+    grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
+    gap: clamp(18px, 5vw, 20%);
     --artist-avatar-size: 120px;
     --artist-card-height: 300px;
   }
@@ -621,11 +623,14 @@ a {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 18px;
 }
-
 .artists-grid {
   display: grid;
-  gap: 24px;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  width: 100%;
+  max-width: 1240px;
+  margin: 0 auto;
+  gap: clamp(20px, 3vw, 20%);
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  justify-content: center;
   --artist-avatar-size: 180px;
   --artist-card-height: 360px;
 }

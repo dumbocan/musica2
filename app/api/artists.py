@@ -804,11 +804,19 @@ async def refresh_missing_artist_metadata(
             summary = lastfm.get("summary")
             tags = lastfm.get("tags")
             images = lastfm.get("images")
-            needs_commit = False
+            proxied_images = None
+            if "image" in missing_fields and images:
+                proxied = proxy_image_list(images, size=384)
+                if proxied:
+                    proxied_images = proxied
+
             with get_session() as session:
                 target = session.exec(select(Artist).where(Artist.id == entry["id"])).first()
                 if not target:
+                    skipped += 1
                     continue
+
+                needs_commit = False
                 if "bio" in missing_fields and summary:
                     target.bio_summary = summary
                     target.bio_content = lastfm.get("content", target.bio_content)
@@ -818,18 +826,17 @@ async def refresh_missing_artist_metadata(
                     if genres:
                         target.genres = json.dumps(genres)
                         needs_commit = True
-            if "image" in missing_fields and images:
-                proxied = proxy_image_list(images, size=384)
-                if proxied:
-                    target.images = json.dumps(proxied)
+                if proxied_images:
+                    target.images = json.dumps(proxied_images)
                     needs_commit = True
-        if needs_commit:
-            now = utc_now()
-            target.updated_at = now
-            target.last_refreshed_at = now
-            session.add(target)
-            session.commit()
-            lastfm_updated += 1
+
+                if needs_commit:
+                    now = utc_now()
+                    target.updated_at = now
+                    target.last_refreshed_at = now
+                    session.add(target)
+                    session.commit()
+                    lastfm_updated += 1
 
     except Exception as exc:
         logger.error("[refresh-missing] unexpected error: %r", exc, exc_info=True)
