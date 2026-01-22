@@ -1,20 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Loader2, Shuffle, Play } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { audio2Api } from '@/lib/api';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import type { CuratedTrackItem, ListsOverviewResponse, PlaylistSection } from '@/types/api';
 import type { PlayerQueueItem } from '@/store/usePlayerStore';
 
 type LoadState = 'idle' | 'loading' | 'error';
-
-const shuffleArray = (items: PlayerQueueItem[]) => {
-  const clone = [...items];
-  for (let i = clone.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [clone[i], clone[j]] = [clone[j], clone[i]];
-  }
-  return clone;
-};
 
 export function PlaylistsPage() {
   const [sections, setSections] = useState<PlaylistSection[]>([]);
@@ -27,8 +18,6 @@ export function PlaylistsPage() {
   const setCurrentIndex = usePlayerStore((state) => state.setCurrentIndex);
   const setStatusMessage = usePlayerStore((state) => state.setStatusMessage);
   const playByVideoId = usePlayerStore((state) => state.playByVideoId);
-
-  const queuePlayerState = usePlayerStore((state) => state.queue);
 
   useEffect(() => {
     setLoadState('loading');
@@ -97,7 +86,7 @@ export function PlaylistsPage() {
   );
 
   const applyQueue = useCallback(
-    (tracks: CuratedTrackItem[], shuffle = false) => {
+    (tracks: CuratedTrackItem[]) => {
       const items = tracks
         .map(createQueueItem)
         .filter((item): item is PlayerQueueItem => Boolean(item));
@@ -105,26 +94,18 @@ export function PlaylistsPage() {
         setStatusMessage('No hay pistas con enlaces de YouTube disponibles para esta lista');
         return;
       }
-      const ordered = shuffle ? shuffleArray(items) : items;
-      setQueue(ordered, 0);
+      setQueue(items, 0);
       setCurrentIndex(0);
       setOnPlayTrack(queueHandler);
       setStatusMessage('');
-      queueHandler(ordered[0]);
+      queueHandler(items[0]);
     },
     [createQueueItem, queueHandler, setCurrentIndex, setOnPlayTrack, setQueue, setStatusMessage]
   );
 
-  const handlePlaySection = useCallback(
-    (section: PlaylistSection, shuffle = false) => {
-      applyQueue(section.items, shuffle);
-    },
-    [applyQueue]
-  );
-
   const handleSingleTrackPlay = useCallback(
     (track: CuratedTrackItem) => {
-      applyQueue([track], false);
+      applyQueue([track]);
     },
     [applyQueue]
   );
@@ -166,36 +147,28 @@ export function PlaylistsPage() {
       {renderStatus()}
 
       {sections.map((section) => (
-        <section key={section.key} className="space-y-4 rounded-3xl border border-border bg-panel p-6 shadow-sm">
-          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-            <div>
-              <h2 className="text-xl font-semibold">{section.title}</h2>
-              <p className="text-sm text-muted-foreground">{section.description}</p>
-              {section.meta?.genres && (
-                <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-                  {section.meta.genres.join(' · ')}
-                </p>
-              )}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                className="flex items-center gap-2 rounded-full border border-white/20 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-white transition hover:border-white hover:bg-white/10"
-                onClick={() => handlePlaySection(section)}
-              >
-                <Play className="h-4 w-4" />
-                Reproducir
-              </button>
-              <button
-                type="button"
-                className="flex items-center gap-2 rounded-full border border-white/20 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-white transition hover:border-white hover:bg-white/10"
-                onClick={() => handlePlaySection(section, true)}
-              >
-                <Shuffle className="h-4 w-4" />
-                Aleatorio
-              </button>
-            </div>
-          </div>
+        <section
+          key={section.key}
+          id={section.key}
+          className="space-y-4 rounded-3xl border border-border bg-panel p-6 shadow-sm"
+        >
+        <div>
+          <h2 className="text-xl font-semibold">
+            <a
+              href={`#${section.key}`}
+              className="hover:text-accent transition-colors duration-150"
+              aria-label={`Abrir lista ${section.title}`}
+            >
+              {section.title}
+            </a>
+          </h2>
+          <p className="text-sm text-muted-foreground">{section.description}</p>
+          {section.meta?.genres && (
+            <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+              {section.meta.genres.join(' · ')}
+            </p>
+          )}
+        </div>
           <ol className="space-y-3">
             {section.items.map((track, index) => {
               const primaryArtist = track.artists?.[0]?.name;
