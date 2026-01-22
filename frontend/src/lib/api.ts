@@ -157,6 +157,7 @@ export const audio2Api = {
   getMaintenanceStatus: (params?: { start?: boolean }) => api.get('/maintenance/status', { params }),
   startMaintenance: () => api.post('/maintenance/start'),
   stopMaintenance: () => api.post('/maintenance/stop'),
+  getDashboardStats: () => api.get('/maintenance/dashboard'),
   auditLibrary: (params?: { fresh_days?: number; json?: boolean }) =>
     api.post('/maintenance/audit', null, { params }),
   backfillAlbumTracks: (params?: { mode?: 'missing' | 'incomplete' | 'both'; limit?: number; concurrency?: number }) =>
@@ -169,6 +170,7 @@ export const audio2Api = {
     api.post('/maintenance/purge-artist', null, { params: { ...params, confirm: true } }),
   refreshMissingArtists: (params?: { limit?: number; use_spotify?: boolean; use_lastfm?: boolean }) =>
     api.post('/artists/refresh-missing', null, { params }),
+  getMaintenanceActionStatus: () => api.get('/maintenance/action-status'),
   getMaintenanceLogs: (params?: { since_id?: number; limit?: number; scope?: 'all' | 'maintenance' | 'errors' }) =>
     api.get('/maintenance/logs', { params }),
   clearMaintenanceLogs: () => api.post('/maintenance/logs/clear'),

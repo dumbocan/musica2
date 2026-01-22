@@ -446,7 +446,8 @@ async def get_artist_recommendations(spotify_id: str = Path(..., description="Sp
 @router.get("/{spotify_id}/related")
 async def get_related_artists(spotify_id: str = Path(..., description="Spotify artist ID")):
     """Get related artists using Last.fm (with listeners/playcount) enriched with Spotify search."""
-    from ..core.config import settings
+from ..core.action_status import set_action_status
+from ..core.config import settings
     from ..core.lastfm import lastfm_client
     if not settings.LASTFM_API_KEY:
         return {"top": [], "discover": []}
@@ -746,15 +747,17 @@ async def refresh_missing_artist_metadata(
 ) -> dict:
     """Backfill missing artist metadata (bio/genres/images) and refresh from Spotify when possible."""
     missing_report = collect_artist_quality_report(limit=limit)
-    spotify_updated = 0
-    lastfm_updated = 0
-    skipped = 0
+    set_action_status('metadata_refresh', True)
+    try:
+        spotify_updated = 0
+        lastfm_updated = 0
+        skipped = 0
 
-    for entry in missing_report:
-        spotify_id = entry.get("spotify_id")
-        if use_spotify and spotify_id:
-            try:
-                data = await spotify_client.get_artist(spotify_id)
+        for entry in missing_report:
+            spotify_id = entry.get("spotify_id")
+            if use_spotify and spotify_id:
+                try:
+                    data = await spotify_client.get_artist(spotify_id)
                 if data:
                     save_artist(data)
                     spotify_updated += 1
@@ -821,13 +824,16 @@ async def refresh_missing_artist_metadata(
                 if proxied:
                     target.images = json.dumps(proxied)
                     needs_commit = True
-            if needs_commit:
-                now = utc_now()
-                target.updated_at = now
-                target.last_refreshed_at = now
-                session.add(target)
-                session.commit()
-                lastfm_updated += 1
+        if needs_commit:
+            now = utc_now()
+            target.updated_at = now
+            target.last_refreshed_at = now
+            session.add(target)
+            session.commit()
+            lastfm_updated += 1
+
+    finally:
+        set_action_status('metadata_refresh', False)
 
     return {
         "scanned": len(missing_report),

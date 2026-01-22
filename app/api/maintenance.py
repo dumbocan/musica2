@@ -10,11 +10,13 @@ from pathlib import Path
 import subprocess
 import sys
 import random
-from sqlalchemy import or_, and_, func
+from typing import Any, Awaitable, Callable
+from sqlalchemy import or_, and_, func, exists
 from sqlmodel import select, delete
 
 from ..core.config import settings
 from ..core.log_buffer import get_log_entries, clear_log_entries
+from ..core.action_status import get_action_statuses, run_with_action_status, set_action_status
 from ..core.maintenance import (
     start_maintenance_background,
     maintenance_status,
@@ -85,6 +87,12 @@ def _fetch_album_backfill_targets(mode: str, limit: int) -> list[Album]:
             )
             targets.extend(session.exec(incomplete_stmt).all())
     return targets
+
+
+def _schedule_action_task(action_key: str, coro: Callable[..., Awaitable[Any]], *args: Any, **kwargs: Any) -> asyncio.Task:
+    task = asyncio.create_task(run_with_action_status(action_key, coro, *args, **kwargs))
+    register_maintenance_task(task)
+    return task
 
 
 async def _backfill_album_tracks(spotify_id: str, album_id: int, artist_id: int) -> int:
@@ -362,6 +370,7 @@ async def _run_chart_backfill(
 
 
 def _run_library_audit(fresh_days: int, as_json: bool) -> None:
+    set_action_status('audit', True)
     repo_root = Path(__file__).resolve().parents[2]
     script_path = repo_root / "scripts" / "audit_library_completeness.py"
     args = [sys.executable, str(script_path), "--fresh-days", str(fresh_days)]
@@ -387,6 +396,8 @@ def _run_library_audit(fresh_days: int, as_json: bool) -> None:
                 logger.warning("[audit] %s", line)
     except Exception as exc:
         logger.error("[audit] Audit failed: %s", exc)
+    finally:
+        set_action_status('audit', False)
 
 
 @router.get("/status")
@@ -399,6 +410,48 @@ def get_maintenance_status(start: bool = Query(False, description="Start mainten
     return {
         "enabled": settings.MAINTENANCE_ENABLED,
         "running": maintenance_status(),
+    }
+
+
+@router.get("/dashboard")
+def get_dashboard_stats() -> dict:
+    with get_session() as session:
+        total_artists = session.exec(select(func.count(Artist.id))).one()
+        total_albums = session.exec(select(func.count(Album.id))).one()
+        total_tracks = session.exec(select(func.count(Track.id))).one()
+        artists_missing_images = session.exec(
+            select(func.count(Artist.id)).where(Artist.images.is_(None))
+        ).one()
+        albums_without_tracks = session.exec(
+            select(func.count(Album.id)).where(
+                ~exists(select(1).where(Track.album_id == Album.id))
+            )
+        ).one()
+        youtube_link_exists = exists(
+            select(1).where(
+                (YouTubeDownload.spotify_track_id == Track.spotify_id)
+                & YouTubeDownload.youtube_video_id.is_not(None)
+            )
+        )
+        tracks_without_youtube = session.exec(
+            select(func.count(Track.id)).where(~youtube_link_exists)
+        ).one()
+        youtube_links_total = session.exec(
+            select(func.count(func.distinct(YouTubeDownload.spotify_track_id)))
+            .where(YouTubeDownload.youtube_video_id.is_not(None))
+        ).one()
+        youtube_downloads_completed = session.exec(
+            select(func.count(YouTubeDownload.id)).where(YouTubeDownload.download_status == "completed")
+        ).one()
+    return {
+        "artists_total": int(total_artists or 0),
+        "albums_total": int(total_albums or 0),
+        "tracks_total": int(total_tracks or 0),
+        "artists_missing_images": int(artists_missing_images or 0),
+        "albums_without_tracks": int(albums_without_tracks or 0),
+        "tracks_without_youtube": int(tracks_without_youtube or 0),
+        "youtube_links_total": int(youtube_links_total or 0),
+        "youtube_downloads_completed": int(youtube_downloads_completed or 0),
     }
 
 
@@ -432,6 +485,7 @@ def audit_library(
     fresh_days: int = Query(7, ge=1, le=365),
     as_json: bool = Query(False),
 ) -> dict:
+    set_action_status('audit', True)
     background_tasks.add_task(_run_library_audit, fresh_days, as_json)
     return {"scheduled": True, "fresh_days": fresh_days, "json": as_json}
 
@@ -442,8 +496,8 @@ async def backfill_album_tracks(
     limit: int = Query(200, ge=1, le=2000),
     concurrency: int = Query(2, ge=1, le=6),
 ) -> dict:
-    task = asyncio.create_task(_run_album_tracks_backfill(mode, limit, concurrency))
-    register_maintenance_task(task)
+    action_key = "albums_missing" if mode in {"missing", "both"} else "albums_incomplete"
+    _schedule_action_task(action_key, _run_album_tracks_backfill, mode, limit, concurrency)
     return {"scheduled": True, "mode": mode, "limit": limit, "concurrency": concurrency}
 
 
@@ -452,8 +506,7 @@ async def backfill_youtube_links(
     limit: int = Query(200, ge=1, le=2000),
     retry_failed: bool = Query(False),
 ) -> dict:
-    task = asyncio.create_task(_run_youtube_backfill(limit, retry_failed))
-    register_maintenance_task(task)
+    _schedule_action_task("youtube_links", _run_youtube_backfill, limit, retry_failed)
     return {"scheduled": True, "limit": limit, "retry_failed": retry_failed}
 
 
@@ -464,8 +517,7 @@ async def backfill_chart(
     weeks: int = Query(20, ge=1, le=104),
     force_reset: bool = Query(False),
 ) -> dict:
-    task = asyncio.create_task(_run_chart_backfill(chart_source, chart_name, weeks, force_reset))
-    register_maintenance_task(task)
+    _schedule_action_task("chart_backfill", _run_chart_backfill, chart_source, chart_name, weeks, force_reset)
     return {
         "scheduled": True,
         "chart_source": chart_source,
@@ -510,6 +562,11 @@ def get_logs(
 def clear_logs() -> dict:
     clear_log_entries()
     return {"cleared": True}
+
+
+@router.get("/action-status")
+def get_maintenance_action_status() -> dict:
+    return {"actions": get_action_statuses()}
 
 
 @router.post("/purge-artist")

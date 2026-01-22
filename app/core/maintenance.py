@@ -44,6 +44,11 @@ from ..crud import save_artist, normalize_name
 
 logger = logging.getLogger(__name__)
 
+
+def _re_raise_cancelled(exc: BaseException) -> None:
+    if isinstance(exc, asyncio.CancelledError):
+        raise exc
+
 _BILLBOARD_CHARTS = (
     ("billboard", "hot-100"),
     ("billboard", "billboard-global-200"),
@@ -349,6 +354,7 @@ async def daily_refresh_loop():
                                 spotify_id,
                             )
                     except Exception as exc:
+                        _re_raise_cancelled(exc)
                         logger.warning(
                             "[maintenance] Spotify search failed for %s: %r",
                             entry.get("name"),
@@ -366,6 +372,7 @@ async def daily_refresh_loop():
                                 spotify_id,
                             )
                     except Exception as exc:
+                        _re_raise_cancelled(exc)
                         logger.warning(
                             "[maintenance] Spotify refresh failed for %s: %r",
                             entry.get("name") or spotify_id,
@@ -409,6 +416,7 @@ async def daily_refresh_loop():
                                             entry.get("name")
                                         )
                     except Exception as exc:
+                        _re_raise_cancelled(exc)
                         logger.warning(
                             "[maintenance] Last.fm enrichment failed for %s: %r",
                             entry.get("name"),
@@ -416,6 +424,7 @@ async def daily_refresh_loop():
                             exc_info=True
                         )
         except Exception as exc:
+            _re_raise_cancelled(exc)
             logger.error("[maintenance] daily refresh failed: %r", exc, exc_info=True)
         await asyncio.sleep(24 * 60 * 60)
 
@@ -461,6 +470,7 @@ async def genre_backfill_loop():
                             names.append(name)
                     track_samples[artist.id] = names
         except Exception as exc:
+            _re_raise_cancelled(exc)
             logger.warning(
                 "[maintenance] genre backfill load failed: %r",
                 exc,
@@ -484,6 +494,7 @@ async def genre_backfill_loop():
                 if not genres:
                     genres = await derive_genres_from_artist_tags(artist.name)
             except Exception as exc:
+                _re_raise_cancelled(exc)
                 logger.warning(
                     "[maintenance] genre backfill failed for %s: %r",
                     artist.name,
@@ -568,6 +579,7 @@ async def full_library_refresh_loop():
                         if total is not None and total > local_album_count:
                             needs_discography = True
                     except Exception as exc:
+                        _re_raise_cancelled(exc)
                         is_timeout = isinstance(exc, (asyncio.TimeoutError, TimeoutError, asyncio.CancelledError))
                         cause = getattr(exc, "__cause__", None)
                         if isinstance(cause, asyncio.CancelledError):
@@ -605,6 +617,7 @@ async def full_library_refresh_loop():
                 new_tracks,
             )
         except Exception as exc:
+            _re_raise_cancelled(exc)
             logger.error("[maintenance] library refresh failed: %s", exc)
         await asyncio.sleep(max(60, settings.MAINTENANCE_LIBRARY_LOOP_SECONDS))
 
@@ -700,6 +713,7 @@ async def chart_scrape_loop():
                             fetch_chart_entries, chart_name, chart_date
                         )
                     except Exception as exc:
+                        _re_raise_cancelled(exc)
                         logger.warning(
                             "[maintenance] chart scrape %s/%s %s failed: %s",
                             chart_source,
@@ -754,6 +768,7 @@ async def chart_scrape_loop():
                     total_updates,
                 )
         except Exception as exc:
+            _re_raise_cancelled(exc)
             logger.error("[maintenance] chart scrape failed: %s", exc)
         await asyncio.sleep(settings.CHART_REFRESH_INTERVAL_HOURS * 60 * 60)
 
@@ -826,6 +841,7 @@ async def chart_match_loop():
                 total_dates,
             )
         except Exception as exc:
+            _re_raise_cancelled(exc)
             logger.error("[maintenance] chart match refresh failed: %s", exc)
 
         await asyncio.sleep(settings.CHART_MATCH_REFRESH_INTERVAL_HOURS * 60 * 60)
