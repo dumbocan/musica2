@@ -1,6 +1,8 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+import time
+from collections import defaultdict
 
 from .api.routes_health import router as health_router
 from .api.artists import router as artists_router
@@ -26,6 +28,65 @@ from .core.log_buffer import install_log_buffer
 from .models.base import User
 from sqlmodel import select
 
+# Rate limiting storage: {ip: [(timestamp, endpoint)]}
+_rate_limit_storage: dict[str, list[tuple[float, str]]] = defaultdict(list)
+
+# Rate limit config: {endpoint: (max_requests, window_seconds)}
+RATE_LIMITS = {
+    "/auth/login": (5, 60),       # 5 intentos por minuto
+    "/auth/register": (3, 60),    # 3 registros por minuto
+}
+
+
+def _is_rate_limited(ip: str, endpoint: str) -> tuple[bool, int]:
+    """Check if IP is rate limited. Returns (limited, remaining_seconds)."""
+    now = time.time()
+    # Clean old entries
+    _rate_limit_storage[ip] = [
+        (ts, ep) for ts, ep in _rate_limit_storage[ip]
+        if now - ts < 60
+    ]
+
+    if endpoint in RATE_LIMITS:
+        max_requests, window = RATE_LIMITS[endpoint]
+        recent = [ts for ts, ep in _rate_limit_storage[ip] if ep == endpoint]
+        if len(recent) >= max_requests:
+            oldest = min(recent)
+            remaining = int(oldest + window - now)
+            return True, max(0, remaining)
+
+    return False, 0
+
+
+def _record_request(ip: str, endpoint: str) -> None:
+    """Record a request for rate limiting."""
+    _rate_limit_storage[ip].append((time.time(), endpoint))
+
+
+async def rate_limit_middleware(request: Request, call_next):
+    """Rate limiting for auth endpoints."""
+    path = request.url.path
+
+    # Only rate limit specific auth endpoints
+    if path in RATE_LIMITS:
+        client_ip = request.client.host if request.client else "unknown"
+        limited, remaining = _is_rate_limited(client_ip, path)
+
+        if limited:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": f"Too many requests. Try again in {remaining} seconds.",
+                    "retry_after": remaining,
+                },
+                headers={"Retry-After": str(remaining)}
+            )
+
+        _record_request(client_ip, path)
+
+    return await call_next(request)
+
+
 app = FastAPI(title="Audio2 API", description="Personal Music API Backend")
 install_log_buffer()
 create_db_and_tables()
@@ -37,6 +98,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.middleware("http")(rate_limit_middleware)
 
 # Auth guard: block everything if no users exist or no token provided
 PUBLIC_PATHS = {

@@ -153,20 +153,20 @@ El 2026-01-24 se realizó una auditoría completa del codebase identificando vul
 | Prioridad | Problema | Archivo | Estado |
 |-----------|----------|---------|--------|
 | CRÍTICO | Credenciales expuestas en .env | `.env` | ⏳ Pendiente |
-| ALTO | user_id por defecto = 1 sin auth | `app/api/tracks.py:287,864,954` | ⏳ Pendiente |
-| ALTO | Sin rate limiting en auth | `app/main.py` | ⏳ Pendiente |
+| ALTO | user_id por defecto = 1 sin auth | `app/api/tracks.py:287,864,954` | ✅ Hecho |
+| ALTO | Sin rate limiting en auth | `app/main.py` | ✅ Hecho |
 | MEDIUM | JWT token expira en 24h | `app/core/security.py:21` | ⏳ Pendiente |
 | MEDIUM | Sin validación size en imágenes | `app/api/images.py` | ⏳ Pendiente |
-| LOW | Bug optional chaining | `frontend/src/components/AuthWrapper.tsx:21-25` | ⏳ Pendiente |
-| LOW | Múltiples sesiones por request | `app/api/tracks.py:573,636` | ⏳ Pendiente |
+| LOW | Bug optional chaining | `frontend/src/components/AuthWrapper.tsx:21-25` | ✅ Hecho |
+| LOW | Múltiples sesiones por request | `app/api/tracks.py:573,636` | ✅ Hecho (era intencional) |
 
 ### Tareas Creadas (TaskManager)
 1. Rotar credenciales expuestas en .env (CRÍTICO)
-2. Corregir user_id por defecto en tracks.py (ALTO)
-3. Agregar rate limiting a auth endpoints (ALTO)
+2. Corregir user_id por defecto en tracks.py (ALTO) - ✅
+3. Agregar rate limiting a auth endpoints (ALTO) - ✅
 4. Validar tamaño en proxy de imágenes (MEDIUM)
-5. Corregir bug en AuthWrapper.tsx (LOW)
-6. Mejorar manejo de sesiones en tracks.py (LOW)
+5. Corregir bug en AuthWrapper.tsx (LOW) - ✅
+6. Mejorar manejo de sesiones en tracks.py (LOW) - ✅
 
 ### Documentación Relacionada
 - `CLAUDE.md` - Guidelines específicos del proyecto para Claude Code
