@@ -140,3 +140,38 @@ Se realizó una revisión exhaustiva del código en el directorio `frontend/` pa
 
 **Beneficios:**
 La aplicación ahora cuenta con una base de código frontend más robusta, fácil de mantener y extensible, con una mayor confianza en la corrección lógica gracias a la mejora en la seguridad de tipos. El rendimiento y la experiencia de desarrollo también se han optimizado al reducir re-renders innecesarios y mejorar el soporte de Fast Refresh.
+
+---
+
+## Auditoría de Seguridad (Enero 2026)
+
+### Resumen
+El 2026-01-24 se realizó una auditoría completa del codebase identificando vulnerabilidades de seguridad y bugs.
+
+### Problemas Críticos Encontrados
+
+| Prioridad | Problema | Archivo | Estado |
+|-----------|----------|---------|--------|
+| CRÍTICO | Credenciales expuestas en .env | `.env` | ⏳ Pendiente |
+| ALTO | user_id por defecto = 1 sin auth | `app/api/tracks.py:287,864,954` | ⏳ Pendiente |
+| ALTO | Sin rate limiting en auth | `app/main.py` | ⏳ Pendiente |
+| MEDIUM | JWT token expira en 24h | `app/core/security.py:21` | ⏳ Pendiente |
+| MEDIUM | Sin validación size en imágenes | `app/api/images.py` | ⏳ Pendiente |
+| LOW | Bug optional chaining | `frontend/src/components/AuthWrapper.tsx:21-25` | ⏳ Pendiente |
+| LOW | Múltiples sesiones por request | `app/api/tracks.py:573,636` | ⏳ Pendiente |
+
+### Tareas Creadas (TaskManager)
+1. Rotar credenciales expuestas en .env (CRÍTICO)
+2. Corregir user_id por defecto en tracks.py (ALTO)
+3. Agregar rate limiting a auth endpoints (ALTO)
+4. Validar tamaño en proxy de imágenes (MEDIUM)
+5. Corregir bug en AuthWrapper.tsx (LOW)
+6. Mejorar manejo de sesiones en tracks.py (LOW)
+
+### Documentación Relacionada
+- `CLAUDE.md` - Guidelines específicos del proyecto para Claude Code
+- `README_SEGURIDAD.md` - Resumen ejecutivo de la auditoría
+- `NEW_TOKEN_INSTRUCTIONS.md` - Instrucciones para obtener nuevas credenciales
+
+### Nota
+Si el código queda en estado inservible, consultar commit `86d90cc` (chore: snapshot before major updates) para restaurar un estado funcional conocido.
