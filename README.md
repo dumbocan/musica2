@@ -468,6 +468,44 @@ Current Status
 
 **🎉 PROJECT 100% COMPLETE AND PRODUCTION READY!**
 
+## 🖼️ **Image Storage System (DB-First)**
+
+Since January 2026, Audio2 uses a **DB-first approach** for image storage, replacing the old proxy-based system.
+
+### **How it Works**
+
+1. **First Request**: Image is downloaded from external source (Spotify, Last.fm)
+2. **Storage**: Image is processed and stored in PostgreSQL with multiple sizes:
+   - `image_128`: Thumbnail (128px)
+   - `image_256`: Small card (256px)
+   - `image_512`: Medium (512px)
+   - `image_1024`: Large (1024px)
+3. **Subsequent Requests**: Image is served directly from database (no external calls)
+
+### **Endpoints**
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /images/proxy?url=...&size=512` | Fetch and cache image |
+| `GET /images/entity/{type}/{id}?size=512` | Get cached image for entity |
+| `POST /images/entity/{type}/{id}/cache` | Pre-cache image for entity |
+| `DELETE /images/entity/{type}/{id}` | Delete cached images |
+| `GET /images/stats` | Cache statistics |
+
+### **Database Tables**
+
+- `storedimage`: Stores all image variants with metadata
+- `imagecache_stats`: Tracks cache hits/misses
+
+### **Benefits**
+
+- **API Autonomy**: No dependency on external services for cached images
+- **Performance**: Multiple sizes stored, no on-demand resizing
+- **Centralized**: All images in PostgreSQL, easy backup/restore
+- **Security**: Size validation (32-1024px) prevents DoS attacks
+
+---
+
 ## 🚀 **Roadmap - Future Enhancements**
 
 ### **Phase 1: DB-first Search Professionalization**
