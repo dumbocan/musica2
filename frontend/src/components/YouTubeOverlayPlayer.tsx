@@ -101,7 +101,7 @@ export function YouTubeOverlayPlayer({ videoId }: YouTubeOverlayPlayerProps) {
         event.target.setPlaybackQuality?.('tiny');
       };
 
-      const onStateChange = (_event: { data: number }) => {};
+      const onStateChange = () => {};
 
       const onError = () => {
         setStatusMessage('No se pudo cargar el video');

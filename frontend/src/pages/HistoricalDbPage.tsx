@@ -25,7 +25,7 @@ export function HistoricalDbPage() {
   const [error, setError] = useState<string | null>(null);
   const limit = 200;
 
-  const loadEntries = async (reset: boolean) => {
+  const loadEntries = useCallback(async (reset: boolean) => {
     setLoading(true);
     setError(null);
     try {
@@ -55,14 +55,14 @@ export function HistoricalDbPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [chartName, limit, offset]);
 
   useEffect(() => {
     setEntries([]);
     setSummary(null);
     setOffset(0);
     void loadEntries(true);
-  }, [chartName]);
+  }, [chartName, loadEntries]);
 
   const hasMore = summary ? entries.length < summary.total_rows : true;
 

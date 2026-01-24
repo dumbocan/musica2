@@ -90,7 +90,8 @@ export function ArtistsPage() {
     hasMore,
     loadMore,
     removeArtist,
-  } = usePaginatedArtists({ limit: 200, sortOption: apiSortOption, userId });
+    reload,
+  } = usePaginatedArtists({ limit: 200, sortOption: apiSortOption, userId, searchTerm, genreFilter });
   const navigate = useNavigate();
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const prefetchKeyRef = useRef('');
@@ -104,7 +105,7 @@ export function ArtistsPage() {
 
   useEffect(() => {
     setVisibleCount(20);
-  }, [searchTerm, genreFilter, sortOption]);
+  }, [searchTerm, genreFilter, apiSortOption]);
 
   const genreOptions = useMemo(() => {
     const set = new Set<string>();
@@ -116,33 +117,7 @@ export function ArtistsPage() {
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [artists]);
 
-  const filteredArtists = useMemo(() => {
-    return artists.filter((artist) => {
-      if (sortOption === 'favorites' && !favoriteIds.has(artist.id)) return false;
-      const matchesSearch = artist.name.toLowerCase().includes(searchTerm.toLowerCase());
-      const genres = parseStoredJsonArray(artist.genres)
-        .map((g) => (typeof g === 'string' ? g.toLowerCase() : ''))
-        .filter(Boolean);
-      const matchesGenre = !genreFilter || genres.includes(genreFilter.toLowerCase());
-      return matchesSearch && matchesGenre;
-    });
-  }, [artists, searchTerm, genreFilter, sortOption, favoriteIds]);
-
-  const displayArtists = useMemo(() => filteredArtists.slice(0, visibleCount), [filteredArtists, visibleCount]);
-
-  useEffect(() => {
-    const filterKey = `${searchTerm}|${genreFilter}|${sortOption}`;
-    if (prefetchKeyRef.current !== filterKey) {
-      prefetchKeyRef.current = filterKey;
-      prefetchCountRef.current = 0;
-    }
-    if (!searchTerm && !genreFilter && sortOption !== 'favorites') return;
-    if (isLoading || isLoadingMore || !hasMore) return;
-    if (filteredArtists.length >= 12) return;
-    if (prefetchCountRef.current >= 1) return;
-    prefetchCountRef.current += 1;
-    loadMore();
-  }, [filteredArtists.length, genreFilter, hasMore, isLoading, isLoadingMore, loadMore, searchTerm, sortOption]);
+  const displayArtists = useMemo(() => artists.slice(0, visibleCount), [artists, visibleCount]);
 
   useEffect(() => {
     const target = loadMoreRef.current;
@@ -151,8 +126,8 @@ export function ArtistsPage() {
       (entries) => {
         entries.forEach((entry) => {
           if (!entry.isIntersecting) return;
-          setVisibleCount((prev) => Math.min(prev + 20, filteredArtists.length));
-          if (hasMore && !isLoadingMore && filteredArtists.length - visibleCount < 40) {
+          setVisibleCount((prev) => Math.min(prev + 20, artists.length));
+          if (hasMore && !isLoadingMore && artists.length - visibleCount < 40) {
             loadMore();
           }
         });
@@ -161,7 +136,7 @@ export function ArtistsPage() {
     );
     observer.observe(target);
     return () => observer.disconnect();
-  }, [filteredArtists.length, hasMore, isLoadingMore, loadMore, visibleCount]);
+  }, [artists.length, hasMore, isLoadingMore, loadMore, visibleCount]);
 
   const canFavorite = !!effectiveArtistUserId;
   const canHide = !!userId;

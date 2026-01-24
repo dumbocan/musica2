@@ -6,11 +6,13 @@ interface Options {
   limit?: number;
   sortOption?: 'pop-desc' | 'pop-asc' | 'name-asc';
   userId?: number | null;
+  searchTerm?: string;
+  genreFilter?: string;
 }
 
 type PaginatedArtistsResponse = Artist[] | { items: Artist[], total?: number };
 
-export function usePaginatedArtists({ limit = 200, sortOption = 'pop-desc', userId }: Options = {}) {
+export function usePaginatedArtists({ limit = 200, sortOption = 'pop-desc', userId, searchTerm, genreFilter }: Options = {}) {
   const [artists, setArtists] = useState<Artist[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -47,6 +49,8 @@ export function usePaginatedArtists({ limit = 200, sortOption = 'pop-desc', user
           limit,
           order: sortOption,
           user_id: userId ?? undefined,
+          search: searchTerm ?? undefined,
+          genre: genreFilter ?? undefined,
         });
         const { items, total: totalCount } = normalizeResponse(res.data);
         const base = replace ? [] : artistsRef.current;

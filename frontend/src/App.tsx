@@ -1,10 +1,10 @@
-import { BrowserRouter as Router, Navigate, Routes, Route, useLocation, useNavigate, Link } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { PlayerFooter } from '@/components/PlayerFooter';
 import { useApiStore } from '@/store/useApiStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import { Activity, LogOut, User, ChevronDown, Search, Menu, Home, Music, ListMusic } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useMemo, useRef, useState, type CSSProperties } from 'react';
 import { AlbumDetailPage } from '@/pages/AlbumDetailPage';
 import { YouTubeOverlayPlayer } from '@/components/YouTubeOverlayPlayer';
 
@@ -20,8 +20,7 @@ import { SettingsPage } from '@/pages/SettingsPage';
 import { StatusPage } from '@/pages/StatusPage';
 import { ArtistDiscographyPage } from '@/pages/ArtistDiscographyPage';
 import { HistoricalDbPage } from '@/pages/HistoricalDbPage';
-
-type JwtPayload = { exp?: number };
+import { AuthWrapper } from '@/components/AuthWrapper';
 
 function ServiceDot({ label, color, status, lastError }: { label: string; color: string; status?: string | null; lastError?: string | null }) {
   const isOnline = status === 'online';
@@ -37,28 +36,8 @@ function ServiceDot({ label, color, status, lastError }: { label: string; color:
   );
 }
 
-const decodeJwtPayload = (token: string): JwtPayload | null => {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const padded = base64.padEnd(base64.length + (4 - (base64.length % 4)) % 4, '=');
-    const json = atob(padded);
-    return JSON.parse(json) as JwtPayload;
-  } catch {
-    return null;
-  }
-};
-
-const getTokenExpiryMs = (token: string): number | null => {
-  const payload = decodeJwtPayload(token);
-  if (!payload?.exp) return null;
-  return payload.exp * 1000;
-};
-
 function AppShell() {
-  const { setSidebarOpen, isAuthenticated, searchQuery, setSearchQuery, setSearchTrigger } = useApiStore();
-  const token = useApiStore((s) => s.token);
+  const { setSidebarOpen, searchQuery, setSearchQuery, setSearchTrigger } = useApiStore();
   const logout = useApiStore((s) => s.logout);
   const playbackMode = usePlayerStore((s) => s.playbackMode);
   const nowPlaying = usePlayerStore((s) => s.nowPlaying);
@@ -72,28 +51,6 @@ function AppShell() {
   const closeMenuTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
-
-  useEffect(() => {
-    if (isAuthenticated && location.pathname === '/login') {
-      navigate('/', { replace: true });
-    }
-  }, [isAuthenticated, location.pathname, navigate]);
-
-  useEffect(() => {
-    if (!token) return;
-    const expiryMs = getTokenExpiryMs(token);
-    if (!expiryMs) {
-      logout();
-      return;
-    }
-    const remainingMs = expiryMs - Date.now();
-    if (remainingMs <= 0) {
-      logout();
-      return;
-    }
-    const timeout = setTimeout(() => logout(), remainingMs);
-    return () => clearTimeout(timeout);
-  }, [logout, token]);
 
   const openMenu = () => {
     if (closeMenuTimeout.current) clearTimeout(closeMenuTimeout.current);
@@ -122,7 +79,7 @@ function AppShell() {
     if (!videoEmbedId) return 'pendiente';
     if (videoDownloadVideoId !== videoEmbedId) return 'pendiente';
     if (videoDownloadStatus === 'checking') return 'comprobando';
-    if (videoDownloadStatus === 'downloading') return 'descargando';
+    if (videoDownloadVideoId === videoEmbedId && videoDownloadStatus === 'downloading') return 'descargando';
     if (videoDownloadStatus === 'downloaded') return 'descargado';
     if (videoDownloadStatus === 'error') return 'error';
     return 'pendiente';
@@ -138,20 +95,6 @@ function AppShell() {
     { name: 'Tracks', href: '/tracks', icon: ListMusic },
     { name: 'Status', href: '/status', icon: Activity },
   ];
-
-  // Si no está autenticado, forzar login
-  if (!isAuthenticated) {
-    if (location.pathname !== '/login') {
-      return <Navigate to="/login" replace />;
-    }
-    return (
-      <div className="flex h-screen bg-background">
-        <main className="flex-1 flex items-center justify-center p-6">
-          <LoginPage />
-        </main>
-      </div>
-    );
-  }
 
   return (
     <div className="app-shell">
@@ -239,12 +182,12 @@ function AppShell() {
                   onMouseEnter={openMenu}
                   onMouseLeave={scheduleClose}
                 >
-                  <a href="/settings" className="nav-item" style={{ marginBottom: 0 }}>
+                  <Link to="/settings" className="nav-item" style={{ marginBottom: 0 }}>
                     ⚙️ Settings
-                  </a>
-                  <a href="/settings" className="nav-item" style={{ marginBottom: 0 }}>
+                  </Link>
+                  <Link to="/settings" className="nav-item" style={{ marginBottom: 0 }}>
                     👤 Account
-                  </a>
+                  </Link>
                   <button
                     className="nav-item"
                     style={{ width: '100%', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer' }}
@@ -337,7 +280,9 @@ function AppShell() {
 export default function App() {
   return (
     <Router>
-      <AppShell />
+      <AuthWrapper>
+        <AppShell />
+      </AuthWrapper>
     </Router>
   );
 }

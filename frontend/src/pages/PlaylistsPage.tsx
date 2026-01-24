@@ -9,7 +9,7 @@ type LoadState = 'idle' | 'loading' | 'error';
 
 export function PlaylistsPage() {
   const [sections, setSections] = useState<PlaylistSection[]>([]);
-  const [loadState, setLoadState] = useState<LoadState>('idle');
+  const [loadState, setLoadState] = useState<LoadState>('loading');
   const [topGenres, setTopGenres] = useState<string[]>([]);
   const [anchorArtist, setAnchorArtist] = useState<ListsOverviewResponse['anchor_artist']>(null);
 
@@ -20,7 +20,6 @@ export function PlaylistsPage() {
   const playByVideoId = usePlayerStore((state) => state.playByVideoId);
 
   useEffect(() => {
-    setLoadState('loading');
     audio2Api
       .getListsOverview({ limit_per_list: 12 })
       .then((response) => {

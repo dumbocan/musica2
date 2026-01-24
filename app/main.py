@@ -55,8 +55,6 @@ PUBLIC_PATHS = {
 PUBLIC_PREFIXES = (
     "/static",
     "/favicon",
-    "/youtube/stream",  # Audio streaming uses <audio> without auth headers.
-    "/youtube/download",  # <audio> fetches file URLs without auth headers.
 )
 
 def _apply_cors_headers(response: Response, request: Request) -> Response:

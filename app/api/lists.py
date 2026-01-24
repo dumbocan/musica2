@@ -296,7 +296,7 @@ async def list_overview(
             "title": "Favoritos",
             "description": "Tus canciones marcadas como favoritas en la biblioteca local.",
             "items": favorite_tracks,
-            "meta": { "count": len(favorite_tracks) },
+            "meta": {"count": len(favorite_tracks)},
         })
     if top_genres and genre_tracks:
         lists.append({
@@ -304,7 +304,7 @@ async def list_overview(
             "title": "Géneros parecidos",
             "description": f"Tracks de géneros vinculados a tus artistas favoritos ({', '.join(top_genres)}).",
             "items": genre_tracks,
-            "meta": { "genres": top_genres, "count": len(genre_tracks) },
+            "meta": {"genres": top_genres, "count": len(genre_tracks)},
         })
     if selected_artist and discography_tracks:
         lists.append({
@@ -312,7 +312,7 @@ async def list_overview(
             "title": f"{selected_artist.name}: discografía completa",
             "description": "Todas las canciones conocidas del artista, ordenadas por popularidad local.",
             "items": discography_tracks,
-            "meta": { "artist": { "name": selected_artist.name, "spotify_id": selected_artist.spotify_id } },
+            "meta": {"artist": {"name": selected_artist.name, "spotify_id": selected_artist.spotify_id}},
         })
     if collaboration_tracks:
         lists.append({
@@ -320,7 +320,7 @@ async def list_overview(
             "title": "Colaboraciones y feats",
             "description": "Pistas marcadas como colaboraciones dentro de tus géneros principales.",
             "items": collaboration_tracks,
-            "meta": { "count": len(collaboration_tracks) },
+            "meta": {"count": len(collaboration_tracks)},
         })
     if related_tracks:
         lists.append({
@@ -328,7 +328,7 @@ async def list_overview(
             "title": "Artistas afines",
             "description": "Muestras de artistas cercanos a tus favoritos, sin repetir los mismos nombres.",
             "items": related_tracks,
-            "meta": { "genres": top_genres, "count": len(related_tracks) },
+            "meta": {"genres": top_genres, "count": len(related_tracks)},
         })
 
     return {

@@ -165,8 +165,8 @@ export function LoginPage() {
       });
       const username = response.data?.username || 'Sin usuario';
       setLookupResult(`Usuario: ${username}`);
-    } catch (err: unknown) {
-      console.error('Error en lookup:', err);
+    } catch {
+      console.error('Error en lookup:');
       const msg =
         err && typeof err === 'object' && 'response' in err && err.response && typeof err.response === 'object' && 'data' in err.response && err.response.data && typeof err.response.data === 'object' && 'detail' in err.response.data
           ? (err.response.data as { detail: string }).detail
@@ -191,8 +191,8 @@ export function LoginPage() {
       } else {
         await handleRecovery();
       }
-    } catch (err: unknown) {
-      console.error('Error en autenticación:', err);
+    } catch {
+      console.error('Error en autenticación:');
       const msg =
         err && typeof err === 'object' && 'response' in err && err.response && typeof err.response === 'object' && 'data' in err.response && err.response.data && typeof err.response.data === 'object' && 'detail' in err.response.data
           ? (err.response.data as { detail: string }).detail

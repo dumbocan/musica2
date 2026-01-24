@@ -59,7 +59,7 @@ def _backfill_for_model(
             stmt = stmt.on_conflict_do_nothing(
                 index_elements=["entity_type", "entity_id", "normalized_alias"]
             )
-            result = session.exec(stmt)
+            session.exec(stmt)
             total_candidates += len(alias_rows)
         last_id = rows[-1].id
         session.commit()

@@ -180,8 +180,8 @@ export function SearchPage() {
         setHasMoreLastfm(false);
         setVisibleCount(0);
       }
-    } catch (err) {
-      console.error('Search failed:', err);
+    } catch {
+      console.error('Search failed:');
     } finally {
       setSearching(false);
       setIsLoading(false);

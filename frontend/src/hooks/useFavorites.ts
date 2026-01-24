@@ -9,7 +9,7 @@ type FavoriteItem = {
   track_id?: number;
 };
 
-const getUserIdFromToken = (): number | null => {
+export const getUserIdFromToken = (): number | null => {
   const token = localStorage.getItem('token');
   if (!token) return null;
   const payloadB64 = token.split('.')[0];
