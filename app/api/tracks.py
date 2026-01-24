@@ -284,7 +284,9 @@ def record_track_play(
     track_id: int = Path(..., description="Track ID"),
 ) -> dict:
     """Record a play for a track (counts in play history)."""
-    user_id = getattr(request.state, "user_id", None) or 1
+    user_id = getattr(request.state, "user_id", None)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
     play_history = record_play(track_id, user_id=user_id)
     if not play_history:
         raise HTTPException(status_code=404, detail="Track not found")
@@ -861,7 +863,9 @@ def get_most_played_tracks(
     verify_files: bool = Query(False, description="Check file existence on disk"),
 ) -> dict:
     """Return most played tracks for the current user."""
-    user_id = getattr(request.state, "user_id", None) or 1
+    user_id = getattr(request.state, "user_id", None)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
     hidden_exists = _hidden_artist_exists(user_id)
     with get_session() as session:
         rows = session.exec(
@@ -951,7 +955,9 @@ def get_recent_play_history(
     verify_files: bool = Query(False, description="Check file existence on disk"),
 ) -> dict:
     """Return most recent plays for the current user."""
-    user_id = getattr(request.state, "user_id", None) or 1
+    user_id = getattr(request.state, "user_id", None)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
     hidden_exists = _hidden_artist_exists(user_id)
     with get_session() as session:
         history_query = (

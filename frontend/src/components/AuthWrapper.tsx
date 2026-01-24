@@ -20,7 +20,7 @@ const decodeJwtPayload = (token: string): JwtPayload | null => {
 
 const getTokenExpiryMs = (token: string): number | null => {
   const payload = decodeJwtPayload(token);
-  if (!payload?.exp) return null;
+  if (!payload || !payload.exp) return null;
   return payload.exp * 1000;
 };
 
