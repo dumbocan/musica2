@@ -439,3 +439,60 @@ class SpotifyTrackResponse(SQLModel):
     external_urls: dict  # spotify url
 
 # Future: schemas for create/update endpoints
+
+
+class ImageSize(int, Enum):
+    """Standard image sizes for caching."""
+    THUMBNAIL = 128
+    SMALL = 256
+    MEDIUM = 512
+    LARGE = 1024
+
+
+class StoredImage(SQLModel, table=True):
+    """Stored images with multiple size variants (DB-first approach).
+
+    Instead of fetching from external APIs on every request, images are
+    downloaded once and stored locally with multiple size variants.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    # Entity reference (what this image belongs to)
+    entity_type: str = Field(index=True)  # 'artist', 'album', 'track', 'user'
+    entity_id: Optional[int] = Field(default=None, index=True)  # Can be null for standalone images
+
+    # Original source
+    source_url: str = Field(max_length=500)  # Original URL from Spotify/Last.fm/etc
+    content_hash: str = Field(max_length=64, index=True)  # SHA256 of original image
+
+    # Image data for different sizes (stored as bytes)
+    # We store multiple sizes to avoid resizing on every request
+    image_128: Optional[bytes] = None  # Thumbnail
+    image_256: Optional[bytes] = None  # Small card
+    image_512: Optional[bytes] = None  # Medium
+    image_1024: Optional[bytes] = None  # Large (optional)
+
+    # Metadata
+    width: Optional[int] = None
+    height: Optional[int] = None
+    format: str = Field(default="webp")  # 'webp', 'jpeg', 'png'
+    file_size_bytes: Optional[int] = None
+
+    # Timestamps
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    last_accessed_at: Optional[datetime] = None
+
+    __table_args__ = (
+        UniqueConstraint("entity_type", "entity_id", "content_hash"),
+    )
+
+
+class ImageCacheStats(SQLModel, table=True):
+    """Track image cache statistics."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    entity_type: str = Field(index=True)
+    entity_id: int = Field(index=True)
+    cached_at: datetime = Field(default_factory=utc_now)
+    cache_hit: bool = Field(default=False)
+
