@@ -1,12 +1,13 @@
 """
-DB-first image storage service.
+Image storage service - filesystem-first approach.
 
-Replaces filesystem cache with database storage for true API autonomy.
-Images are downloaded once and stored in the database with multiple size variants.
+Images are stored in storage/images/ and paths kept in DB.
+Keeps DB small while allowing direct file serving via nginx/CDN.
 """
 
 import hashlib
 from typing import Optional
+from pathlib import Path
 from io import BytesIO
 
 import httpx
@@ -16,22 +17,29 @@ from sqlmodel import select
 from .db import get_session
 from .time_utils import utc_now
 from .image_cache import _is_safe_url
-from ..models.base import StoredImage, ImageSize
+from ..models.base import StoredImagePath
 
 
-# Standard sizes to generate
+# Storage configuration
+STORAGE_ROOT = Path("storage")
+IMAGE_STORAGE = STORAGE_ROOT / "images"
 IMAGE_SIZES = [128, 256, 512, 1024]
 DEFAULT_QUALITY = 80
-MAX_IMAGE_SIZE = 2048  # Max original image size to accept
+MAX_ORIGINAL_SIZE = 2048
 
 
-def _get_image_size_enum(size: int) -> Optional[ImageSize]:
-    """Get matching ImageSize enum or None."""
-    size_map = {s.value: s for s in ImageSize}
-    return size_map.get(size)
+def _get_image_size_key(size: int) -> str:
+    """Get field name for image size."""
+    return f"path_{size}"
 
 
-async def download_and_process_image(url: str) -> Optional[bytes]:
+def _ensure_storage_dirs():
+    """Create storage directories if they don't exist."""
+    for size in IMAGE_SIZES:
+        (IMAGE_STORAGE / str(size)).mkdir(parents=True, exist_ok=True)
+
+
+async def download_image(url: str) -> Optional[bytes]:
     """Download image from URL and return as WebP bytes."""
     try:
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
@@ -39,41 +47,49 @@ async def download_and_process_image(url: str) -> Optional[bytes]:
             resp.raise_for_status()
             if 300 <= resp.status_code < 400:
                 return None
-
-            content = resp.content
-
-        # Process image
-        im = Image.open(BytesIO(content)).convert("RGB")
-
-        # Resize if too large
-        max_dim = max(im.width, im.height)
-        if max_dim > MAX_IMAGE_SIZE:
-            im.thumbnail((MAX_IMAGE_SIZE, MAX_IMAGE_SIZE))
-
-        # Convert to WebP
-        buffer = BytesIO()
-        im.save(buffer, format="WEBP", quality=DEFAULT_QUALITY, method=6)
-        return buffer.getvalue()
-
+            return resp.content
     except Exception:
         return None
 
 
-def get_image_from_db(
-    entity_type: str,
-    entity_id: int,
-    size: int = 512
-) -> Optional[tuple[bytes, str]]:
-    """
-    Get image from database, resizing on-demand if needed.
+def process_image(image_data: bytes) -> dict[str, bytes]:
+    """Process image and generate all size variants.
 
-    Returns (image_bytes, content_type) or None if not found.
+    Returns dict with path_* keys and image bytes.
     """
+    im = Image.open(BytesIO(image_data)).convert("RGB")
+    width, height = im.size
+
+    # Resize if too large
+    max_dim = max(width, height)
+    if max_dim > MAX_ORIGINAL_SIZE:
+        im.thumbnail((MAX_ORIGINAL_SIZE, MAX_ORIGINAL_SIZE))
+        width, height = im.size
+
+    result = {"original": image_data}
+    content_hash = hashlib.sha256(image_data).hexdigest()
+
+    for size in IMAGE_SIZES:
+        if max(width, height) <= size:
+            # Image is smaller, use original for this size
+            result[size] = image_data
+        else:
+            # Resize
+            im_copy = im.copy()
+            im_copy.thumbnail((size, size))
+            buffer = BytesIO()
+            im_copy.save(buffer, format="WEBP", quality=DEFAULT_QUALITY, method=6)
+            result[size] = buffer.getvalue()
+
+    return result, content_hash, width, height
+
+
+def get_image_path(entity_type: str, entity_id: int, size: int = 512) -> Optional[str]:
+    """Get image path for an entity from DB."""
     with get_session() as session:
-        # Try to find existing image for this entity
-        stmt = select(StoredImage).where(
-            StoredImage.entity_type == entity_type,
-            StoredImage.entity_id == entity_id,
+        stmt = select(StoredImagePath).where(
+            StoredImagePath.entity_type == entity_type,
+            StoredImagePath.entity_id == entity_id,
         ).limit(1)
         stored = session.exec(stmt).first()
 
@@ -86,69 +102,65 @@ def get_image_from_db(
         session.commit()
 
         # Return best matching size
-        size_enum = _get_image_size_enum(size)
-        if size_enum == ImageSize.THUMBNAIL and stored.image_128:
-            return stored.image_128, "image/webp"
-        elif size_enum == ImageSize.SMALL and stored.image_256:
-            return stored.image_256, "image/webp"
-        elif size_enum == ImageSize.MEDIUM and stored.image_512:
-            return stored.image_512, "image/webp"
-        elif size_enum == ImageSize.LARGE and stored.image_1024:
-            return stored.image_1024, "image/webp"
+        size_key = _get_image_size_key(size)
+        path = getattr(stored, size_key, None)
+        if path:
+            return str(IMAGE_STORAGE / path)
 
-        # Fall back to smaller size and resize on-demand
-        for size_key in ["image_512", "image_256", "image_128"]:
-            image_data = getattr(stored, size_key)
-            if image_data:
-                return image_data, "image/webp"
+        # Fall back to smaller size
+        for s in sorted(IMAGE_SIZES, reverse=True):
+            pk = _get_image_size_key(s)
+            p = getattr(stored, pk, None)
+            if p:
+                return str(IMAGE_STORAGE / p)
 
         return None
 
 
-def get_image_by_hash(content_hash: str) -> Optional[StoredImage]:
-    """Find stored image by its content hash."""
+def find_by_hash(content_hash: str) -> Optional[StoredImagePath]:
+    """Find stored image by content hash."""
     with get_session() as session:
-        stmt = select(StoredImage).where(
-            StoredImage.content_hash == content_hash
+        stmt = select(StoredImagePath).where(
+            StoredImagePath.content_hash == content_hash
         ).limit(1)
         return session.exec(stmt).first()
 
 
 async def store_image(
     entity_type: str,
-    entity_id: Optional[int],
+    entity_id: int,
     source_url: str,
     image_data: Optional[bytes] = None
-) -> Optional[StoredImage]:
+) -> Optional[StoredImagePath]:
     """
-    Download and store an image in the database.
+    Download and store an image.
 
     Args:
-        entity_type: Type of entity ('artist', 'album', 'track', 'user')
-        entity_id: ID of the entity (can be None for temporary storage)
+        entity_type: Type of entity ('artist', 'album', 'track')
+        entity_id: ID of the entity
         source_url: URL to download from if image_data not provided
         image_data: Pre-downloaded image data (optional)
 
     Returns:
-        StoredImage instance or None on failure
+        StoredImagePath instance or None on failure
     """
     # Download if not provided
     if image_data is None:
         if not _is_safe_url(source_url):
             return None
-        image_data = await download_and_process_image(source_url)
+        image_data = await download_image(source_url)
 
     if not image_data:
         return None
 
-    # Calculate hash
-    content_hash = hashlib.sha256(image_data).hexdigest()
+    # Process image
+    processed, content_hash, width, height = process_image(image_data)
 
     # Check if already stored
-    existing = get_image_by_hash(content_hash)
+    existing = find_by_hash(content_hash)
     if existing:
-        # Update entity reference if provided
-        if entity_id and existing.entity_id != entity_id:
+        # Update entity reference if different
+        if existing.entity_id != entity_id:
             with get_session() as session:
                 existing.entity_id = entity_id
                 existing.entity_type = entity_type
@@ -157,75 +169,96 @@ async def store_image(
                 session.commit()
         return existing
 
-    # Process and store all sizes
-    try:
-        im = Image.open(BytesIO(image_data)).convert("RGB")
-        width, height = im.size
+    # Ensure directories exist
+    _ensure_storage_dirs()
 
-        sizes_data = {}
-        for size in IMAGE_SIZES:
-            if max(width, height) <= size:
-                # Image is smaller than this size, store original
-                if size == IMAGE_SIZES[0]:
-                    sizes_data["image_128"] = image_data
-                elif size == IMAGE_SIZES[1]:
-                    sizes_data["image_256"] = image_data
-                elif size == IMAGE_SIZES[2]:
-                    sizes_data["image_512"] = image_data
-                elif size == IMAGE_SIZES[3]:
-                    sizes_data["image_1024"] = image_data
-            else:
-                # Resize
-                im_copy = im.copy()
-                im_copy.thumbnail((size, size))
-                buffer = BytesIO()
-                im_copy.save(buffer, format="WEBP", quality=DEFAULT_QUALITY, method=6)
+    # Save files to disk and build paths
+    paths = {}
+    content_hash_short = content_hash[:12]
 
-                size_key = f"image_{size}"
-                sizes_data[size_key] = buffer.getvalue()
+    for size, data in processed.items():
+        if size == "original":
+            continue
+        # Path like: "artist/abc123def456_256.webp"
+        folder = entity_type
+        filename = f"{content_hash_short}_{size}.webp"
+        full_path = IMAGE_STORAGE / str(size) / folder / filename
 
-        with get_session() as session:
-            stored = StoredImage(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                source_url=source_url,
-                content_hash=content_hash,
-                width=width,
-                height=height,
-                format="webp",
-                file_size_bytes=len(image_data),
-                **sizes_data
-            )
-            session.add(stored)
-            session.commit()
-            session.refresh(stored)
-            return stored
+        # Create folder if needed
+        full_path.parent.mkdir(parents=True, exist_ok=True)
 
-    except Exception:
-        return None
+        # Save file
+        full_path.write_bytes(data)
+        paths[f"path_{size}"] = f"{size}/{folder}/{filename}"
+
+    # Store in DB
+    with get_session() as session:
+        stored = StoredImagePath(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            source_url=source_url,
+            content_hash=content_hash,
+            original_width=width,
+            original_height=height,
+            format="webp",
+            file_size_bytes=len(image_data),
+            **paths
+        )
+        session.add(stored)
+        session.commit()
+        session.refresh(stored)
+        return stored
 
 
 def delete_images_for_entity(entity_type: str, entity_id: int) -> int:
-    """Delete all images for an entity. Returns count deleted."""
+    """Delete all images for an entity from DB and disk. Returns count deleted."""
     with get_session() as session:
-        stmt = select(StoredImage).where(
-            StoredImage.entity_type == entity_type,
-            StoredImage.entity_id == entity_id,
+        stmt = select(StoredImagePath).where(
+            StoredImagePath.entity_type == entity_type,
+            StoredImagePath.entity_id == entity_id,
         )
         images = session.exec(stmt).all()
+
+        # Delete files from disk
+        deleted_files = 0
+        for img in images:
+            for size in IMAGE_SIZES:
+                path_key = f"path_{size}"
+                path = getattr(img, path_key, None)
+                if path:
+                    full_path = IMAGE_STORAGE / path
+                    if full_path.exists():
+                        full_path.unlink()
+                        deleted_files += 1
+
+        # Delete from DB
         for img in images:
             session.delete(img)
         session.commit()
-        return len(images)
+        return deleted_files
 
 
-def get_cache_stats() -> dict:
-    """Get image cache statistics."""
+def get_image_stats() -> dict:
+    """Get image storage statistics."""
     with get_session() as session:
-        total = session.exec(select(StoredImage)).all()
-        total_size = sum(img.file_size_bytes or 0 for img in total)
+        images = session.exec(select(StoredImagePath)).all()
+        total_size = sum(img.file_size_bytes or 0 for img in images)
+
+        # Count files on disk
+        file_count = 0
+        disk_size = 0
+        for size in IMAGE_SIZES:
+            size_folder = IMAGE_STORAGE / str(size)
+            if size_folder.exists():
+                for f in size_folder.rglob("*.webp"):
+                    file_count += 1
+                    disk_size += f.stat().st_size
+
         return {
-            "total_images": len(total),
+            "total_images": len(images),
             "total_size_bytes": total_size,
             "total_size_mb": round(total_size / (1024 * 1024), 2),
+            "files_on_disk": file_count,
+            "disk_size_mb": round(disk_size / (1024 * 1024), 2),
+            "storage_path": str(IMAGE_STORAGE),
         }

@@ -449,34 +449,34 @@ class ImageSize(int, Enum):
     LARGE = 1024
 
 
-class StoredImage(SQLModel, table=True):
-    """Stored images with multiple size variants (DB-first approach).
+class StoredImagePath(SQLModel, table=True):
+    """Store paths to images in filesystem (autonomous-first approach).
 
-    Instead of fetching from external APIs on every request, images are
-    downloaded once and stored locally with multiple size variants.
+    Images are stored in storage/images/ and paths are kept in DB.
+    This keeps DB small and allows nginx to serve files directly.
     """
     id: Optional[int] = Field(default=None, primary_key=True)
 
     # Entity reference (what this image belongs to)
     entity_type: str = Field(index=True)  # 'artist', 'album', 'track', 'user'
-    entity_id: Optional[int] = Field(default=None, index=True)  # Can be null for standalone images
+    entity_id: Optional[int] = Field(default=None, index=True)
 
-    # Original source
-    source_url: str = Field(max_length=500)  # Original URL from Spotify/Last.fm/etc
-    content_hash: str = Field(max_length=64, index=True)  # SHA256 of original image
+    # Original source URL (for reference/migration)
+    source_url: str = Field(max_length=500)
 
-    # Image data for different sizes (stored as bytes)
-    # We store multiple sizes to avoid resizing on every request
-    image_128: Optional[bytes] = None  # Thumbnail
-    image_256: Optional[bytes] = None  # Small card
-    image_512: Optional[bytes] = None  # Medium
-    image_1024: Optional[bytes] = None  # Large (optional)
+    # Relative path from storage root (autonomous - portable)
+    # Example: "artists/abc123.webp"
+    path_128: Optional[str] = None  # Thumbnail
+    path_256: Optional[str] = None  # Small
+    path_512: Optional[str] = None  # Medium
+    path_1024: Optional[str] = None  # Large
 
     # Metadata
-    width: Optional[int] = None
-    height: Optional[int] = None
-    format: str = Field(default="webp")  # 'webp', 'jpeg', 'png'
+    original_width: Optional[int] = None
+    original_height: Optional[int] = None
+    format: str = Field(default="webp")
     file_size_bytes: Optional[int] = None
+    content_hash: str = Field(max_length=64, index=True)
 
     # Timestamps
     created_at: datetime = Field(default_factory=utc_now)
@@ -484,15 +484,6 @@ class StoredImage(SQLModel, table=True):
     last_accessed_at: Optional[datetime] = None
 
     __table_args__ = (
-        UniqueConstraint("entity_type", "entity_id", "content_hash"),
+        UniqueConstraint("entity_type", "entity_id"),
     )
-
-
-class ImageCacheStats(SQLModel, table=True):
-    """Track image cache statistics."""
-    id: Optional[int] = Field(default=None, primary_key=True)
-    entity_type: str = Field(index=True)
-    entity_id: int = Field(index=True)
-    cached_at: datetime = Field(default_factory=utc_now)
-    cache_hit: bool = Field(default=False)
 

@@ -468,41 +468,55 @@ Current Status
 
 **🎉 PROJECT 100% COMPLETE AND PRODUCTION READY!**
 
-## 🖼️ **Image Storage System (DB-First)**
+## 🖼️ **Image Storage System (Filesystem-First)**
 
-Since January 2026, Audio2 uses a **DB-first approach** for image storage, replacing the old proxy-based system.
+Since January 2026, Audio2 uses a **filesystem-first approach** for image storage, keeping DB small while allowing direct file serving.
 
 ### **How it Works**
 
 1. **First Request**: Image is downloaded from external source (Spotify, Last.fm)
-2. **Storage**: Image is processed and stored in PostgreSQL with multiple sizes:
-   - `image_128`: Thumbnail (128px)
-   - `image_256`: Small card (256px)
-   - `image_512`: Medium (512px)
-   - `image_1024`: Large (1024px)
-3. **Subsequent Requests**: Image is served directly from database (no external calls)
+2. **Storage**:
+   - Files saved to `storage/images/{size}/{entity_type}/`
+   - Paths stored in DB (NOT the images themselves)
+   - Multiple sizes generated: 128, 256, 512, 1024px
+3. **Subsequent Requests**: Files served directly from disk via nginx/Python
+
+### **Directory Structure**
+
+```
+storage/
+└── images/
+    ├── 128/
+    │   ├── artist/
+    │   │   └── abc123def456_128.webp
+    │   └── album/
+    ├── 256/
+    │   └── ...
+    ├── 512/
+    └── 1024/
+```
 
 ### **Endpoints**
 
 | Endpoint | Description |
 |----------|-------------|
 | `GET /images/proxy?url=...&size=512` | Fetch and cache image |
-| `GET /images/entity/{type}/{id}?size=512` | Get cached image for entity |
-| `POST /images/entity/{type}/{id}/cache` | Pre-cache image for entity |
+| `GET /images/entity/{type}/{id}?size=512` | Get cached image file |
+| `POST /images/entity/{type}/{id}/cache` | Pre-cache image |
 | `DELETE /images/entity/{type}/{id}` | Delete cached images |
-| `GET /images/stats` | Cache statistics |
+| `GET /images/stats` | Storage statistics |
 
-### **Database Tables**
+### **Database Table**
 
-- `storedimage`: Stores all image variants with metadata
-- `imagecache_stats`: Tracks cache hits/misses
+- `storedimagepath`: Stores relative paths (not BLOBs)
 
 ### **Benefits**
 
-- **API Autonomy**: No dependency on external services for cached images
-- **Performance**: Multiple sizes stored, no on-demand resizing
-- **Centralized**: All images in PostgreSQL, easy backup/restore
-- **Security**: Size validation (32-1024px) prevents DoS attacks
+- **DB Lightweight**: Only stores paths, not image data
+- **Fast Backups**: DB dump is small
+- **nginx Ready**: Files can be served directly by web server
+- **Portable**: Move storage folder, just update paths if needed
+- **Secure**: Size validation (32-1024px) prevents DoS
 
 ---
 
