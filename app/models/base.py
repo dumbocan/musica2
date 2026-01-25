@@ -1,7 +1,7 @@
 # Base for SQLModel classes
 
 from sqlmodel import SQLModel, Field, Relationship
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import UniqueConstraint, ForeignKey
 from typing import Optional, List
 from datetime import datetime, date
 from app.core.time_utils import utc_now
@@ -58,7 +58,8 @@ class Artist(SQLModel, table=True):
     name: str = Field(max_length=200, index=True)
     normalized_name: str = Field(default="", index=True)  # For deduplication
     genres: Optional[str] = None  # JSON list as string
-    images: Optional[str] = None  # JSON list of image URLs
+    images: Optional[str] = None  # JSON list of image URLs (original from Spotify)
+    image_path_id: Optional[int] = Field(ForeignKey("storedimagepath.id"), default=None)  # Local cached image
     popularity: int = Field(default=0)  # Spotify 0-100
     followers: int = Field(default=0)
     bio_summary: Optional[str] = None  # Last.fm bio summary
@@ -71,6 +72,7 @@ class Artist(SQLModel, table=True):
     albums: Optional[List["Album"]] = Relationship(back_populates="artist")
     tracks: Optional[List["Track"]] = Relationship(back_populates="artist")
     favorites: Optional[List["UserFavorite"]] = Relationship(back_populates="artist")
+    image_path: Optional["StoredImagePath"] = Relationship()
 
 
 class SearchAlias(SQLModel, table=True):
@@ -108,7 +110,8 @@ class Album(SQLModel, table=True):
     artist_id: int = Field(foreign_key="artist.id", ondelete="CASCADE")
     release_date: str  # YYYY-MM-DD
     total_tracks: int = Field(default=0)
-    images: Optional[str] = None  # JSON
+    images: Optional[str] = None  # JSON (original from Spotify)
+    image_path_id: Optional[int] = Field(ForeignKey("storedimagepath.id"), default=None)  # Local cached image
     label: Optional[str] = Field(max_length=150)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)  # Last metadata update
@@ -118,6 +121,7 @@ class Album(SQLModel, table=True):
     artist: Artist = Relationship(back_populates="albums")
     tracks: Optional[List["Track"]] = Relationship(back_populates="album")
     favorites: Optional[List["UserFavorite"]] = Relationship(back_populates="album")
+    image_path: Optional["StoredImagePath"] = Relationship()
 
 
 class Track(SQLModel, table=True):
