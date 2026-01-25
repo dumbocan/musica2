@@ -6,6 +6,7 @@ Keeps DB small while allowing direct file serving via nginx/CDN.
 """
 
 import hashlib
+import re
 from typing import Optional
 from pathlib import Path
 from io import BytesIO
@@ -17,7 +18,7 @@ from sqlmodel import select
 from .db import get_session
 from .time_utils import utc_now
 from .image_cache import _is_safe_url
-from ..models.base import StoredImagePath
+from ..models.base import StoredImagePath, Artist, Album, Track
 
 
 # Storage configuration
@@ -33,10 +34,53 @@ def _get_image_size_key(size: int) -> str:
     return f"path_{size}"
 
 
+def _sanitize_filename(name: str) -> str:
+    """Sanitize a name for use in file paths.
+
+    Removes/replaces characters that are invalid in filenames.
+    """
+    # Replace common invalid chars with underscore
+    name = re.sub(r'[<>:"/\\|?*]', '_', name)
+    # Remove control characters
+    name = re.sub(r'[\x00-\x1f\x7f]', '', name)
+    # Limit length
+    name = name.strip()[:50]
+    # Replace multiple underscores with single
+    name = re.sub(r'_+', '_', name)
+    # Remove leading/trailing underscores
+    name = name.strip('_')
+    return name if name else 'unknown'
+
+
+def _get_entity_name(entity_type: str, entity_id: int) -> str:
+    """Get human-readable name for an entity from DB.
+
+    Returns sanitized name for use in file paths.
+    """
+    with get_session() as session:
+        if entity_type == "artist":
+            entity = session.get(Artist, entity_id)
+            if entity:
+                return _sanitize_filename(entity.name)
+        elif entity_type == "album":
+            entity = session.get(Album, entity_id)
+            if entity:
+                return _sanitize_filename(entity.name)
+        elif entity_type == "track":
+            entity = session.get(Track, entity_id)
+            if entity:
+                return _sanitize_filename(entity.name)
+    return "unknown"
+
+
 def _ensure_storage_dirs():
     """Create storage directories if they don't exist."""
     for size in IMAGE_SIZES:
         (IMAGE_STORAGE / str(size)).mkdir(parents=True, exist_ok=True)
+    # Also create entity type directories
+    for entity_type in ["artist", "album", "track"]:
+        for size in IMAGE_SIZES:
+            (IMAGE_STORAGE / str(size) / entity_type).mkdir(parents=True, exist_ok=True)
 
 
 async def download_image(url: str) -> Optional[bytes]:
@@ -172,24 +216,27 @@ async def store_image(
     # Ensure directories exist
     _ensure_storage_dirs()
 
+    # Get human-readable name for the entity
+    entity_name = _get_entity_name(entity_type, entity_id) if entity_id else "external"
+    content_hash_short = content_hash[:8]  # Shorter hash for readability
+
     # Save files to disk and build paths
     paths = {}
-    content_hash_short = content_hash[:12]
 
     for size, data in processed.items():
         if size == "original":
             continue
-        # Path like: "artist/abc123def456_256.webp"
-        folder = entity_type
-        filename = f"{content_hash_short}_{size}.webp"
-        full_path = IMAGE_STORAGE / str(size) / folder / filename
+        # Path like: "artist/metallica__abc12345_512.webp"
+        # Format: {entity_name}__{hash_short}_{size}.webp
+        filename = f"{entity_name}__{content_hash_short}_{size}.webp"
+        full_path = IMAGE_STORAGE / str(size) / entity_type / filename
 
         # Create folder if needed
         full_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Save file
         full_path.write_bytes(data)
-        paths[f"path_{size}"] = f"{size}/{folder}/{filename}"
+        paths[f"path_{size}"] = f"{size}/{entity_type}/{filename}"
 
     # Store in DB
     with get_session() as session:
