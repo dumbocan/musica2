@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { audio2Api, API_BASE_URL } from '@/lib/api';
+import { useApiStore } from '@/store/useApiStore';
 import type { Artist as LocalArtist } from '@/types/api';
 
 type AlbumImage = { url: string };
@@ -354,19 +355,22 @@ function ArtistPhoto({ name, artistId, imagePathId, remoteUrl, localImage }: {
   remoteUrl?: string;
   localImage?: string | null
 }) {
+  const { token } = useApiStore();
+  const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+
   // Use local cached image if available
   let imageUrl: string | null = null;
 
   if (imagePathId && artistId) {
-    imageUrl = `${API_BASE_URL}/images/entity/artist/${artistId}?size=512`;
+    imageUrl = `${API_BASE_URL}/images/entity/artist/${artistId}?size=512${tokenParam}`;
   } else {
     // Fallback to proxy for external URLs
     const localImages = parseStoredImages(localImage);
     const candidate = remoteUrl || localImages[0] || '';
     if (candidate.startsWith('/images/proxy')) {
-      imageUrl = `${API_BASE_URL}${candidate}`;
+      imageUrl = `${API_BASE_URL}${candidate}${tokenParam ? `&token=${encodeURIComponent(token)}` : ''}`;
     } else if (candidate) {
-      imageUrl = `${API_BASE_URL}/images/proxy?url=${encodeURIComponent(candidate)}&size=512`;
+      imageUrl = `${API_BASE_URL}/images/proxy?url=${encodeURIComponent(candidate)}&size=512${tokenParam}`;
     }
   }
 

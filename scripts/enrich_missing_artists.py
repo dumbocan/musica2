@@ -18,7 +18,8 @@ def _should_enrich(artist: Artist) -> bool:
     if not artist.spotify_id:
         return False
     missing = False
-    if not artist.images or artist.images.strip() in {"[]", ""}:
+    # Check image_path_id (new filesystem-first) or fallback to images field
+    if not artist.image_path_id and (not artist.images or artist.images.strip() in {"[]", ""}):
         missing = True
     if not artist.genres or artist.genres.strip() in {"[]", ""}:
         missing = True

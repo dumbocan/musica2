@@ -50,7 +50,7 @@ const parseStoredJsonArray = (raw?: string | null): ParsedJsonEntry[] => {
     .replace(/None/g, 'null');
   return tryParse(normalized);
 };
-const getArtistAssets = (artist: Artist) => {
+const getArtistAssets = (artist: Artist, token: string | null) => {
   const images = parseStoredJsonArray(artist.images);
   const firstImageEntry = images.find((img) => {
     if (typeof img === 'string') return !!img.trim();
@@ -64,10 +64,11 @@ const getArtistAssets = (artist: Artist) => {
   // Use local cached image if available, otherwise fallback to proxy
   let imageUrl: string | null = null;
   const candidate = rawUrl || '';
+  const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
 
   // If artist has image_path_id, use local storage
   if (artist.image_path_id) {
-    imageUrl = `${API_BASE_URL}/images/entity/artist/${artist.id}?size=256`;
+    imageUrl = `${API_BASE_URL}/images/entity/artist/${artist.id}?size=256${tokenParam}`;
   } else if (candidate) {
     // Fallback to proxy for external URLs
     imageUrl = candidate.startsWith('/images/proxy')
@@ -86,7 +87,7 @@ export function ArtistsPage() {
   const [sortOption, setSortOption] = useState<'pop-desc' | 'pop-asc' | 'name-asc' | 'favorites'>('pop-desc');
   const apiSortOption = sortOption === 'favorites' ? 'pop-desc' : sortOption;
   const [genreFilter, setGenreFilter] = useState('');
-  const { isArtistsLoading, userId } = useApiStore();
+  const { isArtistsLoading, userId, token } = useApiStore();
   const {
     artists,
     isLoading,
@@ -186,7 +187,7 @@ export function ArtistsPage() {
                   Artists Found
                 </h3>
                 <span className="text-xs text-white/70">
-                  Cargados: {artists.length} · Filtrados: {filteredArtists.length}
+                  Cargados: {artists.length}
                 </span>
               </div>
             </div>
@@ -266,7 +267,7 @@ export function ArtistsPage() {
         <div className="space-y-4">
           <div className="artists-grid">
             {displayArtists.map((artist) => {
-              const { imageUrl, genres } = getArtistAssets(artist);
+              const { imageUrl, genres } = getArtistAssets(artist, token);
               const disabled = !artist.spotify_id;
 
               const isFavorite = favoriteIds.has(artist.id);

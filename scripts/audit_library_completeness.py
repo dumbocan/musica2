@@ -29,7 +29,6 @@ from sqlalchemy import func
 from sqlmodel import select
 
 from app.core.db import get_session
-from app.core.image_proxy import has_valid_images
 from app.models.base import (
     Album,
     Artist,
@@ -73,8 +72,8 @@ def _collect_stats(fresh_days: int) -> Dict[str, Any]:
         missing_genres = 0
         missing_bio = 0
         for artist in artists:
-            images = _parse_images_field(artist.images)
-            if not has_valid_images(images):
+            # Check image_path_id (new filesystem-first approach)
+            if not artist.image_path_id:
                 missing_images += 1
             if not artist.genres or artist.genres.strip() in {"", "[]"}:
                 missing_genres += 1

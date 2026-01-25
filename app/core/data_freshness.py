@@ -20,7 +20,7 @@ from sqlalchemy import func
 from .spotify import spotify_client
 from .lastfm import lastfm_client
 from .genre_backfill import extract_genres_from_lastfm_tags
-from .image_proxy import proxy_image_list, has_valid_images
+from .image_proxy import proxy_image_list
 from .time_utils import utc_now
 from .db import get_session
 from ..models.base import Artist, Album, Track, YouTubeDownload
@@ -65,12 +65,13 @@ class DataFreshnessManager:
 
         Returns True if:
         - No updated_at timestamp (legacy data)
+        - No image_path_id (needs local image)
         - Updated more than max_artist_age_days ago
         """
         if not artist.updated_at:
             return True  # Legacy data needs update
-        images = _parse_images_field(artist.images)
-        if not has_valid_images(images):
+        # Check image_path_id (new filesystem-first approach)
+        if not artist.image_path_id:
             return True
 
         age_hours = (utc_now() - artist.updated_at).total_seconds() / 3600

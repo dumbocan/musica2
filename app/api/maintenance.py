@@ -420,7 +420,7 @@ def get_dashboard_stats() -> dict:
         total_albums = session.exec(select(func.count(Album.id))).one()
         total_tracks = session.exec(select(func.count(Track.id))).one()
         artists_missing_images = session.exec(
-            select(func.count(Artist.id)).where(Artist.images.is_(None))
+            select(func.count(Artist.id)).where(Artist.image_path_id.is_(None))
         ).one()
         albums_without_tracks = session.exec(
             select(func.count(Album.id)).where(

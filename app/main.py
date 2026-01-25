@@ -115,6 +115,12 @@ PUBLIC_PATHS = {
     "/db-status",
     "/images/proxy",
 }
+# Endpoints que aceptan token como query param (para HTMLAudioElement y imágenes)
+TOKEN_QUERY_PATHS = {
+    "/youtube/stream",
+    "/youtube/download",
+    "/images/entity",
+}
 PUBLIC_PREFIXES = (
     "/static",
     "/favicon",
@@ -140,6 +146,9 @@ async def require_authenticated_user(request: Request, call_next):
     if path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
         return await call_next(request)
 
+    # Check if path accepts token from query param
+    accepts_query_token = any(path.startswith(p) for p in TOKEN_QUERY_PATHS)
+
     # If no users exist, force registration first
     with get_session() as session:
         user_exists = session.exec(select(User.id)).first()
@@ -147,10 +156,17 @@ async def require_authenticated_user(request: Request, call_next):
             response = JSONResponse(status_code=401, content={"detail": "No users found. Register via /auth/register."})
             return _apply_cors_headers(response, request)
 
-        auth_header = request.headers.get("Authorization", "")
         token = None
+
+        # Try Authorization header first
+        auth_header = request.headers.get("Authorization", "")
         if auth_header.lower().startswith("bearer "):
             token = auth_header.split(" ", 1)[1].strip()
+
+        # Fallback to query param for HTMLAudioElement
+        if not token and accepts_query_token:
+            token = request.query_params.get("token")
+
         if not token:
             response = JSONResponse(status_code=401, content={"detail": "Authorization bearer token required"})
             return _apply_cors_headers(response, request)
