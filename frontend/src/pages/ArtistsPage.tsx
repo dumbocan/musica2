@@ -61,16 +61,22 @@ const getArtistAssets = (artist: Artist) => {
     : firstImageEntry?.url;
   const genres = parseStoredJsonArray(artist.genres).filter((g) => typeof g === 'string');
 
-  let proxyUrl: string | null = null;
+  // Use local cached image if available, otherwise fallback to proxy
+  let imageUrl: string | null = null;
   const candidate = rawUrl || '';
-  if (candidate) {
-    proxyUrl = candidate.startsWith('/images/proxy')
+
+  // If artist has image_path_id, use local storage
+  if (artist.image_path_id) {
+    imageUrl = `${API_BASE_URL}/images/entity/artist/${artist.id}?size=256`;
+  } else if (candidate) {
+    // Fallback to proxy for external URLs
+    imageUrl = candidate.startsWith('/images/proxy')
       ? `${API_BASE_URL}${candidate}`
       : `${API_BASE_URL}/images/proxy?url=${encodeURIComponent(candidate)}&size=192`;
   }
 
   return {
-    imageUrl: proxyUrl ?? null,
+    imageUrl,
     genres,
   };
 };

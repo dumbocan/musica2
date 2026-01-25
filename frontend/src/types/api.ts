@@ -8,6 +8,7 @@ export interface Artist {
   normalized_name: string;
   genres: string | null;
   images: string | null;
+  image_path_id: number | null;  // Local cached image reference
   popularity: number;
   followers: number;
   bio_summary: string | null;
@@ -26,6 +27,7 @@ export interface Album {
   release_date: string;
   total_tracks: number;
   images: string | null;
+  image_path_id: number | null;  // Local cached image reference
   label: string | null;
   created_at: string;
   updated_at: string;

@@ -154,6 +154,8 @@ export function ArtistDiscographyPage() {
         <div>
           <ArtistPhoto
             name={artistName}
+            artistId={localArtist?.id}
+            imagePathId={localArtist?.image_path_id}
             remoteUrl={artist?.spotify?.images?.[0]?.url}
             localImage={localArtist?.images}
           />
@@ -345,20 +347,33 @@ function resolveImageUrl(url?: string) {
   return url.startsWith('/') ? `${API_BASE_URL}${url}` : url;
 }
 
-function ArtistPhoto({ name, remoteUrl, localImage }: { name: string; remoteUrl?: string; localImage?: string | null }) {
-  const localImages = parseStoredImages(localImage);
-  const candidate = remoteUrl || localImages[0] || '';
-  let proxied: string | null = null;
-  if (candidate.startsWith('/images/proxy')) {
-    proxied = `${API_BASE_URL}${candidate}`;
-  } else if (candidate) {
-    proxied = `${API_BASE_URL}/images/proxy?url=${encodeURIComponent(candidate)}&size=512`;
+function ArtistPhoto({ name, artistId, imagePathId, remoteUrl, localImage }: {
+  name: string;
+  artistId?: number;
+  imagePathId?: number | null;
+  remoteUrl?: string;
+  localImage?: string | null
+}) {
+  // Use local cached image if available
+  let imageUrl: string | null = null;
+
+  if (imagePathId && artistId) {
+    imageUrl = `${API_BASE_URL}/images/entity/artist/${artistId}?size=512`;
+  } else {
+    // Fallback to proxy for external URLs
+    const localImages = parseStoredImages(localImage);
+    const candidate = remoteUrl || localImages[0] || '';
+    if (candidate.startsWith('/images/proxy')) {
+      imageUrl = `${API_BASE_URL}${candidate}`;
+    } else if (candidate) {
+      imageUrl = `${API_BASE_URL}/images/proxy?url=${encodeURIComponent(candidate)}&size=512`;
+    }
   }
 
-  if (proxied) {
+  if (imageUrl) {
     return (
       <img
-        src={proxied}
+        src={imageUrl}
         alt={name}
         style={{ width: '100%', borderRadius: 12, objectFit: 'cover' }}
       />
