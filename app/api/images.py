@@ -75,8 +75,18 @@ async def get_entity_image(
     Get image for an entity (artist, album, track).
 
     Images are served from storage/images/ directly.
+    Falls back to searching by entity name for legacy cached images.
     """
-    image_path = get_image_path(entity_type, entity_id, size)
+    # Get entity name for fallback lookup (especially for artists with legacy cache)
+    entity_name = None
+    if entity_type == "artist":
+        with get_session() as session:
+            from ..models.base import Artist
+            entity = session.get(Artist, entity_id)
+            if entity:
+                entity_name = entity.name
+
+    image_path = get_image_path(entity_type, entity_id, size, entity_name)
 
     if image_path and os.path.exists(image_path):
         return FileResponse(image_path, media_type="image/webp")

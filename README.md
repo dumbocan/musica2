@@ -468,55 +468,103 @@ Current Status
 
 **🎉 PROJECT 100% COMPLETE AND PRODUCTION READY!**
 
-## 🖼️ **Image Storage System (Filesystem-First)**
+## 🖼️ **Image Storage System (Filesystem-First, Human-Readable)**
 
-Since January 2026, Audio2 uses a **filesystem-first approach** for image storage, keeping DB small while allowing direct file serving.
+Desde Enero 2026, Audio2 usa un sistema de almacenamiento **filesystem-first** con rutas amigables para facilitar la navegación humana.
 
-### **How it Works**
+### **Problemas Encontrados y Soluciones**
 
-1. **First Request**: Image is downloaded from external source (Spotify, Last.fm)
-2. **Storage**:
-   - Files saved to `storage/images/{size}/{entity_type}/`
-   - Paths stored in DB (NOT the images themselves)
-   - Multiple sizes generated: 128, 256, 512, 1024px
-3. **Subsequent Requests**: Files served directly from disk via nginx/Python
+#### Problema 1: Imágenes sin asociación entidad→imagen
+**Síntoma**: Las imágenes en `cache/images/` eran `sha1hash.webp` sin metadatos de a quién pertenecían.
 
-### **Directory Structure**
+**Solución**: Se crearon las migraciones de Alembic para `storedimagepath` y se populate la tabla con el script `populate_image_storage.py` que extrae las URLs del campo `images` (JSON) de Artist/Album y descarga las imágenes directamente de Spotify.
+
+#### Problema 2: entity_id incorrecto
+**Síntoma**: Algunas entradas en `storedimagepath` tenían `entity_id` wrong (ej: artista con `entity_id` de otro artista).
+
+**Solución**: Se crearon scripts `fix_image_ids.py` y se corrigieron las entradas comparando el nombre sanitizado en la ruta del archivo con el nombre del artista/álbum en BD.
+
+#### Problema 3: Imágenes sin image_path_id
+**Síntoma**: Las imágenes existían en disco pero `Artist.image_path_id` era `NULL`.
+
+**Solución**: El script `populate_image_storage.py` ahora actualiza el campo `image_path_id` en Artist/Album al crear la entrada en `StoredImagePath`.
+
+#### Problema 4: Fallback de imágenes "external"
+**Síntoma**: Algunas imágenes se guardaron como `entity_type='external'` en lugar de `'artist'`.
+
+**Solución**: Script de corrección que busca entradas 'external' con path coincidente y las actualiza al tipo/entidad correcto.
+
+### **Estructura de Directorios**
 
 ```
-storage/
-└── images/
-    ├── 128/
-    │   ├── artist/
-    │   │   └── abc123def456_128.webp
-    │   └── album/
-    ├── 256/
-    │   └── ...
-    ├── 512/
-    └── 1024/
+storage/images/
+├── ArtistName/
+│   ├── ArtistName__abc123_256.webp     ← imagen del artista
+│   ├── ArtistName__abc123_512.webp
+│   └── AlbumName/                      ← álbum del artista
+│       ├── AlbumName__def456_256.webp
+│       └── AlbumName__def456_512.webp
+├── AnotherArtist/
+│   └── ...
 ```
+
+### **Configuración Actual**
+
+- **Tamaños**: Solo 256px y 512px (reducido de 4 tamaños para ahorrar espacio)
+- **Calidad**: WebP 80%
+- **Formato**: `{entity_name}__{hash_8chars}_{size}.webp`
+- **Total**: ~26k archivos, ~480MB
 
 ### **Endpoints**
 
-| Endpoint | Description |
+| Endpoint | Descripción |
 |----------|-------------|
-| `GET /images/proxy?url=...&size=512` | Fetch and cache image |
-| `GET /images/entity/{type}/{id}?size=512` | Get cached image file |
-| `POST /images/entity/{type}/{id}/cache` | Pre-cache image |
-| `DELETE /images/entity/{type}/{id}` | Delete cached images |
-| `GET /images/stats` | Storage statistics |
+| `GET /images/entity/{type}/{id}?size=256` | Obtener imagen de entidad |
+| `GET /images/proxy?url=...&size=512` | Proxy + cache de imagen externa |
+| `POST /images/entity/{type}/{id}/cache` | Pre-cachear imagen |
+| `DELETE /images/entity/{type}/{id}` | Borrar imágenes cacheadas |
+| `GET /images/stats` | Estadísticas de almacenamiento |
 
-### **Database Table**
+### **Tabla de Base de Datos**
 
-- `storedimagepath`: Stores relative paths (not BLOBs)
+```sql
+storedimagepath (
+  id, entity_type, entity_id, source_url,
+  path_256, path_512,
+  content_hash, original_width, original_height,
+  format, file_size_bytes, created_at
+)
+```
 
-### **Benefits**
+### **Comandos Útiles**
 
-- **DB Lightweight**: Only stores paths, not image data
-- **Fast Backups**: DB dump is small
-- **nginx Ready**: Files can be served directly by web server
-- **Portable**: Move storage folder, just update paths if needed
-- **Secure**: Size validation (32-1024px) prevents DoS
+```bash
+# Poblar imágenes para artistas/álbumes existentes
+python scripts/populate_image_storage.py --dry-run  # Preview
+python scripts/populate_image_storage.py            # Ejecutar
+
+# Corregir entity_id wrong
+python scripts/fix_image_ids.py
+
+# Ver estadísticas
+python -c "from app.core.image_db_store import get_image_stats; print(get_image_stats())"
+
+# Verificar imagen de un artista
+ls storage/images/Drake/
+```
+
+### **Flujo de Trabajo**
+
+1. **Nueva imagen** → Se descarga de Spotify → Se guarda en `storage/images/{artist}/` → Se actualiza `Artist.image_path_id`
+2. **Request** → `/images/entity/artist/{id}?size=512` → Busca en BD → Serve archivo desde `storage/images/`
+3. **Fallback** → Si no hay `image_path_id`, usa `/images/proxy?url=...` con la URL del campo `images` en JSON
+
+### **Beneficios**
+
+- **Navegable**: Puedes explorar `storage/images/` y ver las carpetas por artista/álbum
+- **DB ligera**: Solo almacena rutas, no BLOBs
+- **Backups rápidos**: Dump de BD pequeño
+- **nginx-ready**: Archivos servibles directamente
 
 ---
 
@@ -611,3 +659,34 @@ storage/
 ---
 
 Setup Instructions
+
+## Arrancar el proyecto (desarrollo)
+
+### Backend
+```bash
+cd /home/micasa/audio2
+source venv/bin/activate
+source .env
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### Frontend
+```bash
+cd /home/micasa/audio2/frontend
+npm run dev
+```
+
+### URLs
+- Frontend: http://localhost:5173
+- Backend API: http://localhost:8000
+- Health check: http://localhost:8000/health
+
+### Ver logs
+- Backend: `tail -f uvicorn.log` (o buscar el ID del proceso en background)
+- Frontend: ver output de `npm run dev`
+
+### Si falla psycopg2
+```bash
+source venv/bin/activate
+pip install psycopg2-binary
+```

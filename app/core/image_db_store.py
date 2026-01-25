@@ -24,7 +24,7 @@ from ..models.base import StoredImagePath, Artist, Album, Track
 # Storage configuration
 STORAGE_ROOT = Path("storage")
 IMAGE_STORAGE = STORAGE_ROOT / "images"
-IMAGE_SIZES = [128, 256, 512, 1024]
+IMAGE_SIZES = [256, 512]
 DEFAULT_QUALITY = 80
 MAX_ORIGINAL_SIZE = 2048
 
@@ -52,35 +52,46 @@ def _sanitize_filename(name: str) -> str:
     return name if name else 'unknown'
 
 
-def _get_entity_name(entity_type: str, entity_id: int) -> str:
+def _get_entity_name(entity_type: str, entity_id: int) -> tuple[str, Optional[str]]:
     """Get human-readable name for an entity from DB.
 
-    Returns sanitized name for use in file paths.
+    Returns (entity_name, parent_name) for path structure.
+    For artists: (artist_name, None)
+    For albums: (album_name, artist_name)
+    For tracks: (track_name, artist_name or album_name)
     """
     with get_session() as session:
         if entity_type == "artist":
             entity = session.get(Artist, entity_id)
             if entity:
-                return _sanitize_filename(entity.name)
+                return _sanitize_filename(entity.name), None
         elif entity_type == "album":
             entity = session.get(Album, entity_id)
             if entity:
-                return _sanitize_filename(entity.name)
+                album_name = _sanitize_filename(entity.name)
+                artist_name = None
+                if entity.artist_id:
+                    artist = session.get(Artist, entity.artist_id)
+                    if artist:
+                        artist_name = _sanitize_filename(artist.name)
+                return album_name, artist_name
         elif entity_type == "track":
             entity = session.get(Track, entity_id)
             if entity:
-                return _sanitize_filename(entity.name)
-    return "unknown"
+                track_name = _sanitize_filename(entity.name)
+                parent_name = None
+                if entity.album_id:
+                    album = session.get(Album, entity.album_id)
+                    if album:
+                        parent_name = _sanitize_filename(album.name)
+                return track_name, parent_name
+    return "unknown", None
 
 
 def _ensure_storage_dirs():
     """Create storage directories if they don't exist."""
-    for size in IMAGE_SIZES:
-        (IMAGE_STORAGE / str(size)).mkdir(parents=True, exist_ok=True)
-    # Also create entity type directories
-    for entity_type in ["artist", "album", "track"]:
-        for size in IMAGE_SIZES:
-            (IMAGE_STORAGE / str(size) / entity_type).mkdir(parents=True, exist_ok=True)
+    # Just ensure root exists - subdirs created dynamically
+    IMAGE_STORAGE.mkdir(parents=True, exist_ok=True)
 
 
 async def download_image(url: str) -> Optional[bytes]:
@@ -128,14 +139,27 @@ def process_image(image_data: bytes) -> dict[str, bytes]:
     return result, content_hash, width, height
 
 
-def get_image_path(entity_type: str, entity_id: int, size: int = 512) -> Optional[str]:
-    """Get image path for an entity from DB."""
+def get_image_path(entity_type: str, entity_id: int, size: int = 512, entity_name: Optional[str] = None) -> Optional[str]:
+    """Get image path for an entity from DB.
+
+    Searches by entity_id first, then falls back to entity_name (sanitized folder name).
+    """
     with get_session() as session:
+        # First try: search by entity_id
         stmt = select(StoredImagePath).where(
             StoredImagePath.entity_type == entity_type,
             StoredImagePath.entity_id == entity_id,
         ).limit(1)
         stored = session.exec(stmt).first()
+
+        # Fallback: search by entity_name (for legacy data where entity_id was None)
+        if not stored and entity_name and entity_type == "artist":
+            sanitized_name = _sanitize_filename(entity_name)
+            stmt = select(StoredImagePath).where(
+                StoredImagePath.entity_type == entity_type,
+                StoredImagePath.path_256.like(f"{sanitized_name}/%"),
+            ).limit(1)
+            stored = session.exec(stmt).first()
 
         if not stored:
             return None
@@ -216,27 +240,53 @@ async def store_image(
     # Ensure directories exist
     _ensure_storage_dirs()
 
-    # Get human-readable name for the entity
-    entity_name = _get_entity_name(entity_type, entity_id) if entity_id else "external"
+    # Get human-readable names for the entity
+    entity_name, parent_name = _get_entity_name(entity_type, entity_id) if entity_id else ("external", None)
     content_hash_short = content_hash[:8]  # Shorter hash for readability
 
-    # Save files to disk and build paths
+    # Build path structure based on entity type
+    # Format: artist_name/entityname__hash_size.webp
+    #         artist_name/album_name/albumname__hash_size.webp
     paths = {}
 
-    for size, data in processed.items():
-        if size == "original":
-            continue
-        # Path like: "artist/metallica__abc12345_512.webp"
-        # Format: {entity_name}__{hash_short}_{size}.webp
-        filename = f"{entity_name}__{content_hash_short}_{size}.webp"
-        full_path = IMAGE_STORAGE / str(size) / entity_type / filename
+    if entity_type == "artist":
+        # Artist images go directly in artist folder
+        artist_folder = entity_name
+        for size, data in processed.items():
+            if size == "original":
+                continue
+            filename = f"{entity_name}__{content_hash_short}_{size}.webp"
+            full_path = IMAGE_STORAGE / artist_folder / filename
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_bytes(data)
+            paths[f"path_{size}"] = f"{artist_folder}/{filename}"
 
-        # Create folder if needed
-        full_path.parent.mkdir(parents=True, exist_ok=True)
+    elif entity_type in ("album", "track"):
+        # Albums/tracks go in parent_name/entity_name/
+        if parent_name:
+            entity_folder = parent_name / entity_name
+        else:
+            # Fallback if no parent
+            entity_folder = Path(entity_name)
+        for size, data in processed.items():
+            if size == "original":
+                continue
+            filename = f"{entity_name}__{content_hash_short}_{size}.webp"
+            full_path = IMAGE_STORAGE / entity_folder / filename
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_bytes(data)
+            paths[f"path_{size}"] = str(entity_folder / filename)
 
-        # Save file
-        full_path.write_bytes(data)
-        paths[f"path_{size}"] = f"{size}/{entity_type}/{filename}"
+    else:
+        # Fallback for other types
+        for size, data in processed.items():
+            if size == "original":
+                continue
+            filename = f"{entity_name}__{content_hash_short}_{size}.webp"
+            full_path = IMAGE_STORAGE / entity_type / filename
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_bytes(data)
+            paths[f"path_{size}"] = f"{entity_type}/{filename}"
 
     # Store in DB
     with get_session() as session:
@@ -291,15 +341,13 @@ def get_image_stats() -> dict:
         images = session.exec(select(StoredImagePath)).all()
         total_size = sum(img.file_size_bytes or 0 for img in images)
 
-        # Count files on disk
+        # Count files on disk - new structure has artist/album folders
         file_count = 0
         disk_size = 0
-        for size in IMAGE_SIZES:
-            size_folder = IMAGE_STORAGE / str(size)
-            if size_folder.exists():
-                for f in size_folder.rglob("*.webp"):
-                    file_count += 1
-                    disk_size += f.stat().st_size
+        if IMAGE_STORAGE.exists():
+            for f in IMAGE_STORAGE.rglob("*.webp"):
+                file_count += 1
+                disk_size += f.stat().st_size
 
         return {
             "total_images": len(images),
