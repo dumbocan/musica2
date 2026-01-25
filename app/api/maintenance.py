@@ -47,6 +47,7 @@ from ..models.base import (
     SearchEntityType,
     YouTubeDownload,
     ChartScanState,
+    FavoriteTargetType,
 )
 from ..services.billboard import fetch_chart_entries, normalize_artist_name
 
@@ -168,27 +169,53 @@ def _fetch_youtube_backfill_targets(limit: int, retry_failed: bool) -> list[tupl
                 ).all()
             )
 
-        stmt = (
+        targets: list[tuple[Track, Artist, Album | None]] = []
+
+        # Priority 1: Fetch tracks that are favorites first
+        fav_stmt = (
             select(Track, Artist, Album)
             .join(Artist, Artist.id == Track.artist_id)
             .outerjoin(Album, Album.id == Track.album_id)
+            .join(UserFavorite, UserFavorite.track_id == Track.id)
+            .where(UserFavorite.target_type == FavoriteTargetType.TRACK)
             .where(Track.spotify_id.is_not(None))
-            .order_by(Track.popularity.desc(), Track.id.asc())
-            .limit(limit * 2)
+            .order_by(UserFavorite.created_at.desc(), Track.popularity.desc(), Track.id.asc())
+            .limit(limit)
         )
-        rows = session.exec(stmt).all()
+        fav_rows = session.exec(fav_stmt).all()
 
-    targets: list[tuple[Track, Artist, Album | None]] = []
-    for track, artist, album in rows:
-        if not track.spotify_id or not artist.spotify_id:
-            continue
-        if track.spotify_id in linked_ids:
-            continue
-        if track.spotify_id in failed_ids:
-            continue
-        targets.append((track, artist, album))
-        if len(targets) >= limit:
-            break
+        for track, artist, album in fav_rows:
+            if not track.spotify_id or not artist.spotify_id:
+                continue
+            if track.spotify_id in linked_ids or track.spotify_id in failed_ids:
+                continue
+            targets.append((track, artist, album))
+
+        # Priority 2: Fill remaining slots with popular tracks (not favorites)
+        if len(targets) < limit:
+            already_have = {t[0].spotify_id for t in targets}
+            remaining = limit - len(targets)
+
+            pop_stmt = (
+                select(Track, Artist, Album)
+                .join(Artist, Artist.id == Track.artist_id)
+                .outerjoin(Album, Album.id == Track.album_id)
+                .where(Track.spotify_id.is_not(None))
+                .where(~Track.spotify_id.in_(already_have))
+                .order_by(Track.popularity.desc(), Track.id.asc())
+                .limit(remaining * 2)
+            )
+            pop_rows = session.exec(pop_stmt).all()
+
+            for track, artist, album in pop_rows:
+                if not track.spotify_id or not artist.spotify_id:
+                    continue
+                if track.spotify_id in linked_ids or track.spotify_id in failed_ids:
+                    continue
+                targets.append((track, artist, album))
+                if len(targets) >= limit:
+                    break
+
     return targets
 
 
