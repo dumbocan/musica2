@@ -44,6 +44,23 @@ from ..crud import save_artist, normalize_name
 
 logger = logging.getLogger(__name__)
 
+# Runtime override for maintenance enabled/disabled (None = use settings)
+_maintenance_enabled_override: bool | None = None
+
+
+def is_maintenance_enabled() -> bool:
+    """Check if maintenance is enabled (with runtime override)."""
+    if _maintenance_enabled_override is not None:
+        return _maintenance_enabled_override
+    return settings.MAINTENANCE_ENABLED
+
+
+def set_maintenance_enabled(enabled: bool) -> None:
+    """Set maintenance enabled state at runtime."""
+    global _maintenance_enabled_override
+    _maintenance_enabled_override = enabled
+    logger.info(f"[maintenance] Runtime override: enabled={enabled}")
+
 
 def _re_raise_cancelled(exc: BaseException) -> None:
     if isinstance(exc, asyncio.CancelledError):
@@ -83,7 +100,7 @@ def start_maintenance_background(
     delay_seconds: int | None = None,
     stagger_seconds: int | None = None,
 ) -> None:
-    if not settings.MAINTENANCE_ENABLED:
+    if not is_maintenance_enabled():
         return
 
     global _maintenance_started

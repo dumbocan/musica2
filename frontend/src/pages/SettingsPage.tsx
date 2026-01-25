@@ -15,6 +15,7 @@ type DashboardStats = {
 
 export function SettingsPage() {
   const setServiceStatus = useApiStore((s) => s.setServiceStatus);
+  const [maintenanceEnabled, setMaintenanceEnabled] = useState(true);
   const [maintenanceState, setMaintenanceState] = useState<'unknown' | 'running' | 'stopping' | 'idle' | 'error'>('unknown');
   const [maintenanceStarting, setMaintenanceStarting] = useState(false);
   const [maintenanceStopping, setMaintenanceStopping] = useState(false);
@@ -171,7 +172,11 @@ export function SettingsPage() {
       try {
         const res = await audio2Api.getMaintenanceStatus();
         if (!active) return;
+        const enabled = Boolean(res.data?.enabled);
         const running = Boolean(res.data?.running);
+        if (enabled !== maintenanceEnabled) {
+          setMaintenanceEnabled(enabled);
+        }
         const now = Date.now();
         const withinGrace =
           startGraceRef.current !== null && startGraceRef.current + MAINTENANCE_GRACE_MS > now;
@@ -238,6 +243,16 @@ export function SettingsPage() {
       window.clearInterval(timer);
     };
   }, [logsEnabled]);
+
+  const handleMaintenanceToggleEnabled = useCallback(async () => {
+    const newValue = !maintenanceEnabled;
+    try {
+      await audio2Api.toggleMaintenance(newValue);
+      setMaintenanceEnabled(newValue);
+    } catch {
+      // ignore error
+    }
+  }, [maintenanceEnabled]);
 
   const handleMaintenanceStart = useCallback(async () => {
     setMaintenanceStarting(true);
@@ -553,6 +568,25 @@ export function SettingsPage() {
             <div style={{ fontWeight: 700, fontSize: 18 }}>Mantenimiento</div>
             <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 4 }}>
               Acciones críticas y medidas rápidas para controlar la sincronización.
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14 }}>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={maintenanceEnabled}
+                  onChange={handleMaintenanceToggleEnabled}
+                  style={{ width: 16, height: 16, cursor: 'pointer' }}
+                />
+                <span style={{ fontSize: 13 }}>Mant. habilitado</span>
+              </label>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 14 }}>
               <button
