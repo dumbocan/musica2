@@ -33,6 +33,11 @@ class Settings(BaseSettings):
 
     # Database: PostgreSQL only (required)
     DATABASE_URL: str = ""
+    postgres_user: Optional[str] = None
+    postgres_password: Optional[str] = None
+    postgres_host: Optional[str] = None
+    postgres_port: Optional[str] = None
+    postgres_database: Optional[str] = None
 
     # APIs (optional for boot, required when those features are used)
     SPOTIFY_CLIENT_ID: Optional[str] = None
@@ -41,6 +46,7 @@ class Settings(BaseSettings):
     MUSIXMATCH_API_KEY: Optional[str] = None
     YOUTUBE_API_KEY: Optional[str] = None
     YOUTUBE_API_KEY_2: Optional[str] = None
+    GITHUB_TOKEN: Optional[str] = None
 
     # Chart scraping (Billboard)
     CHART_BACKFILL_START_DATE: Optional[str] = "1960-01-01"
