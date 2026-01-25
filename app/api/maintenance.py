@@ -23,6 +23,8 @@ from ..core.maintenance import (
     register_maintenance_task,
     request_maintenance_stop,
     maintenance_stop_requested,
+    is_maintenance_enabled,
+    set_maintenance_enabled,
     _align_chart_date,
     _chart_start_date,
     _store_raw_entries,
@@ -238,6 +240,7 @@ async def _run_youtube_backfill(limit: int, retry_failed: bool) -> None:
         if maintenance_stop_requested():
             return
         try:
+            await youtube_client._throttle()  # Rate limiting
             videos = await youtube_client.search_music_videos(
                 artist=artist.name,
                 track=track.name,
@@ -429,14 +432,24 @@ def _run_library_audit(fresh_days: int, as_json: bool) -> None:
 
 @router.get("/status")
 def get_maintenance_status(start: bool = Query(False, description="Start maintenance if not running")) -> dict:
-    if start and settings.MAINTENANCE_ENABLED:
+    if start and is_maintenance_enabled():
         start_maintenance_background(
             delay_seconds=settings.MAINTENANCE_STARTUP_DELAY_SECONDS,
             stagger_seconds=settings.MAINTENANCE_STAGGER_SECONDS,
         )
     return {
-        "enabled": settings.MAINTENANCE_ENABLED,
+        "enabled": is_maintenance_enabled(),
         "running": maintenance_status(),
+    }
+
+
+@router.post("/toggle")
+def toggle_maintenance(enabled: bool) -> dict:
+    """Toggle maintenance on/off at runtime."""
+    set_maintenance_enabled(enabled)
+    return {
+        "enabled": is_maintenance_enabled(),
+        "message": "Maintenance enabled" if enabled else "Maintenance disabled",
     }
 
 
@@ -484,7 +497,7 @@ def get_dashboard_stats() -> dict:
 
 @router.post("/start")
 def start_maintenance() -> dict:
-    if not settings.MAINTENANCE_ENABLED:
+    if not is_maintenance_enabled():
         return {
             "enabled": False,
             "running": False,
