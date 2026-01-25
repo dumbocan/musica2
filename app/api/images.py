@@ -76,20 +76,99 @@ async def get_entity_image(
 
     Images are served from storage/images/ directly.
     Falls back to searching by entity name for legacy cached images.
+    Falls back to downloading from the URL stored in the entity's images field
+    and associating it with the entity.
     """
-    # Get entity name for fallback lookup (especially for artists with legacy cache)
+    from urllib.parse import parse_qs, urlparse, unquote
+    import json
+
+    # Get entity info
     entity_name = None
+    entity_images = None
+
     if entity_type == "artist":
         with get_session() as session:
             from ..models.base import Artist
             entity = session.get(Artist, entity_id)
             if entity:
                 entity_name = entity.name
+                entity_images = entity.images
+    elif entity_type == "album":
+        with get_session() as session:
+            from ..models.base import Album
+            entity = session.get(Album, entity_id)
+            if entity:
+                entity_name = entity.name
+                entity_images = entity.images
+                # Also get artist name for folder structure
+                if entity.artist_id:
+                    from ..models.base import Artist
+                    artist = session.get(Artist, entity.artist_id)
+                    if artist:
+                        entity_name = artist.name  # Use artist name for folder
 
-    image_path = get_image_path(entity_type, entity_id, size, entity_name)
+    # Try to get from storedimagepath first
+    image_path = get_image_path(entity_type, entity_id, size, entity_name if entity_type == "artist" else None)
 
     if image_path and os.path.exists(image_path):
         return FileResponse(image_path, media_type="image/webp")
+
+    # Fallback: if entity has images field, download and store for this entity
+    if entity_images:
+        try:
+            if isinstance(entity_images, str):
+                images_data = json.loads(entity_images)
+            else:
+                images_data = entity_images
+
+            if isinstance(images_data, list) and len(images_data) > 0:
+                # Get the largest image (usually first)
+                first_img = images_data[0]
+                if isinstance(first_img, dict):
+                    url = first_img.get("url")
+                else:
+                    url = first_img
+
+                if url:
+                    # Extract real URL if it's a proxy URL
+                    if url.startswith("/images/proxy?"):
+                        parsed = urlparse(url)
+                        query_params = parse_qs(parsed.query)
+                        if "url" in query_params:
+                            url = unquote(query_params["url"][0])
+
+                    # Download and store for this entity
+                    result = await store_image(
+                        entity_type=entity_type,
+                        entity_id=entity_id,
+                        source_url=url
+                    )
+
+                    if result:
+                        # Update entity's image_path_id
+                        if entity_type == "artist":
+                            with get_session() as session:
+                                from ..models.base import Artist
+                                artist = session.get(Artist, entity_id)
+                                if artist:
+                                    artist.image_path_id = result.id
+                                    session.add(artist)
+                                    session.commit()
+                        elif entity_type == "album":
+                            with get_session() as session:
+                                from ..models.base import Album
+                                album = session.get(Album, entity_id)
+                                if album:
+                                    album.image_path_id = result.id
+                                    session.add(album)
+                                    session.commit()
+
+                        # Return the image
+                        image_path = get_image_path(entity_type, result.id, size)
+                        if image_path and os.path.exists(image_path):
+                            return FileResponse(image_path, media_type="image/webp")
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass
 
     raise HTTPException(status_code=404, detail="Image not found")
 
