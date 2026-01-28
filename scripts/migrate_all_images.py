@@ -10,6 +10,7 @@ This script:
 Usage: python scripts/migrate_all_images.py [--dry-run]
 """
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -19,7 +20,22 @@ from app.core.image_cache import CACHE_DIR
 from app.core.image_db_store import store_image, IMAGE_STORAGE, _ensure_storage_dirs
 
 
-def migrate_all(dry_run: bool = True):
+async def _migrate_image(webp_file: Path) -> tuple[bool, str]:
+    """Migrate a single image file."""
+    try:
+        image_data = webp_file.read_bytes()
+        result = await store_image(
+            entity_type="migrated",
+            entity_id=None,
+            source_url=f"cache://{webp_file.name}",
+            image_data=image_data
+        )
+        return result is not None, ""
+    except Exception as e:
+        return False, str(e)
+
+
+async def migrate_all(dry_run: bool = True):
     """Migrate all images from old cache to new storage."""
     old_cache = Path(CACHE_DIR)
     new_storage = IMAGE_STORAGE
@@ -43,25 +59,17 @@ def migrate_all(dry_run: bool = True):
         if dry_run:
             print(f"  [DRY-RUN] {webp_file.name}")
         else:
-            try:
-                image_data = webp_file.read_bytes()
-                result = store_image(
-                    entity_type="migrated",
-                    entity_id=None,
-                    source_url=f"cache://{webp_file.name}",
-                    image_data=image_data
-                )
-
-                if result:
-                    migrated += 1
-                    if migrated % 50 == 0:
-                        print(f"  ✅ Migrated {migrated}...")
-                else:
+            success, error = await _migrate_image(webp_file)
+            if success:
+                migrated += 1
+                if migrated % 50 == 0:
+                    print(f"  ✅ Migrated {migrated}...")
+            else:
+                if "Duplicate" in error or "already exists" in error:
                     duplicates += 1
-
-            except Exception as e:
-                errors += 1
-                print(f"  ❌ {webp_file.name}: {e}")
+                else:
+                    errors += 1
+                    print(f"  ❌ {webp_file.name}: {error}")
 
     print(f"\n{'[DRY-RUN] ' if dry_run else ''}Results:")
     print(f"  Total: {len(webp_files)}")
@@ -80,4 +88,4 @@ if __name__ == "__main__":
     if dry_run:
         sys.argv.remove("--dry-run")
 
-    migrate_all(dry_run=dry_run)
+    asyncio.run(migrate_all(dry_run=dry_run))

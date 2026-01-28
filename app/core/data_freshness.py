@@ -114,7 +114,7 @@ class DataFreshnessManager:
                 return False
 
             # Save/update artist data
-            artist = save_artist(artist_data)
+            artist = await save_artist(artist_data)
             logger.info(f"✅ Artist {artist.name} data updated")
 
             return True
@@ -217,7 +217,7 @@ class DataFreshnessManager:
                     new_albums += 1
 
                     # Save the new album
-                    album = save_album(album_data)
+                    album = await save_album(album_data)
                     logger.info(f"✅ New album saved: {album.name}")
 
                     # Get tracks for this album and check/save them
@@ -445,7 +445,7 @@ class DataFreshnessManager:
 
                 target_album = existing_album
                 if not target_album:
-                    target_album = save_album(album_data)
+                    target_album = await save_album(album_data)
                     if target_album:
                         logger.info(f"💾 Saved album: {album_name} by {main_artist_name}")
                         total_albums_processed += 1
@@ -534,7 +534,7 @@ class DataFreshnessManager:
                     session.close()
 
                 if not existing_artist:
-                    artist = save_artist(artist_data)
+                    artist = await save_artist(artist_data)
                     logger.info(f"✅ Saved new similar artist: {artist_name}")
 
                     # Add comprehensive biography
@@ -571,7 +571,7 @@ class DataFreshnessManager:
                             ).first()
 
                             if not existing_album:
-                                saved_album = save_album(album_data)
+                                saved_album = await save_album(album_data)
                                 logger.info(f"💾 Saved album: {album_name} by {artist_name}")
                                 total_albums_processed += 1
 

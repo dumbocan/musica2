@@ -81,6 +81,7 @@ class Settings(BaseSettings):
     AUTH_RECOVERY_CODE: Optional[str] = None
     CORS_ORIGINS: list[str] = []
     CORS_ALLOW_CREDENTIALS: bool = True
+    AUTH_DISABLED: bool = False
 
     @field_validator("DATABASE_URL")
     @classmethod

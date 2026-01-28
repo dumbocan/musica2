@@ -8,7 +8,7 @@ from typing import Iterable, Optional, List
 
 from ..core.spotify import spotify_client
 from ..core.data_freshness import data_freshness_manager
-from ..crud import save_artist, save_album, save_track
+from ..crud import save_artist, save_album
 
 logger = logging.getLogger(__name__)
 _expansion_tasks: dict[str, asyncio.Task] = {}
@@ -60,7 +60,7 @@ async def save_artist_discography(spotify_artist_id: str) -> Optional[int]:
         return None
     artist_name = artist_data.get("name") or spotify_artist_id
     logger.info("[discography] artist %s (%s)", artist_name, spotify_artist_id)
-    artist = save_artist(artist_data)
+    artist = await save_artist(artist_data)
     artist_id = artist.id
 
     albums_data = await spotify_client.get_artist_albums(
@@ -70,7 +70,7 @@ async def save_artist_discography(spotify_artist_id: str) -> Optional[int]:
     )
     saved_tracks = 0
     for album_data in albums_data:
-        album = save_album(album_data)
+        album = await save_album(album_data)
         if not album or not album.id:
             continue
         try:
@@ -84,6 +84,8 @@ async def save_artist_discography(spotify_artist_id: str) -> Optional[int]:
             )
             continue
         for track_data in tracks_data:
+            # save_track is sync, call it directly
+            from ..crud import save_track
             save_track(track_data, album_id=album.id, artist_id=artist_id)
             saved_tracks += 1
         album_name = album_data.get("name") or album_data.get("id")

@@ -42,6 +42,8 @@ class YouTubeClient:
         self._search_cache_max_entries = 2000
         self._request_count = 0
         self._quota_reset_hour = 4
+        self._daily_request_limit = 80  # Leave 20 for user browsing
+        self._quota_warned_today = False
         now = datetime.now()
         last_reset = self._get_last_reset_anchor(now)
         self._request_count_started_at = last_reset.timestamp()
@@ -178,6 +180,15 @@ class YouTubeClient:
             return True
 
     async def _api_get(self, endpoint: str, params: Dict[str, Any]) -> httpx.Response:
+        # Check daily limit before making requests
+        self._maybe_reset_counter()
+        if self._request_count >= self._daily_request_limit:
+            logger.warning("YouTube API daily limit reached (%d/%d)", self._request_count, self._daily_request_limit)
+            return httpx.Response(
+                status_code=403,
+                json={"error": {"errors": [{"reason": "dailyLimitExceeded", "message": "Daily request limit reached"}]}}
+            )
+
         attempts = max(1, len(self.api_keys))
         for attempt in range(attempts):
             params_with_key = dict(params)
@@ -241,10 +252,17 @@ class YouTubeClient:
         next_reset = last_reset + timedelta(days=1)
         return {
             "requests_total": self._request_count,
+            "requests_limit": self._daily_request_limit,
             "started_at_unix": int(self._request_count_started_at),
             "next_reset_at_unix": int(next_reset.timestamp()),
             "reset_hour_local": self._quota_reset_hour,
+            "remaining": max(0, self._daily_request_limit - self._request_count),
         }
+
+    def should_stop_for_quota(self) -> bool:
+        """Check if we should stop requesting due to daily limit."""
+        self._maybe_reset_counter()
+        return self._request_count >= self._daily_request_limit
 
     def _cache_key(self, artist: str, track: str, album: Optional[str], max_results: int) -> str:
         parts = [

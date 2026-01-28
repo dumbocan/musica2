@@ -142,6 +142,8 @@ def _apply_cors_headers(response: Response, request: Request) -> Response:
 
 @app.middleware("http")
 async def require_authenticated_user(request: Request, call_next):
+    if settings.AUTH_DISABLED:
+        return await call_next(request)
     path = request.url.path
     if request.method == "OPTIONS":
         return await call_next(request)
