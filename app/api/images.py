@@ -221,8 +221,6 @@ async def get_entity_image(
     # Get entity info
     entity_name = None
     entity_images = None
-    artist_name = None  # For album folder structure
-
     if entity_type == "artist":
         with get_session() as session:
             from ..models.base import Artist
@@ -237,12 +235,6 @@ async def get_entity_image(
             if entity:
                 entity_name = entity.name  # Use album name for search
                 entity_images = entity.images
-                # Also get artist name for folder structure
-                if entity.artist_id:
-                    from ..models.base import Artist
-                    artist = session.get(Artist, entity.artist_id)
-                    if artist:
-                        artist_name = artist.name
 
     expected_url = _extract_primary_image_url(entity_images)
     # Validate stored image matches the entity's current primary URL

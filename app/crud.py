@@ -15,8 +15,7 @@ from .models.base import (
     UserHiddenArtist, SearchEntityType
 )
 from .core.db import get_session
-from .core.image_proxy import proxy_image_list
-from .core.image_cache import schedule_warm_cache_images
+from .core.image_db_store import store_image
 from .core.search_index import ensure_entity_aliases
 from .core.time_utils import utc_now
 
@@ -29,6 +28,52 @@ def normalize_name(name: str) -> str:
     return name
 
 
+def _extract_main_image_url(images: List[dict]) -> Optional[str]:
+    """Extract the largest image URL from images list (Spotify format)."""
+    if not images:
+        return None
+    # Find largest image (Spotify returns sorted by size descending)
+    for img in images:
+        if isinstance(img, dict) and img.get('url'):
+            return img['url']
+        elif isinstance(img, str):
+            return img
+    return None
+
+
+async def _save_entity_image(entity_type: str, entity_id: Optional[int], images: List[dict]) -> Optional[int]:
+    """
+    Download and store the main image for an entity.
+
+    Args:
+        entity_type: 'artist', 'album', or 'track'
+        entity_id: The local entity ID (None for new entities)
+        images: List of image dicts from Spotify
+
+    Returns:
+        The image_path_id if successful, None otherwise
+    """
+    if not images or not entity_id:
+        return None
+
+    url = _extract_main_image_url(images)
+    if not url:
+        return None
+
+    try:
+        result = await store_image(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            source_url=url
+        )
+        if result:
+            return result.id
+    except Exception:
+        pass
+
+    return None
+
+
 # Artists
 def get_artist_by_spotify_id(spotify_id: str) -> Optional[Artist]:
     session = get_session()
@@ -39,17 +84,24 @@ def get_artist_by_spotify_id(spotify_id: str) -> Optional[Artist]:
     finally:
         session.close()
 
-def save_artist(artist_data: dict) -> Artist:
+
+async def save_artist(artist_data: dict) -> Artist:
+    """
+    Save or update an artist from Spotify data.
+    Downloads and stores the main image using store_image().
+    """
     spotify_id = artist_data['id']
     session = get_session()
     try:
         now = utc_now()
         images_data = artist_data.get('images', []) or []
-        proxied_images = proxy_image_list(images_data, size=384)
-        serialized_images = json.dumps(proxied_images)
-        needs_warm_cache = False
-
         normalized = normalize_name(artist_data['name'])
+
+        # Serialize images for DB (store just URLs, not proxy paths)
+        simple_images = json.dumps([
+            {"url": img.get('url')} for img in images_data[:3] if isinstance(img, dict) and img.get('url')
+        ])
+
         artist = session.exec(
             select(Artist).where(Artist.spotify_id == spotify_id)
         ).first()
@@ -58,36 +110,29 @@ def save_artist(artist_data: dict) -> Artist:
                 select(Artist).where(Artist.normalized_name == normalized)
             ).first()
 
-        def _apply_updates(target: Artist) -> None:
-            target.spotify_id = target.spotify_id or spotify_id
-            target.name = artist_data['name']
-            target.normalized_name = normalized
-            target.genres = str(artist_data.get('genres', []))
-            target.popularity = artist_data.get('popularity', 0)
-            target.followers = artist_data.get('followers', {}).get('total', 0)
-            target.updated_at = now
-            target.last_refreshed_at = now
-            nonlocal needs_warm_cache
-            if target.images != serialized_images:
-                needs_warm_cache = True
-            target.images = serialized_images
-            session.add(target)
-
         if artist:
-            _apply_updates(artist)
+            artist.name = artist_data['name']
+            artist.normalized_name = normalized
+            artist.genres = str(artist_data.get('genres', []))
+            artist.popularity = artist_data.get('popularity', 0)
+            artist.followers = artist_data.get('followers', {}).get('total', 0)
+            artist.updated_at = now
+            artist.last_refreshed_at = now
+            artist.images = simple_images
+            session.add(artist)
         else:
-            needs_warm_cache = True
             artist = Artist(
                 spotify_id=spotify_id,
                 name=artist_data['name'],
                 normalized_name=normalized,
                 genres=str(artist_data.get('genres', [])),
-                images=serialized_images,
+                images=simple_images,
                 popularity=artist_data.get('popularity', 0),
                 followers=artist_data.get('followers', {}).get('total', 0),
                 last_refreshed_at=now
             )
             session.add(artist)
+
         try:
             session.flush()
         except IntegrityError:
@@ -101,13 +146,28 @@ def save_artist(artist_data: dict) -> Artist:
                 ).first()
             if not artist:
                 raise
-            _apply_updates(artist)
+            artist.name = artist_data['name']
+            artist.normalized_name = normalized
+            artist.genres = str(artist_data.get('genres', []))
+            artist.popularity = artist_data.get('popularity', 0)
+            artist.followers = artist_data.get('followers', {}).get('total', 0)
+            artist.updated_at = now
+            artist.last_refreshed_at = now
+            artist.images = simple_images
+            session.add(artist)
             session.flush()
+
         ensure_entity_aliases(session, SearchEntityType.ARTIST, artist.id, artist.name)
         session.commit()
         session.refresh(artist)
-        if needs_warm_cache and images_data:
-            schedule_warm_cache_images(images_data, size=384)
+
+        # Download and store image AFTER we have the artist.id
+        image_path_id = await _save_entity_image("artist", artist.id, images_data)
+        if image_path_id:
+            artist.image_path_id = image_path_id
+            session.add(artist)
+            session.commit()
+
         return artist
     finally:
         session.close()
@@ -123,51 +183,71 @@ def get_album_by_spotify_id(spotify_id: str) -> Optional[Album]:
     finally:
         session.close()
 
-def save_album(album_data: dict) -> Album:
+
+async def save_album(album_data: dict) -> Album:
+    """
+    Save or update an album from Spotify data.
+    Downloads and stores the main image using store_image().
+    """
     spotify_id = album_data['id']
-    album = get_album_by_spotify_id(spotify_id)
     session = get_session()
     try:
         now = utc_now()
         images_data = album_data.get('images', []) or []
-        proxied_images = proxy_image_list(images_data, size=384)
-        serialized_images = json.dumps(proxied_images)
-        needs_warm_cache = False
-        if not album:
-            album = session.exec(
-                select(Album).where(Album.spotify_id == spotify_id)
-            ).first()
+
+        # Serialize images for DB (store just URLs)
+        simple_images = json.dumps([
+            {"url": img.get('url')} for img in images_data[:3] if isinstance(img, dict) and img.get('url')
+        ])
+
+        # Get or create artist
+        artist_spotify_id = album_data['artists'][0]['id'] if album_data.get('artists') else None
+        artist = get_artist_by_spotify_id(artist_spotify_id) if artist_spotify_id else None
+
+        if not artist and artist_spotify_id:
+            # Create minimal artist record
+            artist = Artist(
+                spotify_id=artist_spotify_id,
+                name=album_data['artists'][0]['name'],
+                normalized_name=normalize_name(album_data['artists'][0]['name']),
+                genres="[]",
+                images="[]",
+                popularity=0,
+                followers=0,
+                last_refreshed_at=now
+            )
+            session.add(artist)
+            session.flush()
+
+        artist_id = artist.id if artist else None
+
+        # Check if album exists
+        album = session.exec(
+            select(Album).where(Album.spotify_id == spotify_id)
+        ).first()
+
         if album:
             album.name = album_data['name']
             album.release_date = album_data['release_date']
             album.total_tracks = album_data['total_tracks']
-            if album.images != serialized_images:
-                needs_warm_cache = True
-            album.images = serialized_images
+            album.images = simple_images
             album.label = album_data.get('label')
             album.updated_at = now
             album.last_refreshed_at = now
             session.add(album)
         else:
-            # Save artist if not exists
-            artist_spotify_id = album_data['artists'][0]['id'] if album_data['artists'] else None
-            artist_data = {"id": artist_spotify_id, "name": album_data['artists'][0]['name'], "genres": [], "images": [], "popularity": 0, "followers": {"total": 0}} if artist_spotify_id else None
-            artist = get_artist_by_spotify_id(artist_spotify_id) if artist_spotify_id else None
-            if not artist and artist_data:
-                artist = save_artist(artist_data)  # This opens/closes its own session
-            artist_id = artist.id if artist else None
-            needs_warm_cache = True
             album = Album(
                 spotify_id=spotify_id,
                 name=album_data['name'],
                 artist_id=artist_id,
                 release_date=album_data['release_date'],
                 total_tracks=album_data['total_tracks'],
-                images=serialized_images,
+                images=simple_images,
                 label=album_data.get('label'),
                 last_refreshed_at=now
             )
             session.add(album)
+
         try:
             session.flush()
         except IntegrityError:
@@ -180,18 +260,24 @@ def save_album(album_data: dict) -> Album:
             album.name = album_data['name']
             album.release_date = album_data['release_date']
             album.total_tracks = album_data['total_tracks']
-            if album.images != serialized_images:
-                needs_warm_cache = True
-            album.images = serialized_images
+            album.images = simple_images
             album.label = album_data.get('label')
             album.updated_at = now
             album.last_refreshed_at = now
             session.add(album)
+            session.flush()
+
         ensure_entity_aliases(session, SearchEntityType.ALBUM, album.id, album.name)
         session.commit()
         session.refresh(album)
-        if needs_warm_cache and images_data:
-            schedule_warm_cache_images(images_data, size=384)
+
+        # Download and store image AFTER we have the album.id
+        image_path_id = await _save_entity_image("album", album.id, images_data)
+        if image_path_id:
+            album.image_path_id = image_path_id
+            session.add(album)
+            session.commit()
+
         return album
     finally:
         session.close()
