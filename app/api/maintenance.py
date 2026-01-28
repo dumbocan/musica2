@@ -25,6 +25,7 @@ from ..core.maintenance import (
     maintenance_stop_requested,
     is_maintenance_enabled,
     set_maintenance_enabled,
+    repair_album_image_paths,
     _align_chart_date,
     _chart_start_date,
     _store_raw_entries,
@@ -52,6 +53,7 @@ from ..models.base import (
     FavoriteTargetType,
 )
 from ..services.billboard import fetch_chart_entries, normalize_artist_name
+from ..services.image_population import backfill_images
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
 logger = logging.getLogger(__name__)
@@ -275,6 +277,27 @@ async def _run_youtube_backfill(limit: int, retry_failed: bool) -> None:
     logger.info("[maintenance] youtube backfill complete")
 
 
+async def _run_images_backfill(limit_artists: int | None, limit_albums: int | None) -> None:
+    if maintenance_stop_requested():
+        return
+    logger.info("[images] backfill start (artists=%s, albums=%s)", limit_artists or "all", limit_albums or "all")
+    stats = await backfill_images(
+        limit_artists=limit_artists,
+        limit_albums=limit_albums,
+        should_stop=maintenance_stop_requested,
+        logger=logger,
+    )
+    logger.info(
+        "[images] backfill done: artists %d/%d (skipped %d), albums %d/%d (skipped %d)",
+        stats.get("artists_migrated", 0),
+        stats.get("artists_total", 0),
+        stats.get("artists_skipped", 0),
+        stats.get("albums_migrated", 0),
+        stats.get("albums_total", 0),
+        stats.get("albums_skipped", 0),
+    )
+
+
 async def _run_chart_backfill(
     chart_source: str,
     chart_name: str,
@@ -444,7 +467,7 @@ def get_maintenance_status(start: bool = Query(False, description="Start mainten
 
 
 @router.post("/toggle")
-def toggle_maintenance(enabled: bool) -> dict:
+def toggle_maintenance(enabled: bool = Query(..., description="Enable or disable maintenance")) -> dict:
     """Toggle maintenance on/off at runtime."""
     set_maintenance_enabled(enabled)
     return {
@@ -516,6 +539,10 @@ def start_maintenance() -> dict:
 @router.post("/stop")
 def stop_maintenance() -> dict:
     request_maintenance_stop()
+    # Reset all action statuses to False
+    from ..core.action_status import AVAILABLE_ACTIONS
+    for action in AVAILABLE_ACTIONS:
+        set_action_status(action, False)
     return {"stopped": True}
 
 
@@ -548,6 +575,15 @@ async def backfill_youtube_links(
 ) -> dict:
     _schedule_action_task("youtube_links", _run_youtube_backfill, limit, retry_failed)
     return {"scheduled": True, "limit": limit, "retry_failed": retry_failed}
+
+
+@router.post("/backfill-images")
+async def backfill_images_endpoint(
+    limit_artists: int | None = Query(None, ge=1, le=10000),
+    limit_albums: int | None = Query(None, ge=1, le=10000),
+) -> dict:
+    _schedule_action_task("images_backfill", _run_images_backfill, limit_artists, limit_albums)
+    return {"scheduled": True, "limit_artists": limit_artists, "limit_albums": limit_albums}
 
 
 @router.post("/chart-backfill")
@@ -607,6 +643,29 @@ def clear_logs() -> dict:
 @router.get("/action-status")
 def get_maintenance_action_status() -> dict:
     return {"actions": get_action_statuses()}
+
+
+@router.post("/repair-album-images")
+def repair_album_images(
+    background_tasks: BackgroundTasks,
+    limit: int = Query(5000, ge=1, le=20000),
+    background: bool = Query(True, description="Run repair in background"),
+) -> dict:
+    """Repair album image_path_id using DB-first lookups."""
+    if background:
+        def _run():
+            set_action_status("repair_album_images", True)
+            try:
+                repair_album_image_paths(limit)
+            finally:
+                set_action_status("repair_album_images", False)
+        background_tasks.add_task(_run)
+        return {"status": "queued", "limit": limit}
+    set_action_status("repair_album_images", True)
+    try:
+        return {"status": "done", **repair_album_image_paths(limit)}
+    finally:
+        set_action_status("repair_album_images", False)
 
 
 @router.post("/purge-artist")

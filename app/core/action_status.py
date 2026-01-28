@@ -13,6 +13,8 @@ AVAILABLE_ACTIONS = {
     "metadata_refresh",
     "chart_backfill",
     "audit",
+    "images_backfill",
+    "repair_album_images",
 }
 
 _lock = Lock()

@@ -20,6 +20,18 @@ Note: this repository is configured to use PostgreSQL only. Ensure `DATABASE_URL
 ## Coding Style & Naming Conventions
 Follow PEP 8 with four-space indents, type hints, and snake_case names; keep SQLModel and Pydantic classes in PascalCase (see `app/models/base.py`). Endpoints should expose concise nouns or verbs (`/artists/save/{spotify_id}`) and return typed schemas, not raw dicts. Shared utilities must accept dependency-injected sessions (`Depends(get_session)`) and avoid bare prints. Frontend code follows the Vite ESLint and Tailwind defaults in `frontend/src`.
 
+## Global Standards (Performance + HTTP)
+Follow modern web performance and HTTP caching standards across the app:
+- Use standard HTTP caching headers for personalized responses: `Cache-Control: private`, `ETag`, `Last-Modified`, and `Vary: Authorization, Cookie, Accept-Encoding`. Prefer conditional requests (`If-None-Match`/`If-Modified-Since`) returning `304`.
+- Enable compression for JSON payloads (gzip/brotli) for APIs returning large responses.
+- Prefer DB-first + pagination for large lists; avoid sending full tables unless explicitly requested.
+- Normalize image sizes to the available cache sizes and avoid redundant resizes.
+- For third-party assets (fonts), add `preconnect` + `dns-prefetch` in `frontend/index.html`, or self-host where possible.
+
+## Linting & Quality Gates
+- Backend: follow PEP 8 and keep code flake8-compatible (line length, imports, unused vars). Use flake8 as the Python lint standard; when available, run `flake8` (or `python -m flake8`) before merging.
+- Frontend: keep ESLint clean (no new warnings) and respect `react-hooks/exhaustive-deps`.
+
 ## Testing Guidelines
 Use the root-level runners for regression coverage: `smoke_test.py` for sanity checks, `test_download_no_duplicates.py` for storage safety, and `test_multi_user_freshness.py` for orchestration. New features should ship with a similarly named script or FastAPI test that seeds its data via `create_db_and_tables()` and aborts if credentials are absent. Keep tests idempotent by creating temporary users or artists instead of truncating shared tables.
 

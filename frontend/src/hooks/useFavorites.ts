@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { audio2Api } from '@/lib/api';
 
 type FavoriteTarget = 'artist' | 'album' | 'track';
@@ -27,6 +27,7 @@ export const getUserIdFromToken = (): number | null => {
 export const useFavorites = (targetType: FavoriteTarget, userId?: number | null) => {
   const [favoriteIds, setFavoriteIds] = useState<Set<number>>(new Set());
   const effectiveUserId = userId ?? getUserIdFromToken();
+  const inFlightKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -35,6 +36,9 @@ export const useFavorites = (targetType: FavoriteTarget, userId?: number | null)
         setFavoriteIds(new Set());
         return;
       }
+      const requestKey = `${effectiveUserId}:${targetType}`;
+      if (inFlightKeyRef.current === requestKey) return;
+      inFlightKeyRef.current = requestKey;
       try {
         const res = await audio2Api.listFavorites({ user_id: effectiveUserId, target_type: targetType });
         if (cancelled) return;
@@ -53,6 +57,10 @@ export const useFavorites = (targetType: FavoriteTarget, userId?: number | null)
         setFavoriteIds(next);
       } catch (err) {
         console.error('Failed to load favorites', err);
+      } finally {
+        if (inFlightKeyRef.current === requestKey) {
+          inFlightKeyRef.current = null;
+        }
       }
     };
     loadFavorites();

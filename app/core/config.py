@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     MAINTENANCE_LIBRARY_LOOP_SECONDS: int = 2 * 60 * 60
     MAINTENANCE_LIBRARY_DELAY_SECONDS: float = 0.2
     MAINTENANCE_LIBRARY_TOTAL_TIMEOUT_SECONDS: float = 3.0
+    MAINTENANCE_IMAGE_REPAIR_BATCH_SIZE: int = 200
+    MAINTENANCE_IMAGE_REPAIR_LOOP_SECONDS: int = 6 * 60 * 60
+
+    # Storage roots
+    STORAGE_ROOT: str = "storage"
 
     # Security
     ENVIRONMENT: str = "development"

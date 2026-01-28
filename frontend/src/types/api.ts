@@ -13,6 +13,7 @@ export interface Artist {
   followers: number;
   bio_summary: string | null;
   bio_content: string | null;
+  is_favorite?: boolean;
   created_at: string;
   updated_at: string;
   albums?: Album[];

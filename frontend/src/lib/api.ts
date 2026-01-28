@@ -158,6 +158,7 @@ export const audio2Api = {
   getMaintenanceStatus: (params?: { start?: boolean }) => api.get('/maintenance/status', { params }),
   startMaintenance: () => api.post('/maintenance/start'),
   stopMaintenance: () => api.post('/maintenance/stop'),
+  toggleMaintenance: (enabled: boolean) => api.post(`/maintenance/toggle?enabled=${enabled}`),
   getDashboardStats: () => api.get('/maintenance/dashboard'),
   auditLibrary: (params?: { fresh_days?: number; json?: boolean }) =>
     api.post('/maintenance/audit', null, { params }),
@@ -165,6 +166,8 @@ export const audio2Api = {
     api.post('/maintenance/backfill-album-tracks', null, { params }),
   backfillYoutubeLinks: (params?: { limit?: number; retry_failed?: boolean }) =>
     api.post('/maintenance/backfill-youtube-links', null, { params }),
+  backfillImages: (params?: { limit_artists?: number; limit_albums?: number }) =>
+    api.post('/maintenance/backfill-images', null, { params }),
   backfillChart: (params?: { chart_source?: string; chart_name?: string; weeks?: number; force_reset?: boolean }) =>
     api.post('/maintenance/chart-backfill', null, { params }),
   purgeArtist: (params: { spotify_id?: string; name?: string }) =>
@@ -175,6 +178,8 @@ export const audio2Api = {
   getMaintenanceLogs: (params?: { since_id?: number; limit?: number; scope?: 'all' | 'maintenance' | 'errors' }) =>
     api.get('/maintenance/logs', { params }),
   clearMaintenanceLogs: () => api.post('/maintenance/logs/clear'),
+  repairAlbumImages: (params?: { limit?: number; background?: boolean }) =>
+    api.post('/maintenance/repair-album-images', null, { params }),
   getTrackChartStats: (spotifyTrackIds: string[]) =>
     api.get('/tracks/chart-stats', {
       params: { spotify_ids: spotifyTrackIds.join(',') },
@@ -204,6 +209,8 @@ export const audio2Api = {
     api.delete(`/favorites/${targetType}/${targetId}`, { params: { user_id: userId } }),
   listFavorites: (params: { user_id: number; target_type?: 'artist' | 'album' | 'track' }) =>
     api.get('/favorites/', { params }),
+  repairArtistImages: (artistId: number, params?: { background?: boolean; limit?: number; download_missing?: boolean }) =>
+    api.post(`/images/repair/artist/${artistId}`, null, { params }),
 
   // User learning
   getUserRecommendations: (userId: number, limit?: number) =>

@@ -4,6 +4,7 @@ Background maintenance tasks (daily refresh).
 import asyncio
 import logging
 import json
+import ast
 import random
 import threading
 from datetime import date, timedelta
@@ -20,6 +21,7 @@ from ..core.lastfm import lastfm_client
 from ..core.spotify import spotify_client
 from ..core.data_freshness import data_freshness_manager
 from ..core.image_proxy import proxy_image_list
+from ..core.image_db_store import find_by_source_url
 from ..core.genre_backfill import (
     derive_genres_from_artist_tags,
     derive_genres_from_tracks,
@@ -34,6 +36,7 @@ from ..models.base import (
     ChartEntryRaw,
     TrackChartEntry,
     TrackChartStats,
+    StoredImagePath,
 )
 from ..services.billboard import (
     fetch_chart_entries,
@@ -71,6 +74,84 @@ _BILLBOARD_CHARTS = (
     ("billboard", "billboard-global-200"),
 )
 _GLOBAL_200_START_DATE = date(2020, 9, 19)
+
+
+def _parse_images_field(raw) -> list[str]:
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            try:
+                data = ast.literal_eval(raw)
+            except (ValueError, SyntaxError):
+                return []
+    else:
+        data = raw
+    if not isinstance(data, list):
+        return []
+    urls: list[str] = []
+    for entry in data:
+        if isinstance(entry, dict):
+            url = entry.get("url") or entry.get("#text")
+        elif isinstance(entry, str):
+            url = entry
+        else:
+            url = None
+        if isinstance(url, str) and url:
+            urls.append(url)
+    return urls
+
+
+def _extract_primary_image_url(raw) -> str | None:
+    urls = _parse_images_field(raw)
+    return urls[0] if urls else None
+
+
+def repair_album_image_paths(limit: int) -> dict:
+    repaired = 0
+    scanned = 0
+    with get_session() as session:
+        albums = session.exec(
+            select(Album).order_by(Album.id.asc()).limit(limit)
+        ).all()
+        for album in albums:
+            scanned += 1
+            expected_url = _extract_primary_image_url(album.images)
+            if not expected_url:
+                continue
+            if album.image_path_id:
+                stored = session.get(StoredImagePath, album.image_path_id)
+                if stored and stored.source_url == expected_url:
+                    continue
+            candidate = find_by_source_url(expected_url)
+            if candidate:
+                album.image_path_id = candidate.id
+                album.updated_at = utc_now()
+                session.add(album)
+                repaired += 1
+        if repaired:
+            session.commit()
+    return {"scanned": scanned, "repaired": repaired}
+
+
+async def album_image_repair_loop():
+    """Periodic job: repair album image_path_id using DB-first lookups."""
+    while True:
+        if maintenance_stop_requested():
+            return
+        try:
+            result = repair_album_image_paths(settings.MAINTENANCE_IMAGE_REPAIR_BATCH_SIZE)
+            logger.info(
+                "[maintenance] album image repair scanned %d repaired %d",
+                result.get("scanned", 0),
+                result.get("repaired", 0),
+            )
+        except Exception as exc:
+            _re_raise_cancelled(exc)
+            logger.error("[maintenance] album image repair failed: %s", exc, exc_info=True)
+        await asyncio.sleep(max(300, settings.MAINTENANCE_IMAGE_REPAIR_LOOP_SECONDS))
 
 _maintenance_lock = threading.Lock()
 _maintenance_started = False
@@ -127,6 +208,7 @@ def start_maintenance_background(
         daily_refresh_loop,
         genre_backfill_loop,
         full_library_refresh_loop,
+        album_image_repair_loop,
         chart_scrape_loop,
         chart_match_loop,
     ]
@@ -382,7 +464,7 @@ async def daily_refresh_loop():
                     try:
                         data = await spotify_client.get_artist(spotify_id)
                         if data:
-                            save_artist(data)
+                            await save_artist(data)
                             logger.info(
                                 "[maintenance] artist refreshed from Spotify: %s (%s)",
                                 data.get("name") or entry.get("name") or "unknown",

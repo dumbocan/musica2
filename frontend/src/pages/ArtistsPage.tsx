@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { API_BASE_URL, audio2Api } from '@/lib/api';
+import { normalizeImageUrl } from '@/lib/images';
 import { useApiStore } from '@/store/useApiStore';
-import { useFavorites } from '@/hooks/useFavorites';
 import type { Artist } from '@/types/api';
 import { Loader2, Heart, Trash2 } from 'lucide-react';
 import { usePaginatedArtists } from '@/hooks/usePaginatedArtists';
@@ -68,12 +68,10 @@ const getArtistAssets = (artist: Artist, token: string | null) => {
 
   // If artist has image_path_id, use local storage
   if (artist.image_path_id) {
-    imageUrl = `${API_BASE_URL}/images/entity/artist/${artist.id}?size=256${tokenParam}`;
+    imageUrl = `${API_BASE_URL}/images/entity/artist/${artist.id}?size=512${tokenParam}`;
   } else if (candidate) {
     // Fallback to proxy for external URLs
-    imageUrl = candidate.startsWith('/images/proxy')
-      ? `${API_BASE_URL}${candidate}`
-      : `${API_BASE_URL}/images/proxy?url=${encodeURIComponent(candidate)}&size=192`;
+    imageUrl = normalizeImageUrl({ candidate, size: 512, token, apiBaseUrl: API_BASE_URL });
   }
 
   return {
@@ -98,16 +96,12 @@ export function ArtistsPage() {
     loadMore,
     removeArtist,
     reload,
-  } = usePaginatedArtists({ limit: 200, sortOption: apiSortOption, userId, searchTerm, genreFilter });
+    updateArtistFavorite,
+  } = usePaginatedArtists({ limit: 50, sortOption: apiSortOption, userId, searchTerm, genreFilter });
   const navigate = useNavigate();
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const prefetchKeyRef = useRef('');
   const prefetchCountRef = useRef(0);
-  const {
-    favoriteIds,
-    toggleFavorite: toggleArtistFavorite,
-    effectiveUserId: effectiveArtistUserId
-  } = useFavorites('artist', userId);
   const [visibleCount, setVisibleCount] = useState(20);
 
   useEffect(() => {
@@ -133,6 +127,7 @@ export function ArtistsPage() {
       (entries) => {
         entries.forEach((entry) => {
           if (!entry.isIntersecting) return;
+          if (isLoading || artists.length === 0) return;
           setVisibleCount((prev) => Math.min(prev + 20, artists.length));
           if (hasMore && !isLoadingMore && artists.length - visibleCount < 40) {
             loadMore();
@@ -143,16 +138,28 @@ export function ArtistsPage() {
     );
     observer.observe(target);
     return () => observer.disconnect();
-  }, [artists.length, hasMore, isLoadingMore, loadMore, visibleCount]);
+  }, [artists.length, hasMore, isLoading, isLoadingMore, loadMore, visibleCount]);
 
-  const canFavorite = !!effectiveArtistUserId;
+  const canFavorite = !!userId;
   const canHide = !!userId;
 
   const toggleFavorite = async (event: React.MouseEvent, artistId: number) => {
     event.preventDefault();
     event.stopPropagation();
-    if (!effectiveArtistUserId) return;
-    await toggleArtistFavorite(artistId);
+    if (!userId) return;
+    const artist = artists.find((entry) => entry.id === artistId);
+    const currentlyFavorite = !!artist?.is_favorite;
+    try {
+      if (currentlyFavorite) {
+        await audio2Api.removeFavorite('artist', artistId, userId);
+        updateArtistFavorite(artistId, false);
+      } else {
+        await audio2Api.addFavorite('artist', artistId, userId);
+        updateArtistFavorite(artistId, true);
+      }
+    } catch (err) {
+      console.error('Failed to toggle favorite', err);
+    }
   };
 
   const hideArtist = async (event: React.MouseEvent, artistId: number) => {
@@ -270,7 +277,7 @@ export function ArtistsPage() {
               const { imageUrl, genres } = getArtistAssets(artist, token);
               const disabled = !artist.spotify_id;
 
-              const isFavorite = favoriteIds.has(artist.id);
+              const isFavorite = !!artist.is_favorite;
               return (
                 <div
                   key={artist.spotify_id || `local-${artist.id}`}

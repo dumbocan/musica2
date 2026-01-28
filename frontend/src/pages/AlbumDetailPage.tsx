@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { audio2Api, API_BASE_URL } from '@/lib/api';
+import { normalizeImageUrl } from '@/lib/images';
 import { useApiStore } from '@/store/useApiStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import { useFavorites } from '@/hooks/useFavorites';
@@ -70,9 +71,16 @@ const formatChartDate = (value?: string | null) => {
 };
 
 export function AlbumDetailPage() {
+  const { token } = useApiStore();
+  const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+
   const resolveImageUrl = (url?: string) => {
     if (!url) return undefined;
-    return url.startsWith('/') ? `${API_BASE_URL}${url}` : url;
+    // Use local cached image if we have a local album ID
+    if (localAlbumId && url.startsWith('http')) {
+      return `${API_BASE_URL}/images/entity/album/${localAlbumId}?size=256${tokenParam}`;
+    }
+    return normalizeImageUrl({ candidate: url, size: 256, token, apiBaseUrl: API_BASE_URL });
   };
   const { spotifyId } = useParams<{ spotifyId: string }>();
   const navigate = useNavigate();
@@ -301,6 +309,9 @@ export function AlbumDetailPage() {
         const data = res.data;
         if (!isMounted) return;
         setAlbum(data);
+        if (data?.local_id) {
+          setLocalAlbumId(data.local_id);
+        }
         const embeddedTracks = Array.isArray(data?.tracks?.items)
           ? data.tracks.items
           : Array.isArray(data?.tracks)
@@ -314,18 +325,7 @@ export function AlbumDetailPage() {
           if (!isMounted) return;
           setTracks(tracksRes.data || []);
         }
-        // Persist album in the background to resolve local ID for favorites
-        void audio2Api
-          .saveAlbumToDb(spotifyId)
-          .then((saveRes) => {
-            const albumId = saveRes.data?.album?.id;
-            if (albumId && isMounted) {
-              setLocalAlbumId(albumId);
-            }
-          })
-          .catch(() => {
-            // best effort; ignore
-          });
+        // DB-first: do not force external save unless explicitly requested
       } catch (err: unknown) {
         if (!isMounted) return;
         const message =

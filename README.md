@@ -472,7 +472,7 @@ Current Status
 
 Desde Enero 2026, Audio2 usa un sistema de almacenamiento **filesystem-first** con rutas amigables para facilitar la navegación humana.
 
-### **Problemas Encontrados y Soluciones**
+### **Problemas Encontrados y Soluciones (Enero 2026)**
 
 #### Problema 1: Imágenes sin asociación entidad→imagen
 **Síntoma**: Las imágenes en `cache/images/` eran `sha1hash.webp` sin metadatos de a quién pertenecían.
@@ -494,19 +494,90 @@ Desde Enero 2026, Audio2 usa un sistema de almacenamiento **filesystem-first** c
 
 **Solución**: Script de corrección que busca entradas 'external' con path coincidente y las actualiza al tipo/entidad correcto.
 
+#### Problema 5: Imágenes con paths en carpeta "external/" pero tipo errado
+**Síntoma**: 132 entradas en `storedimagepath` tenían `entity_type='album'` pero `path_512='external/external__hash_512.webp'`.
+
+**Solución**:
+```python
+# Buscar y borrar entradas con paths externos pero tipo no-external
+stmt = select(StoredImagePath).where(
+    (StoredImagePath.path_512.like('external/%')) |
+    (StoredImagePath.path_256.like('external/%'))
+)
+```
+Luego limpiar `image_path_id` de todos los artistas para forzar re-download.
+
+#### Problema 6: TypeError en `store_image` para albums
+**Síntoma**: `TypeError: unsupported operand type(s) for /: 'str' and 'str'` al guardar imágenes de albums.
+
+**Causa**: En `image_db_store.py:267`, `parent_name` es un string pero se usaba directamente con `/` (operador Path).
+
+**Solución**:
+```python
+# Antes (incorrecto):
+entity_folder = parent_name / entity_name
+
+# Después (correcto):
+entity_folder = Path(parent_name) / entity_name
+```
+
+#### Problema 7: JSONDecodeError al parsear campo `images`
+**Síntoma**: `json.JSONDecodeError: Expecting property name enclosed in double quotes` al procesar albums.
+
+**Causa**: El campo `images` almacenado en BD usaba comillas simples (formato Python literal) en lugar de JSON válido.
+
+**Solución** en `app/api/images.py`:
+```python
+if isinstance(entity_images, str):
+    try:
+        images_data = json.loads(entity_images)
+    except json.JSONDecodeError:
+        images_data = ast.literal_eval(entity_images)  # Fallback para comillas simples
+```
+
 ### **Estructura de Directorios**
 
 ```
-storage/images/
-├── ArtistName/
-│   ├── ArtistName__abc123_256.webp     ← imagen del artista
-│   ├── ArtistName__abc123_512.webp
-│   └── AlbumName/                      ← álbum del artista
-│       ├── AlbumName__def456_256.webp
-│       └── AlbumName__def456_512.webp
-├── AnotherArtist/
-│   └── ...
+storage/
+├── images/
+│   ├── ArtistName/
+│   │   ├── ArtistName__abc123_256.webp     ← imagen del artista
+│   │   ├── ArtistName__abc123_512.webp
+│   │   └── AlbumName/                      ← álbum del artista
+│   │       ├── AlbumName__def456_256.webp
+│   │       └── AlbumName__def456_512.webp
+│   └── AnotherArtist/
+│       └── ...
+└── downloads/                              ← música descargada
+    └── ArtistName/
+        └── AlbumName/
+            └── Artist - Track.mp3
 ```
+
+### **Portabilidad entre Ordenadores**
+
+Para migrar a otro ordenador o disco externo, sigue estos pasos:
+
+1. **En `.env` del nuevo ordenador**, añade la variable `STORAGE_ROOT`:
+```env
+# Ejemplo en disco externo
+STORAGE_ROOT=/media/micasa/external_drive/audio2_storage
+
+# O en otro directorio
+STORAGE_ROOT=/home/micasa/music_storage
+```
+
+2. **Copia la carpeta `storage/` completa** al nuevo destino.
+
+3. **La BD no necesita cambios**: Los paths en `storedimagepath` son relativos (`ArtistName/Artist__hash_512.webp`), no absolutos.
+
+4. **Al migrar canciones** (futuro), seguirán el mismo patrón:
+   - `downloads/Artist/Artist - Track.mp3` (relativo a `STORAGE_ROOT`)
+   - Solo cambia `STORAGE_ROOT` en `.env`
+
+**Archivos clave que usan STORAGE_ROOT:**
+- `app/core/image_db_store.py:25-26` → `STORAGE_ROOT = Path("storage")`, `IMAGE_STORAGE`
+- `app/core/youtube.py:34` → `self.download_dir = Path("downloads")`
 
 ### **Configuración Actual**
 
@@ -558,6 +629,84 @@ ls storage/images/Drake/
 1. **Nueva imagen** → Se descarga de Spotify → Se guarda en `storage/images/{artist}/` → Se actualiza `Artist.image_path_id`
 2. **Request** → `/images/entity/artist/{id}?size=512` → Busca en BD → Serve archivo desde `storage/images/`
 3. **Fallback** → Si no hay `image_path_id`, usa `/images/proxy?url=...` con la URL del campo `images` en JSON
+
+### **Test de Repoblación (antes de limpiar todo)**
+
+Antes de borrar todas las imágenes, hacer test con UN artista para verificar que el sistema funciona:
+
+```python
+# 1. Verificar estado actual del artista
+from app.core.db import get_session
+from app.models.base import Artist, StoredImagePath
+
+with get_session() as session:
+    artist = session.get(Artist, 46)  # Drake
+    print(f'Artista: {artist.name}, image_path_id: {artist.image_path_id}')
+
+# 2. Limpiar datos de Drake
+import shutil
+from pathlib import Path
+
+# Borrar carpeta
+drake_folder = Path('storage/images/Drake')
+if drake_folder.exists():
+    shutil.rmtree(drake_folder)
+    print(f'Carpeta borrada: {drake_folder}')
+
+# Borrar entrada storedimagepath y limpiar image_path_id
+# (ver script completo en herramientas de desarrollo)
+
+# 3. Hacer peticion HTTP
+curl "http://localhost:8000/images/entity/artist/46?size=512&token=<TOKEN>"
+
+# 4. Verificar resultado
+# - Nuevo image_path_id en BD
+# - Archivos en storage/images/Drake/
+# - Path correcto: Drake/Drake__<hash>_512.webp
+```
+
+### **Limpieza Total (Repoblación desde cero)**
+
+```python
+# Script para limpiar todas las imágenes y forzar re-download
+
+from app.core.db import get_session
+from app.models.base import Artist, Album, StoredImagePath
+from sqlmodel import select
+from pathlib import Path
+import shutil
+
+# 1. Borrar todas las carpetas de storage/images/
+storage_path = Path('storage/images')
+if storage_path.exists():
+    for item in storage_path.iterdir():
+        if item.is_dir():
+            shutil.rmtree(item)
+            print(f'Borrado: {item}')
+
+# 2. Truncar tabla storedimagepath (cuidado, esto borra todo)
+with get_session() as session:
+    entries = session.exec(select(StoredImagePath)).all()
+    for e in entries:
+        session.delete(e)
+    session.commit()
+    print(f'Borradas {len(entries)} entradas de storedimagepath')
+
+# 3. Limpiar image_path_id de todos
+with get_session() as session:
+    artists = session.exec(select(Artist)).all()
+    for a in artists:
+        a.image_path_id = None
+        session.add(a)
+    albums = session.exec(select(Album)).all()
+    for a in albums:
+        a.image_path_id = None
+        session.add(a)
+    session.commit()
+    print(f'Limpiados {len(artists)} artistas y {len(albums)} albums')
+```
+
+**Resultado**: Al visitar las páginas de artistas/albums en el navegador, las imágenes se descargarán automáticamente desde Spotify con la estructura correcta.
 
 ### **Beneficios**
 
@@ -690,3 +839,45 @@ npm run dev
 source venv/bin/activate
 pip install psycopg2-binary
 ```
+
+---
+
+## ✅ Estándares globales adoptados (2026-01)
+Se aplican estándares consistentes de rendimiento, caché y DB-first:
+- **HTTP caching**: `Cache-Control: private`, `ETag`, `Last-Modified` y `Vary` para endpoints personalizados.
+- **Requests condicionales**: `If-None-Match` / `If-Modified-Since` → `304` si no hay cambios.
+- **Compresión**: GZip para respuestas JSON grandes.
+- **DB-first**: la UI no usa APIs externas salvo que falten datos locales o el usuario fuerce refresh.
+- **Imágenes**: tamaños cacheados reales son `256` y `512`.
+- **Linting**: backend compatible con flake8; frontend con ESLint + hooks.
+
+## 🧩 Fallos de imágenes (álbumes con imágenes de artistas) — causa y solución
+### Síntomas
+- En la discografía del artista, **portadas de álbum incorrectas** (aparecían imágenes del artista).
+- En la página del álbum, la imagen correcta sí aparecía.
+
+### Causas
+1) **Reutilización por hash**: imágenes se reasignaban entre entidades.
+2) **Fallbacks inseguros**: `image_path_id` cruzaba tipos o buscaba por nombre.
+3) **Frontend en discografía** usaba `image_path_id` corrupto.
+
+### Soluciones aplicadas
+- Se **evitó la reasignación por hash** entre entidades.
+- Se **eliminaron fallbacks inseguros** y se restringió por `entity_type`.
+- La discografía de artista **usa URL del álbum (proxy)** en lugar de `image_path_id`.
+- Reparación **DB-first**: `image_path_id` se reasigna por `source_url` si ya existe en la DB.
+- **Mantenimiento automático** repara `image_path_id` en background.
+
+### Resultado
+- Portadas correctas en la vista de artista.
+- Reparación sin APIs externas ni borrado de datos.
+
+## 🔧 Mantenimiento automático (DB-first)
+Ya existe loop de mantenimiento que:
+- refresca discografías y detecta nuevos álbumes/singles,
+- repara `image_path_id` en background.
+
+## 🛠️ Reparación manual (desde Settings)
+Se añadió un botón en Settings:
+- **“Reparar imágenes de álbum”** → dispara `POST /maintenance/repair-album-images`
+- Funciona con auth y solo DB.

@@ -24,8 +24,10 @@ export function SettingsPage() {
   const [albumMissingStatus, setAlbumMissingStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [albumIncompleteStatus, setAlbumIncompleteStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [youtubeBackfillStatus, setYoutubeBackfillStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
+  const [imagesBackfillStatus, setImagesBackfillStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [metadataStatus, setMetadataStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [chartBackfillStatus, setChartBackfillStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
+  const [albumImageRepairStatus, setAlbumImageRepairStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [purgeId, setPurgeId] = useState('');
   const [purgeStatus, setPurgeStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [actionStatuses, setActionStatuses] = useState<Record<string, boolean>>({});
@@ -324,6 +326,15 @@ export function SettingsPage() {
     return () => window.clearInterval(interval);
   }, [refreshActionStatuses]);
 
+  useEffect(() => {
+    const hasRunningAction = Object.values(actionStatuses).some(Boolean);
+    if (!hasRunningAction) return;
+    const interval = window.setInterval(() => {
+      void refreshDashboardStats();
+    }, 6000);
+    return () => window.clearInterval(interval);
+  }, [actionStatuses, refreshDashboardStats]);
+
   const handleBackfillAlbumsMissing = async () => {
     if (albumMissingStatus === 'running') return;
     setAlbumMissingStatus('running');
@@ -362,6 +373,33 @@ export function SettingsPage() {
       setYoutubeBackfillStatus('error');
     } finally {
       void refreshDashboardStats();
+      void refreshActionStatuses();
+    }
+  };
+
+  const handleBackfillImages = async () => {
+    if (imagesBackfillStatus === 'running') return;
+    setImagesBackfillStatus('running');
+    try {
+      await audio2Api.backfillImages();
+      setImagesBackfillStatus('done');
+    } catch {
+      setImagesBackfillStatus('error');
+    } finally {
+      void refreshDashboardStats();
+      void refreshActionStatuses();
+    }
+  };
+
+  const handleRepairAlbumImages = async () => {
+    if (albumImageRepairStatus === 'running') return;
+    setAlbumImageRepairStatus('running');
+    try {
+      await audio2Api.repairAlbumImages({ limit: 20000, background: true });
+      setAlbumImageRepairStatus('done');
+    } catch {
+      setAlbumImageRepairStatus('error');
+    } finally {
       void refreshActionStatuses();
     }
   };
@@ -423,7 +461,7 @@ export function SettingsPage() {
     { label: 'Artistas en BD', value: dashboardStats?.artists_total },
     { label: 'Álbumes en BD', value: dashboardStats?.albums_total },
     { label: 'Pistas en BD', value: dashboardStats?.tracks_total },
-    { label: 'Artistas sin imagen', value: dashboardStats?.artists_missing_images },
+    { label: 'Álbumes sin imagen', value: dashboardStats?.artists_missing_images },
     { label: 'Álbumes sin tracks', value: dashboardStats?.albums_without_tracks },
     { label: 'Pistas sin link YouTube', value: dashboardStats?.tracks_without_youtube },
     { label: 'Links YouTube', value: dashboardStats?.youtube_links_total },
@@ -631,6 +669,21 @@ export function SettingsPage() {
             <div style={{ marginTop: 4, fontSize: 11, opacity: 0.7 }}>
               Auditoría: {auditStatus === 'done' ? 'enviado' : auditStatus === 'error' ? 'error' : 'en espera'}
             </div>
+            <button
+              type="button"
+              className="btn-ghost"
+              style={{
+                ...actionButtonStyle('repair_album_images'),
+                marginTop: 12,
+              }}
+              onClick={handleRepairAlbumImages}
+              disabled={albumImageRepairStatus === 'running'}
+            >
+              {actionLabel('Reparar imágenes de álbum', albumImageRepairStatus, 'repair_album_images')}
+            </button>
+            <div style={{ marginTop: 4, fontSize: 11, opacity: 0.7 }}>
+              Reparación imágenes: {albumImageRepairStatus === 'done' ? 'en cola' : albumImageRepairStatus === 'error' ? 'error' : 'en espera'}
+            </div>
           </div>
 
           <div className="card">
@@ -676,6 +729,19 @@ export function SettingsPage() {
               </button>
               <div style={{ fontSize: 11, opacity: 0.7 }}>
                 Estado: {youtubeBackfillStatus === 'done' ? 'enviado' : youtubeBackfillStatus === 'error' ? 'error' : 'en espera'}
+              </div>
+
+              <button
+                type="button"
+                className="btn-ghost"
+                style={actionButtonStyle('images_backfill')}
+                onClick={handleBackfillImages}
+                disabled={imagesBackfillStatus === 'running'}
+              >
+                {actionLabel('Repoblar imágenes', imagesBackfillStatus, 'images_backfill')}
+              </button>
+              <div style={{ fontSize: 11, opacity: 0.7 }}>
+                Estado: {imagesBackfillStatus === 'done' ? 'enviado' : imagesBackfillStatus === 'error' ? 'error' : 'en espera'}
               </div>
 
               <button
@@ -815,7 +881,7 @@ export function SettingsPage() {
                     background: 'rgba(255,255,255,0.02)',
                   }}
                 >
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>YouTube</div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>YouTube API</div>
                   <div
                     style={{
                       marginTop: 6,
@@ -827,22 +893,29 @@ export function SettingsPage() {
                     }}
                   >
                     <span>
-                      Requests:{' '}
+                      Usado:{' '}
                       <strong style={{ color: 'inherit' }}>
                         {typeof youtubeUsage?.requests_total === 'number'
                           ? youtubeUsage.requests_total.toLocaleString()
                           : '—'}
                       </strong>
+                      / {typeof youtubeUsage?.requests_limit === 'number'
+                          ? youtubeUsage.requests_limit
+                          : 80}
                     </span>
                     <span>
-                      Reset:{' '}
-                      {youtubeUsage?.next_reset_at_unix
-                        ? new Date(youtubeUsage.next_reset_at_unix * 1000).toLocaleString()
-                        : '—'}
+                      Restante:{' '}
+                      <strong style={{ color: youtubeUsage?.remaining !== undefined && youtubeUsage.remaining < 10 ? '#ef4444' : 'inherit' }}>
+                        {typeof youtubeUsage?.remaining === 'number'
+                          ? youtubeUsage.remaining
+                          : '—'}
+                      </strong>
                     </span>
                   </div>
                   <div style={{ fontSize: 10, marginTop: 4, color: 'var(--muted)' }}>
-                    Hora local: {typeof youtubeUsage?.reset_hour_local === 'number' ? youtubeUsage.reset_hour_local : '—'}
+                    Reset: {youtubeUsage?.next_reset_at_unix
+                      ? new Date(youtubeUsage.next_reset_at_unix * 1000).toLocaleString()
+                      : '—'}
                   </div>
                   {youtubeUsageError && (
                     <div style={{ marginTop: 6, fontSize: 10, color: '#ef4444' }}>{youtubeUsageError}</div>

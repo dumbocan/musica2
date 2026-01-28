@@ -1,14 +1,16 @@
 """
 Image endpoints - filesystem-first approach.
 
-Images are stored in storage/images/ with paths in DB.
+Images are stored under STORAGE_ROOT/images with paths in DB.
 This allows nginx/CDN to serve files directly while keeping DB small.
 """
 
 import os
-from fastapi import APIRouter, HTTPException, Query
+import ast
+import json
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from fastapi.responses import FileResponse
-from urllib.parse import unquote
+from urllib.parse import unquote, parse_qs, urlparse
 
 from ..core.image_db_store import (
     store_image,
@@ -16,12 +18,138 @@ from ..core.image_db_store import (
     get_image_stats as _get_image_stats,
     delete_images_for_entity,
     IMAGE_STORAGE,
+    IMAGE_SIZES,
+    find_by_source_url,
 )
 from ..core.db import get_session
 from ..models.base import StoredImagePath
 from sqlmodel import select
 
 router = APIRouter(prefix="/images", tags=["images"])
+_IMAGE_CACHE_SECONDS = 86400
+_REPAIR_LIMIT_DEFAULT = 200
+
+
+def _extract_primary_image_url(images: object) -> str | None:
+    if not images:
+        return None
+    if isinstance(images, str):
+        try:
+            images = json.loads(images)
+        except json.JSONDecodeError:
+            try:
+                images = ast.literal_eval(images)
+            except (ValueError, SyntaxError):
+                return None
+    if not isinstance(images, list) or not images:
+        return None
+    first = images[0]
+    if isinstance(first, dict):
+        url = first.get("url")
+    else:
+        url = first
+    if not isinstance(url, str):
+        return None
+    if url.startswith("/images/proxy?"):
+        parsed = urlparse(url)
+        query_params = parse_qs(parsed.query)
+        if "url" in query_params:
+            return unquote(query_params["url"][0])
+    return url
+
+
+def _clear_entity_image_path(entity_type: str, entity_id: int) -> None:
+    with get_session() as session:
+        if entity_type == "artist":
+            from ..models.base import Artist
+            row = session.get(Artist, entity_id)
+        elif entity_type == "album":
+            from ..models.base import Album
+            row = session.get(Album, entity_id)
+        else:
+            row = None
+        if row and getattr(row, "image_path_id", None):
+            row.image_path_id = None
+            session.add(row)
+            session.commit()
+
+
+async def _repair_album_image(album_id: int, source_url: str | None, download_missing: bool) -> bool:
+    if not source_url:
+        return False
+    existing = find_by_source_url(source_url)
+    if existing:
+        with get_session() as session:
+            from ..models.base import Album
+            album_row = session.get(Album, album_id)
+            if album_row:
+                album_row.image_path_id = existing.id
+                session.add(album_row)
+                session.commit()
+        return True
+    if not download_missing:
+        return False
+    delete_images_for_entity("album", album_id)
+    _clear_entity_image_path("album", album_id)
+    result = await store_image("album", album_id, source_url)
+    if result:
+        with get_session() as session:
+            from ..models.base import Album
+            album_row = session.get(Album, album_id)
+            if album_row and not album_row.image_path_id:
+                album_row.image_path_id = result.id
+                session.add(album_row)
+                session.commit()
+        return True
+    return False
+
+
+async def _repair_artist_albums(artist_id: int, limit: int, download_missing: bool) -> dict:
+    from ..models.base import Album
+    with get_session() as session:
+        albums = session.exec(
+            select(Album)
+            .where(Album.artist_id == artist_id)
+            .order_by(Album.id.asc())
+            .limit(limit)
+        ).all()
+    repaired = 0
+    scanned = 0
+    for album in albums:
+        scanned += 1
+        url = _extract_primary_image_url(album.images)
+        if await _repair_album_image(album.id, url, download_missing):
+            repaired += 1
+    return {"scanned": scanned, "repaired": repaired}
+
+
+@router.post("/repair/artist/{artist_id}")
+async def repair_artist_images(
+    artist_id: int,
+    background_tasks: BackgroundTasks,
+    background: bool = Query(True, description="Run repair in background"),
+    limit: int = Query(_REPAIR_LIMIT_DEFAULT, ge=1, le=1000),
+    download_missing: bool = Query(False, description="Download when not in local image DB"),
+):
+    """Repair album images for a specific artist (useful for mismatched album covers)."""
+    if background and background_tasks is not None:
+        background_tasks.add_task(_repair_artist_albums, artist_id, limit, download_missing)
+        return {"status": "queued", "artist_id": artist_id, "limit": limit}
+    return await _repair_artist_albums(artist_id, limit, download_missing)
+
+
+def _resolve_stored_image_path(stored: StoredImagePath, size: int) -> str | None:
+    """Resolve a stored image path for a given size, with fallbacks."""
+    size_key = f"path_{size}"
+    path = getattr(stored, size_key, None)
+    if path:
+        return str(IMAGE_STORAGE / path) if not os.path.isabs(path) else path
+    for s in sorted(IMAGE_SIZES, reverse=True):
+        size_key = f"path_{s}"
+        path = getattr(stored, size_key, None)
+        if path:
+            return str(IMAGE_STORAGE / path) if not os.path.isabs(path) else path
+    return None
 
 
 @router.get("/proxy")
@@ -46,9 +174,13 @@ async def proxy_image(
         stored = session.exec(stmt).first()
 
     if stored:
-        image_path = get_image_path(stored.entity_type, stored.id, size)
+        image_path = _resolve_stored_image_path(stored, size)
         if image_path and os.path.exists(image_path):
-            return FileResponse(image_path, media_type="image/webp")
+            return FileResponse(
+                image_path,
+                media_type="image/webp",
+                headers={"Cache-Control": f"private, max-age={_IMAGE_CACHE_SECONDS}"},
+            )
 
     # Not cached, download and store
     result = await store_image(
@@ -58,9 +190,13 @@ async def proxy_image(
     )
 
     if result:
-        image_path = get_image_path("external", result.id, size)
+        image_path = _resolve_stored_image_path(result, size)
         if image_path and os.path.exists(image_path):
-            return FileResponse(image_path, media_type="image/webp")
+            return FileResponse(
+                image_path,
+                media_type="image/webp",
+                headers={"Cache-Control": f"private, max-age={_IMAGE_CACHE_SECONDS}"},
+            )
 
     raise HTTPException(status_code=400, detail="Unable to fetch image")
 
@@ -85,6 +221,7 @@ async def get_entity_image(
     # Get entity info
     entity_name = None
     entity_images = None
+    artist_name = None  # For album folder structure
 
     if entity_type == "artist":
         with get_session() as session:
@@ -98,26 +235,48 @@ async def get_entity_image(
             from ..models.base import Album
             entity = session.get(Album, entity_id)
             if entity:
-                entity_name = entity.name
+                entity_name = entity.name  # Use album name for search
                 entity_images = entity.images
                 # Also get artist name for folder structure
                 if entity.artist_id:
                     from ..models.base import Artist
                     artist = session.get(Artist, entity.artist_id)
                     if artist:
-                        entity_name = artist.name  # Use artist name for folder
+                        artist_name = artist.name
+
+    expected_url = _extract_primary_image_url(entity_images)
+    # Validate stored image matches the entity's current primary URL
+    stored = None
+    with get_session() as session:
+        stmt = select(StoredImagePath).where(
+            StoredImagePath.entity_type == entity_type,
+            StoredImagePath.entity_id == entity_id,
+        ).limit(1)
+        stored = session.exec(stmt).first()
+    if stored and expected_url and stored.source_url != expected_url:
+        delete_images_for_entity(entity_type, entity_id)
+        _clear_entity_image_path(entity_type, entity_id)
+        stored = None
 
     # Try to get from storedimagepath first
-    image_path = get_image_path(entity_type, entity_id, size, entity_name if entity_type == "artist" else None)
+    image_path = get_image_path(entity_type, entity_id, size, entity_name)
 
     if image_path and os.path.exists(image_path):
-        return FileResponse(image_path, media_type="image/webp")
+        return FileResponse(
+            image_path,
+            media_type="image/webp",
+            headers={"Cache-Control": f"private, max-age={_IMAGE_CACHE_SECONDS}"},
+        )
 
     # Fallback: if entity has images field, download and store for this entity
     if entity_images:
         try:
             if isinstance(entity_images, str):
-                images_data = json.loads(entity_images)
+                # Try JSON first, then Python literal_eval (for single-quote strings)
+                try:
+                    images_data = json.loads(entity_images)
+                except json.JSONDecodeError:
+                    images_data = ast.literal_eval(entity_images)
             else:
                 images_data = entity_images
 
@@ -164,9 +323,13 @@ async def get_entity_image(
                                     session.commit()
 
                         # Return the image
-                        image_path = get_image_path(entity_type, result.id, size)
+                        image_path = get_image_path(entity_type, entity_id, size, entity_name)
                         if image_path and os.path.exists(image_path):
-                            return FileResponse(image_path, media_type="image/webp")
+                            return FileResponse(
+                                image_path,
+                                media_type="image/webp",
+                                headers={"Cache-Control": f"private, max-age={_IMAGE_CACHE_SECONDS}"},
+                            )
         except (json.JSONDecodeError, KeyError, TypeError):
             pass
 

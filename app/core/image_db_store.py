@@ -1,7 +1,7 @@
 """
 Image storage service - filesystem-first approach.
 
-Images are stored in storage/images/ and paths kept in DB.
+Images are stored under STORAGE_ROOT/images and paths kept in DB.
 Keeps DB small while allowing direct file serving via nginx/CDN.
 """
 
@@ -18,11 +18,13 @@ from sqlmodel import select
 from .db import get_session
 from .time_utils import utc_now
 from .image_cache import _is_safe_url
+from .config import settings
 from ..models.base import StoredImagePath, Artist, Album, Track
 
 
 # Storage configuration
-STORAGE_ROOT = Path("storage")
+_raw_storage_root = (settings.STORAGE_ROOT or "storage").strip()
+STORAGE_ROOT = Path(_raw_storage_root).expanduser()
 IMAGE_STORAGE = STORAGE_ROOT / "images"
 IMAGE_SIZES = [256, 512]
 DEFAULT_QUALITY = 80
@@ -142,7 +144,8 @@ def process_image(image_data: bytes) -> dict[str, bytes]:
 def get_image_path(entity_type: str, entity_id: int, size: int = 512, entity_name: Optional[str] = None) -> Optional[str]:
     """Get image path for an entity from DB.
 
-    Searches by entity_id first, then falls back to entity_name (sanitized folder name).
+    Searches by entity_id first, then falls back to entity_name (sanitized folder name),
+    then falls back to searching by the path pattern from the entity's images.
     """
     with get_session() as session:
         # First try: search by entity_id
@@ -161,6 +164,19 @@ def get_image_path(entity_type: str, entity_id: int, size: int = 512, entity_nam
             ).limit(1)
             stored = session.exec(stmt).first()
 
+        # Fallback: try to find by path pattern based on entity name
+        if not stored and entity_name:
+            sanitized_name = _sanitize_filename(entity_name)
+            # Try to find any image path that contains the entity name in the folder structure
+            stmt = select(StoredImagePath).where(
+                (StoredImagePath.entity_type == entity_type) &
+                (
+                    (StoredImagePath.path_256.like(f"%/{sanitized_name}/%")) |
+                    (StoredImagePath.path_256.like(f"{sanitized_name}/%"))
+                )
+            ).limit(1)
+            stored = session.exec(stmt).first()
+
         if not stored:
             return None
 
@@ -173,14 +189,20 @@ def get_image_path(entity_type: str, entity_id: int, size: int = 512, entity_nam
         size_key = _get_image_size_key(size)
         path = getattr(stored, size_key, None)
         if path:
-            return str(IMAGE_STORAGE / path)
+            path_obj = Path(path)
+            if path_obj.is_absolute():
+                return str(path_obj)
+            return str(IMAGE_STORAGE / path_obj)
 
         # Fall back to smaller size
         for s in sorted(IMAGE_SIZES, reverse=True):
             pk = _get_image_size_key(s)
             p = getattr(stored, pk, None)
             if p:
-                return str(IMAGE_STORAGE / p)
+                p_obj = Path(p)
+                if p_obj.is_absolute():
+                    return str(p_obj)
+                return str(IMAGE_STORAGE / p_obj)
 
         return None
 
@@ -190,6 +212,15 @@ def find_by_hash(content_hash: str) -> Optional[StoredImagePath]:
     with get_session() as session:
         stmt = select(StoredImagePath).where(
             StoredImagePath.content_hash == content_hash
+        ).limit(1)
+        return session.exec(stmt).first()
+
+
+def find_by_source_url(source_url: str) -> Optional[StoredImagePath]:
+    """Find stored image by source URL."""
+    with get_session() as session:
+        stmt = select(StoredImagePath).where(
+            StoredImagePath.source_url == source_url
         ).limit(1)
         return session.exec(stmt).first()
 
@@ -227,15 +258,9 @@ async def store_image(
     # Check if already stored
     existing = find_by_hash(content_hash)
     if existing:
-        # Update entity reference if different
-        if existing.entity_id != entity_id:
-            with get_session() as session:
-                existing.entity_id = entity_id
-                existing.entity_type = entity_type
-                existing.updated_at = utc_now()
-                session.add(existing)
-                session.commit()
-        return existing
+        # Only reuse if this exact entity already owns the stored image.
+        if existing.entity_id == entity_id and existing.entity_type == entity_type:
+            return existing
 
     # Ensure directories exist
     _ensure_storage_dirs()
@@ -264,7 +289,7 @@ async def store_image(
     elif entity_type in ("album", "track"):
         # Albums/tracks go in parent_name/entity_name/
         if parent_name:
-            entity_folder = parent_name / entity_name
+            entity_folder = Path(parent_name) / entity_name
         else:
             # Fallback if no parent
             entity_folder = Path(entity_name)

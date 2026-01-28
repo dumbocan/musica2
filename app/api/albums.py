@@ -206,7 +206,7 @@ async def save_album_to_db(spotify_id: str = Path(..., description="Spotify albu
         raise HTTPException(status_code=404, detail="Album not found on Spotify")
     # Fetch tracks
     tracks_data = await spotify_client.get_album_tracks(spotify_id)
-    album = save_album(album_data)
+    album = await save_album(album_data)
 
     from ..crud import save_track
     artist_id = album.artist_id
@@ -294,6 +294,8 @@ def _album_from_local(album: Album, artist: Artist | None, tracks: list[Track]) 
     images = proxy_image_list(_parse_images_field(album.images), size=512)
     payload = {
         "id": album.spotify_id or str(album.id),
+        "local_id": album.id,
+        "image_path_id": album.image_path_id,
         "name": album.name,
         "release_date": album.release_date,
         "images": images,

@@ -6,10 +6,13 @@ import asyncio
 import logging
 import json
 import ast
+import hashlib
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime, format_datetime
 from datetime import timedelta
 from typing import List
 
-from fastapi import APIRouter, Query, Path, HTTPException, BackgroundTasks, Depends, Request
+from fastapi import APIRouter, Query, Path, HTTPException, BackgroundTasks, Depends, Request, Response
 from sqlalchemy import desc, asc, func, exists
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select
@@ -24,7 +27,7 @@ from ..crud import (
     unhide_artist_for_user,
 )
 from ..core.db import get_session, SessionDep
-from ..models.base import Artist, Album, Track, YouTubeDownload, UserHiddenArtist
+from ..models.base import Artist, Album, Track, YouTubeDownload, UserHiddenArtist, UserFavorite, FavoriteTargetType
 from ..core.lastfm import lastfm_client
 from ..core.genre_backfill import (
     derive_genres_from_artist_tags,
@@ -44,6 +47,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/artists", tags=["artists"])
 ARTIST_REFRESH_DAYS = 7
+_ARTISTS_CACHE_TTL_SECONDS = 120
+_ARTISTS_CACHE: dict[str, dict] = {}
 
 
 @router.get("/search")
@@ -163,6 +168,8 @@ async def get_artist_albums(
                 "images": proxy_image_list(images, size=384),
                 "label": album.label,
                 "artists": [{"id": artist.spotify_id, "name": artist.name}] if artist.spotify_id else [{"name": artist.name}],
+                "image_path_id": album.image_path_id,
+                "local_id": album.id,
             })
         local_count = len(albums)
 
@@ -313,7 +320,7 @@ async def sync_artist_discography(
     from ..crud import save_album
     synced_albums = 0
     for album_data in albums_data:
-        album = await asyncio.to_thread(save_album, album_data)
+        album = await save_album(album_data)
         # Since save_album saves tracks if album new, count
         if not album.spotify_id:  # If it was new, but since update, difficult to count
             synced_albums += 1
@@ -373,6 +380,7 @@ async def get_artist_info(
             "followers": {"total": local_artist.followers or 0},
             "popularity": local_artist.popularity or 0,
             "genres": _parse_genres_field(local_artist.genres),
+            "image_path_id": local_artist.image_path_id,
         }
         if local_images_ok:
             spotify_data = local_payload
@@ -566,7 +574,7 @@ async def _persist_albums(albums_data: list[dict]) -> None:
 
     for album_data in albums_data:
         try:
-            await asyncio.to_thread(save_album, album_data)
+            await save_album(album_data)
         except Exception as exc:
             logger.warning(
                 "Failed to persist album %s: %r",
@@ -653,6 +661,7 @@ def _is_proxied_images(images: list) -> bool:
 @router.get("/")
 async def get_artists(
     request: Request,
+    response: Response,
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=1000),
     order: str = Query(
@@ -660,6 +669,8 @@ async def get_artists(
         pattern="^(pop-desc|pop-asc|name-asc)$",
         description="Ordering for returned artists"
     ),
+    search: str | None = Query(None, description="Filter by artist name"),
+    genre: str | None = Query(None, description="Filter by genre keyword"),
     session: AsyncSession = Depends(SessionDep),
     user_id: int | None = Query(None, ge=1, description="User ID for hidden artist filtering"),
 ) -> dict:
@@ -671,6 +682,52 @@ async def get_artists(
     }
     order_by_clause = order_by_map.get(order, order_by_map["pop-desc"])
     effective_user_id = user_id or getattr(request.state, "user_id", None)
+    cache_key = (
+        f"user={effective_user_id or 'anon'}|offset={offset}|limit={limit}|order={order}"
+        f"|search={(search or '').strip().lower()}|genre={(genre or '').strip().lower()}"
+    )
+    cached = _ARTISTS_CACHE.get(cache_key)
+    if cached:
+        cached_at = cached.get("ts")
+        if cached_at and (utc_now().timestamp() - cached_at) < _ARTISTS_CACHE_TTL_SECONDS:
+            etag = cached.get("etag")
+            last_modified = cached.get("last_modified")
+            if etag and request.headers.get("if-none-match") == etag:
+                response.headers["Cache-Control"] = f"private, max-age={_ARTISTS_CACHE_TTL_SECONDS}"
+                response.headers["X-Cache"] = "HIT"
+                response.headers["ETag"] = etag
+                if isinstance(last_modified, datetime):
+                    response.headers["Last-Modified"] = format_datetime(
+                        last_modified.replace(tzinfo=timezone.utc), usegmt=True
+                    )
+                response.headers["Vary"] = "Authorization, Cookie, Accept-Encoding"
+                response.status_code = 304
+                return {}
+            if isinstance(last_modified, datetime):
+                try:
+                    ims = parsedate_to_datetime(request.headers.get("if-modified-since", ""))
+                except (TypeError, ValueError):
+                    ims = None
+                if ims and ims >= last_modified.replace(tzinfo=timezone.utc):
+                    response.headers["Cache-Control"] = f"private, max-age={_ARTISTS_CACHE_TTL_SECONDS}"
+                    response.headers["X-Cache"] = "HIT"
+                    response.headers["ETag"] = etag or ""
+                    response.headers["Last-Modified"] = format_datetime(
+                        last_modified.replace(tzinfo=timezone.utc), usegmt=True
+                    )
+                    response.headers["Vary"] = "Authorization, Cookie, Accept-Encoding"
+                    response.status_code = 304
+                    return {}
+            response.headers["Cache-Control"] = f"private, max-age={_ARTISTS_CACHE_TTL_SECONDS}"
+            response.headers["X-Cache"] = "HIT"
+            if etag:
+                response.headers["ETag"] = etag
+            if isinstance(last_modified, datetime):
+                response.headers["Last-Modified"] = format_datetime(
+                    last_modified.replace(tzinfo=timezone.utc), usegmt=True
+                )
+            response.headers["Vary"] = "Authorization, Cookie, Accept-Encoding"
+            return cached.get("payload", {})
     hidden_filter = None
     if effective_user_id:
         hidden_filter = ~exists(
@@ -680,23 +737,87 @@ async def get_artists(
             )
         )
     total_query = select(func.count()).select_from(Artist)
+    if search:
+        total_query = total_query.where(Artist.name.ilike(f"%{search}%"))
+    if genre:
+        genre_token = genre.strip().lower()
+        total_query = total_query.where(
+            func.lower(Artist.genres).like(f"%\"{genre_token}\"%")
+        )
     if hidden_filter is not None:
         total_query = total_query.where(hidden_filter)
     total = (await session.exec(total_query)).one()
-    statement = select(Artist).order_by(*order_by_clause).offset(offset).limit(limit)
+    last_modified_query = select(func.max(Artist.updated_at)).select_from(Artist)
+    if search:
+        last_modified_query = last_modified_query.where(Artist.name.ilike(f"%{search}%"))
+    if genre:
+        genre_token = genre.strip().lower()
+        last_modified_query = last_modified_query.where(
+            func.lower(Artist.genres).like(f"%\"{genre_token}\"%")
+        )
+    if hidden_filter is not None:
+        last_modified_query = last_modified_query.where(hidden_filter)
+    last_modified = (await session.exec(last_modified_query)).one()
+    last_modified = last_modified or utc_now()
+    if effective_user_id:
+        favorite_flag = exists(
+            select(1).where(
+                (UserFavorite.user_id == effective_user_id)
+                & (UserFavorite.target_type == FavoriteTargetType.ARTIST)
+                & (UserFavorite.artist_id == Artist.id)
+            )
+        ).label("is_favorite")
+        statement = (
+            select(Artist, favorite_flag)
+            .order_by(*order_by_clause)
+            .offset(offset)
+            .limit(limit)
+        )
+    else:
+        statement = select(Artist).order_by(*order_by_clause).offset(offset).limit(limit)
+    if search:
+        statement = statement.where(Artist.name.ilike(f"%{search}%"))
+    if genre:
+        genre_token = genre.strip().lower()
+        statement = statement.where(
+            func.lower(Artist.genres).like(f"%\"{genre_token}\"%")
+        )
     if hidden_filter is not None:
         statement = statement.where(hidden_filter)
-    artists = (await session.exec(statement)).all()
+    rows = (await session.exec(statement)).all()
     response_items = []
-    for artist in artists:
+    for row in rows:
+        if effective_user_id:
+            artist, is_favorite = row
+        else:
+            artist, is_favorite = row, None
         payload = artist.dict()
+        if is_favorite is not None:
+            payload["is_favorite"] = bool(is_favorite)
         stored_images = _parse_images_field(artist.images)
         if stored_images and not _is_proxied_images(stored_images):
             proxied = proxy_image_list(stored_images, size=256)
             if proxied:
                 payload["images"] = json.dumps(proxied)
         response_items.append(payload)
-    return {"items": response_items, "total": int(total)}
+    payload = {"items": response_items, "total": int(total)}
+    etag = hashlib.sha1(
+        json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    _ARTISTS_CACHE[cache_key] = {
+        "ts": utc_now().timestamp(),
+        "payload": payload,
+        "etag": etag,
+        "last_modified": last_modified,
+    }
+    response.headers["Cache-Control"] = f"private, max-age={_ARTISTS_CACHE_TTL_SECONDS}"
+    response.headers["X-Cache"] = "MISS"
+    response.headers["ETag"] = etag
+    response.headers["Last-Modified"] = format_datetime(
+        last_modified.replace(tzinfo=timezone.utc), usegmt=True
+    )
+    response.headers["Vary"] = "Authorization, Cookie, Accept-Encoding"
+    return payload
 
 
 @router.post("/refresh-genres")
@@ -745,6 +866,7 @@ async def refresh_missing_artist_metadata(
     use_lastfm: bool = Query(True, description="Fill missing bio/genres/images from Last.fm"),
 ) -> dict:
     """Backfill missing artist metadata (bio/genres/images) and refresh from Spotify when possible."""
+    from ..core.maintenance import maintenance_stop_requested
     missing_report = collect_artist_quality_report(limit=limit)
     set_action_status('metadata_refresh', True)
     try:
@@ -753,6 +875,9 @@ async def refresh_missing_artist_metadata(
         skipped = 0
 
         for entry in missing_report:
+            if maintenance_stop_requested():
+                logger.info("[refresh-missing] stop requested, aborting")
+                break
             spotify_id = entry.get("spotify_id")
             if use_spotify and spotify_id:
                 try:
@@ -910,7 +1035,7 @@ async def save_full_discography(spotify_id: str = Path(..., description="Spotify
 
     # Save artist
     from ..crud import save_artist
-    artist = await asyncio.to_thread(save_artist, artist_data)
+    artist = await save_artist(artist_data)
 
     # Get albums
     albums_data = await spotify_client.get_artist_albums(
@@ -928,7 +1053,7 @@ async def save_full_discography(spotify_id: str = Path(..., description="Spotify
 
         # Save album and tracks
         from ..crud import save_album, save_track
-        album = await asyncio.to_thread(save_album, album_data)
+        album = await save_album(album_data)
         if album.spotify_id:  # Album was saved (not duplicate)
             saved_albums += 1
             artist_id = album.artist_id

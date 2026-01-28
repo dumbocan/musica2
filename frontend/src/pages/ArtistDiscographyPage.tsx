@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { audio2Api, API_BASE_URL } from '@/lib/api';
+import { normalizeImageUrl } from '@/lib/images';
 import { useApiStore } from '@/store/useApiStore';
 import type { Artist as LocalArtist } from '@/types/api';
 
@@ -14,6 +15,8 @@ type Album = {
   youtube_links_available?: number;
   album_group?: string;
   album_type?: string;
+  image_path_id?: number | null;
+  local_id?: number;
 };
 type ArtistInfo = {
   spotify?: {
@@ -50,7 +53,7 @@ export function ArtistDiscographyPage() {
       try {
         const [artistRes, albumsRes, localRes] = await Promise.all([
           audio2Api.getArtistInfo(spotifyId),
-          audio2Api.getArtistAlbums(spotifyId, { refresh: true }),
+          audio2Api.getArtistAlbums(spotifyId, { refresh: false }),
           audio2Api.getLocalArtistBySpotifyId(spotifyId).catch(() => ({ data: null })),
         ]);
         setArtist(artistRes.data);
@@ -293,7 +296,12 @@ function DiscographySection({
           >
             {album.images?.[0]?.url && (
               <img
-                src={resolveImageUrl(album.images[0].url)}
+                src={normalizeImageUrl({
+                  candidate: album.images[0].url,
+                  size: 256,
+                  token: useApiStore.getState().token,
+                  apiBaseUrl: API_BASE_URL,
+                })}
                 alt={album.name}
                 style={{ width: '100%', borderRadius: 8, marginBottom: 8 }}
               />
@@ -343,9 +351,17 @@ function parseStoredImages(raw?: string | null): string[] {
   return tryParse(normalized);
 }
 
-function resolveImageUrl(url?: string) {
+function resolveImageUrl(url?: string, localId?: number, imagePathId?: number | null) {
+  const { token } = useApiStore();
+  const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+
+  // Use local cached image if we have a local album ID with image_path_id
+  if (localId && imagePathId) {
+    return `${API_BASE_URL}/images/entity/album/${localId}?size=256${tokenParam}`;
+  }
+
   if (!url) return '';
-  return url.startsWith('/') ? `${API_BASE_URL}${url}` : url;
+  return normalizeImageUrl({ candidate: url, size: 256, token, apiBaseUrl: API_BASE_URL });
 }
 
 function ArtistPhoto({ name, artistId, imagePathId, remoteUrl, localImage }: {
@@ -362,15 +378,13 @@ function ArtistPhoto({ name, artistId, imagePathId, remoteUrl, localImage }: {
   let imageUrl: string | null = null;
 
   if (imagePathId && artistId) {
-    imageUrl = `${API_BASE_URL}/images/entity/artist/${artistId}?size=512${tokenParam}`;
+    imageUrl = `${API_BASE_URL}/images/entity/artist/${artistId}?size=256${tokenParam}`;
   } else {
     // Fallback to proxy for external URLs
     const localImages = parseStoredImages(localImage);
     const candidate = remoteUrl || localImages[0] || '';
-    if (candidate.startsWith('/images/proxy')) {
-      imageUrl = `${API_BASE_URL}${candidate}${tokenParam ? `&token=${encodeURIComponent(token)}` : ''}`;
-    } else if (candidate) {
-      imageUrl = `${API_BASE_URL}/images/proxy?url=${encodeURIComponent(candidate)}&size=512${tokenParam}`;
+    if (candidate) {
+      imageUrl = normalizeImageUrl({ candidate, size: 256, token, apiBaseUrl: API_BASE_URL });
     }
   }
 
