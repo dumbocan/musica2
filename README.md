@@ -119,6 +119,26 @@ Se ha realizado una revisión exhaustiva del código del frontend para mejorar l
 - **Organización de descargas**: los archivos deben quedar en `downloads/<Artist>/<Album>/<Track>.<ext>`. Para migrar descargas antiguas usa `scripts/organize_downloads_by_album.py --resolve-unknown --resolve-spotify --spotify-create` (requiere credenciales Spotify).
 - **Contador de uso**: `frontend/src/components/YoutubeRequestCounter.tsx` consulta `/youtube/usage` periódicamente; si el backend está apagado verás errores de red en consola.
 
+## ⚠️ Troubleshooting DNS (Spotify/Last.fm “offline” sin motivo)
+
+- **Síntoma**: `/health/detailed` marca `spotify/lastfm = offline` con `timeout`, pero los tokens están bien y el backend está levantado.
+- **Causa típica**: DNS local roto (systemd-resolved), a menudo tras reiniciar, cambiar de red o activar/desactivar VPN.
+- **Fix rápido (temporal)**:
+  1) Identifica interfaz activa: `ip route | grep '^default'`
+  2) Aplica DNS en la interfaz principal (ej. `enp2s0`):
+     - `sudo resolvectl dns enp2s0 1.1.1.1 8.8.8.8`
+     - `sudo resolvectl domain enp2s0 ~.`
+     - `sudo resolvectl flush-caches`
+  3) Verifica resolución:
+     - `python3 -c "import socket; print(socket.getaddrinfo('accounts.spotify.com',443)[0][4])"`
+     - `curl -I https://api.spotify.com/v1`
+  4) Reinicia el backend y vuelve a probar `/health/detailed`.
+- **Nota**: Si hay VPN (p. ej. Surfshark), prueba a desconectarla o fija DNS para evitar resoluciones inconsistentes.
+- **Persistente** (requiere sudo): edita `/etc/systemd/resolved.conf` y define
+  - `DNS=1.1.1.1 8.8.8.8`
+  - `FallbackDNS=1.0.0.1 8.8.4.4`
+  Luego ejecuta `sudo systemctl restart systemd-resolved`.
+
 ## 🏗️ **Tech Stack**
 
 | Component | Technology | Details |

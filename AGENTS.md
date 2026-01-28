@@ -97,6 +97,7 @@ Secrets stay in `.env`; never hard-code tokens or client secrets. Honor the auth
  - Tracks totals can be wrong if `youtube_video_id` is empty; treat empty strings as missing and prefer the row with a valid video ID when multiple `YouTubeDownload` rows exist for one track.
  - For performance, filter in `/tracks/overview` (`filter`, `search`) and use `filtered_total` rather than loading the entire library in the frontend.
  - Track pagination should use `after_id` keyset with `limit` and prefetch when ~100 rows remain to minimize network churn.
+ - Spotify/Last.fm “offline” with timeouts can be DNS (systemd-resolved) issues after network/VPN changes. Fix by setting DNS on the active interface (e.g. `enp2s0`) with `sudo resolvectl dns enp2s0 1.1.1.1 8.8.8.8`, then `sudo resolvectl domain enp2s0 ~.` and `sudo resolvectl flush-caches`, then restart the backend.
 
 ## Historial reciente y aprendizajes
 - ✅ El nuevo reproductor mezcla audio local (descargas guardadas) con streaming ligero; el footer se mantiene activo, marca favoritos y escucha las pistas desde `downloads/`.
