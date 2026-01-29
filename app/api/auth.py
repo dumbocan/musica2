@@ -31,7 +31,13 @@ from app.schemas.auth import (
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
 def require_user_id(request: Request) -> int:
-    return request.state.user_id
+    user_id = getattr(request.state, "user_id", None)
+    if user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authorization bearer token required"
+        )
+    return user_id
 
 def _validate_recovery_code(recovery_code: str) -> None:
     if not settings.AUTH_RECOVERY_CODE:

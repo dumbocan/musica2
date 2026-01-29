@@ -21,6 +21,7 @@ from .api.favorites import router as favorites_router
 from .api.images import router as images_router
 from .api.maintenance import router as maintenance_router
 from .api.lists import router as lists_router
+from .api.ai_router import router as ai_router
 from .core.config import settings
 from .core.db import get_session, create_db_and_tables
 from .core.maintenance import start_maintenance_background
@@ -92,15 +93,6 @@ app = FastAPI(title="Audio2 API", description="Personal Music API Backend")
 install_log_buffer()
 create_db_and_tables()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=settings.CORS_ALLOW_CREDENTIALS,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-app.add_middleware(GZipMiddleware, minimum_size=1000)
-
 app.middleware("http")(rate_limit_middleware)
 
 # Auth guard: block everything if no users exist or no token provided
@@ -116,6 +108,7 @@ PUBLIC_PATHS = {
     "/auth/reset-password",
     "/db-status",
     "/images/proxy",
+    "/ai",  # AI endpoints are public
 }
 # Endpoints que aceptan token como query param (para HTMLAudioElement y imágenes)
 TOKEN_QUERY_PATHS = {
@@ -143,6 +136,10 @@ def _apply_cors_headers(response: Response, request: Request) -> Response:
 @app.middleware("http")
 async def require_authenticated_user(request: Request, call_next):
     if settings.AUTH_DISABLED:
+        with get_session() as session:
+            user_id = session.exec(select(User.id)).first()
+        if user_id:
+            request.state.user_id = user_id
         return await call_next(request)
     path = request.url.path
     if request.method == "OPTIONS":
@@ -196,6 +193,15 @@ async def require_authenticated_user(request: Request, call_next):
         )
     return response
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=settings.CORS_ALLOW_CREDENTIALS,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 app.include_router(health_router)
 app.include_router(artists_router)
 app.include_router(albums_router)
@@ -212,6 +218,7 @@ app.include_router(favorites_router)
 app.include_router(images_router)
 app.include_router(maintenance_router)
 app.include_router(lists_router)
+app.include_router(ai_router)
 
 
 @app.on_event("startup")
