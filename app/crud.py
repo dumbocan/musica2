@@ -1138,7 +1138,7 @@ def get_user_preferred_genres(user_id: int):
             
             if artist and artist.genres:
                 try:
-                    artist_genres = eval(artist.genres) if isinstance(artist.genres, str) else artist.genres
+                    artist_genres = json.loads(artist.genres) if isinstance(artist.genres, str) else artist.genres
                     if isinstance(artist_genres, list):
                         genres.extend(artist_genres)
                 except Exception:

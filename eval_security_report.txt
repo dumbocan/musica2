@@ -1,0 +1,351 @@
+🚨 CRITICAL: Usos peligrosos de eval() encontrados
+
+================================================================================
+
+📁 Archivo: app/api/albums.py:276
+❌ Línea original: return ast.literal_eval(raw)
+✅ Sugerencia:    return ast.literal_eval(raw)
+----------------------------------------
+
+📁 Archivo: app/api/albums.py:276
+❌ Línea original: return ast.literal_eval(raw)
+✅ Sugerencia:    return ast.literal_eval(raw)
+----------------------------------------
+
+📁 Archivo: app/api/artists.py:617
+❌ Línea original: return ast.literal_eval(raw)
+✅ Sugerencia:    return ast.literal_eval(raw)
+----------------------------------------
+
+📁 Archivo: app/api/artists.py:617
+❌ Línea original: return ast.literal_eval(raw)
+✅ Sugerencia:    return ast.literal_eval(raw)
+----------------------------------------
+
+📁 Archivo: app/api/artists.py:633
+❌ Línea original: parsed = ast.literal_eval(raw)
+✅ Sugerencia:    parsed = ast.literal_eval(raw)
+----------------------------------------
+
+📁 Archivo: app/api/artists.py:633
+❌ Línea original: parsed = ast.literal_eval(raw)
+✅ Sugerencia:    parsed = ast.literal_eval(raw)
+----------------------------------------
+
+📁 Archivo: app/api/images.py:41
+❌ Línea original: images = ast.literal_eval(images)
+✅ Sugerencia:    images = ast.literal_eval(images)
+----------------------------------------
+
+📁 Archivo: app/api/images.py:41
+❌ Línea original: images = ast.literal_eval(images)
+✅ Sugerencia:    images = ast.literal_eval(images)
+----------------------------------------
+
+📁 Archivo: app/api/images.py:267
+❌ Línea original: # Try JSON first, then Python literal_eval (for single-quote strings)
+✅ Sugerencia:    # Try JSON first, then Python literal_eval (for single-quote strings)
+----------------------------------------
+
+📁 Archivo: app/api/images.py:267
+❌ Línea original: # Try JSON first, then Python literal_eval (for single-quote strings)
+✅ Sugerencia:    # Try JSON first, then Python literal_eval (for single-quote strings)
+----------------------------------------
+
+📁 Archivo: app/api/images.py:271
+❌ Línea original: images_data = ast.literal_eval(entity_images)
+✅ Sugerencia:    images_data = ast.literal_eval(entity_images)
+----------------------------------------
+
+📁 Archivo: app/api/images.py:271
+❌ Línea original: images_data = ast.literal_eval(entity_images)
+✅ Sugerencia:    images_data = ast.literal_eval(entity_images)
+----------------------------------------
+
+📁 Archivo: app/api/search.py:106
+❌ Línea original: return ast.literal_eval(raw)
+✅ Sugerencia:    return ast.literal_eval(raw)
+----------------------------------------
+
+📁 Archivo: app/api/search.py:106
+❌ Línea original: return ast.literal_eval(raw)
+✅ Sugerencia:    return ast.literal_eval(raw)
+----------------------------------------
+
+📁 Archivo: app/api/search.py:122
+❌ Línea original: parsed = ast.literal_eval(raw)
+✅ Sugerencia:    parsed = ast.literal_eval(raw)
+----------------------------------------
+
+📁 Archivo: app/api/search.py:122
+❌ Línea original: parsed = ast.literal_eval(raw)
+✅ Sugerencia:    parsed = ast.literal_eval(raw)
+----------------------------------------
+
+📁 Archivo: app/api/tracks.py:1142
+❌ Línea original: return ast.literal_eval(raw)
+✅ Sugerencia:    return ast.literal_eval(raw)
+----------------------------------------
+
+📁 Archivo: app/api/tracks.py:1142
+❌ Línea original: return ast.literal_eval(raw)
+✅ Sugerencia:    return ast.literal_eval(raw)
+----------------------------------------
+
+📁 Archivo: app/api/tracks.py:1158
+❌ Línea original: parsed = ast.literal_eval(raw)
+✅ Sugerencia:    parsed = ast.literal_eval(raw)
+----------------------------------------
+
+📁 Archivo: app/api/tracks.py:1158
+❌ Línea original: parsed = ast.literal_eval(raw)
+✅ Sugerencia:    parsed = ast.literal_eval(raw)
+----------------------------------------
+
+📁 Archivo: app/core/data_freshness.py:41
+❌ Línea original: return ast.literal_eval(raw)
+✅ Sugerencia:    return ast.literal_eval(raw)
+----------------------------------------
+
+📁 Archivo: app/core/data_freshness.py:41
+❌ Línea original: return ast.literal_eval(raw)
+✅ Sugerencia:    return ast.literal_eval(raw)
+----------------------------------------
+
+📁 Archivo: app/core/maintenance.py:87
+❌ Línea original: data = ast.literal_eval(raw)
+✅ Sugerencia:    data = ast.literal_eval(raw)
+----------------------------------------
+
+📁 Archivo: app/core/maintenance.py:87
+❌ Línea original: data = ast.literal_eval(raw)
+✅ Sugerencia:    data = ast.literal_eval(raw)
+----------------------------------------
+
+📁 Archivo: app/crud.py:1141
+❌ Línea original: artist_genres = eval(artist.genres) if isinstance(artist.genres, str) else artist.genres
+✅ Sugerencia:    artist_genres = json.loads(artist.genres) if isinstance(artist.genres, str) else artist.genres
+----------------------------------------
+
+📁 Archivo: app/crud.py:1141
+❌ Línea original: artist_genres = eval(artist.genres) if isinstance(artist.genres, str) else artist.genres
+✅ Sugerencia:    artist_genres = json.loads(artist.genres) if isinstance(artist.genres, str) else artist.genres
+----------------------------------------
+
+📁 Archivo: app/services/image_population.py:37
+❌ Línea original: parsed = ast.literal_eval(images_field)
+✅ Sugerencia:    parsed = ast.literal_eval(images_field)
+----------------------------------------
+
+📁 Archivo: app/services/image_population.py:37
+❌ Línea original: parsed = ast.literal_eval(images_field)
+✅ Sugerencia:    parsed = ast.literal_eval(images_field)
+----------------------------------------
+
+📁 Archivo: scripts/audit_library_completeness.py:51
+❌ Línea original: return ast.literal_eval(raw)
+✅ Sugerencia:    return ast.literal_eval(raw)
+----------------------------------------
+
+📁 Archivo: scripts/audit_library_completeness.py:51
+❌ Línea original: return ast.literal_eval(raw)
+✅ Sugerencia:    return ast.literal_eval(raw)
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:3
+❌ Línea original: Busca y reemplaza todas las ocurrencias peligrosas de eval() en el códigobase.
+✅ Sugerencia:    Busca y reemplaza todas las ocurrencias peligrosas de json.loads() en el códigobase.
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:3
+❌ Línea original: Busca y reemplaza todas las ocurrencias peligrosas de eval() en el códigobase.
+✅ Sugerencia:    Busca y reemplaza todas las ocurrencias peligrosas de json.loads() en el códigobase.
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:41
+❌ Línea original: def scan_for_eval(self) -> List[Tuple[Path, int, str]]:
+✅ Sugerencia:    def scan_for_json.loads(self) -> List[Tuple[Path, int, str]]:
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:41
+❌ Línea original: def scan_for_eval(self) -> List[Tuple[Path, int, str]]:
+✅ Sugerencia:    def scan_for_json.loads(self) -> List[Tuple[Path, int, str]]:
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:42
+❌ Línea original: """Escanea en busca de eval() peligroso."""
+✅ Sugerencia:    """Escanea en busca de json.loads() peligroso."""
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:42
+❌ Línea original: """Escanea en busca de eval() peligroso."""
+✅ Sugerencia:    """Escanea en busca de json.loads() peligroso."""
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:44
+❌ Línea original: r'eval\s*\(',  # eval(
+✅ Sugerencia:    r'eval\s*\(',  # json.loads(
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:44
+❌ Línea original: r'eval\s*\(',  # eval(
+✅ Sugerencia:    r'eval\s*\(',  # json.loads(
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:45
+❌ Línea original: r'\.eval\s*\(',  # .eval(
+✅ Sugerencia:    r'\.eval\s*\(',  # .json.loads(
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:45
+❌ Línea original: r'\.eval\s*\(',  # .eval(
+✅ Sugerencia:    r'\.eval\s*\(',  # .json.loads(
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:45
+❌ Línea original: r'\.eval\s*\(',  # .eval(
+✅ Sugerencia:    r'\.eval\s*\(',  # .json.loads(
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:68
+❌ Línea original: """Sugiere el reemplazo seguro para eval()."""
+✅ Sugerencia:    """Sugiere el reemplazo seguro para json.loads()."""
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:68
+❌ Línea original: """Sugiere el reemplazo seguro para eval()."""
+✅ Sugerencia:    """Sugiere el reemplazo seguro para json.loads()."""
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:78
+❌ Línea original: return original_line.replace("eval(", "json.loads(")
+✅ Sugerencia:    return original_line.replace("eval(", "json.loads(")
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:78
+❌ Línea original: return original_line.replace("eval(", "json.loads(")
+✅ Sugerencia:    return original_line.replace("eval(", "json.loads(")
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:81
+❌ Línea original: return original_line.replace("eval(", "json.loads(")
+✅ Sugerencia:    return original_line.replace("eval(", "json.loads(")
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:81
+❌ Línea original: return original_line.replace("eval(", "json.loads(")
+✅ Sugerencia:    return original_line.replace("eval(", "json.loads(")
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:84
+❌ Línea original: return original_line.replace("eval(", "json.loads(")
+✅ Sugerencia:    return original_line.replace("eval(", "json.loads(")
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:84
+❌ Línea original: return original_line.replace("eval(", "json.loads(")
+✅ Sugerencia:    return original_line.replace("eval(", "json.loads(")
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:89
+❌ Línea original: return "✅ No se encontraron usos peligrosos de eval()"
+✅ Sugerencia:    return "✅ No se encontraron usos peligrosos de json.loads()"
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:89
+❌ Línea original: return "✅ No se encontraron usos peligrosos de eval()"
+✅ Sugerencia:    return "✅ No se encontraron usos peligrosos de json.loads()"
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:91
+❌ Línea original: report = ["🚨 CRITICAL: Usos peligrosos de eval() encontrados\n"]
+✅ Sugerencia:    report = ["🚨 CRITICAL: Usos peligrosos de json.loads() encontrados\n"]
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:91
+❌ Línea original: report = ["🚨 CRITICAL: Usos peligrosos de eval() encontrados\n"]
+✅ Sugerencia:    report = ["🚨 CRITICAL: Usos peligrosos de json.loads() encontrados\n"]
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:103
+❌ Línea original: report.append(f"\n📊 Resumen: {len(issues)} usos peligrosos de eval() encontrados")
+✅ Sugerencia:    report.append(f"\n📊 Resumen: {len(issues)} usos peligrosos de json.loads() encontrados")
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:103
+❌ Línea original: report.append(f"\n📊 Resumen: {len(issues)} usos peligrosos de eval() encontrados")
+✅ Sugerencia:    report.append(f"\n📊 Resumen: {len(issues)} usos peligrosos de json.loads() encontrados")
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:149
+❌ Línea original: parser = argparse.ArgumentParser(description="Busca y arregla usos peligrosos de eval()")
+✅ Sugerencia:    parser = argparse.ArgumentParser(description="Busca y arregla usos peligrosos de json.loads()")
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:149
+❌ Línea original: parser = argparse.ArgumentParser(description="Busca y arregla usos peligrosos de eval()")
+✅ Sugerencia:    parser = argparse.ArgumentParser(description="Busca y arregla usos peligrosos de json.loads()")
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:160
+❌ Línea original: print("🔍 Buscando usos peligrosos de eval()...")
+✅ Sugerencia:    print("🔍 Buscando usos peligrosos de json.loads()...")
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:160
+❌ Línea original: print("🔍 Buscando usos peligrosos de eval()...")
+✅ Sugerencia:    print("🔍 Buscando usos peligrosos de json.loads()...")
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:168
+❌ Línea original: issues = fixer.scan_for_eval()
+✅ Sugerencia:    issues = fixer.scan_for_json.loads()
+----------------------------------------
+
+📁 Archivo: scripts/fix_eval_usage.py:168
+❌ Línea original: issues = fixer.scan_for_eval()
+✅ Sugerencia:    issues = fixer.scan_for_json.loads()
+----------------------------------------
+
+📁 Archivo: scripts/optimize_database_types.py:135
+❌ Línea original: # Intentar con ast.literal_eval (Python literal)
+✅ Sugerencia:    # Intentar con ast.literal_eval (Python literal)
+----------------------------------------
+
+📁 Archivo: scripts/optimize_database_types.py:135
+❌ Línea original: # Intentar con ast.literal_eval (Python literal)
+✅ Sugerencia:    # Intentar con ast.literal_eval (Python literal)
+----------------------------------------
+
+📁 Archivo: scripts/optimize_database_types.py:137
+❌ Línea original: parsed = ast.literal_eval(value)
+✅ Sugerencia:    parsed = ast.literal_eval(value)
+----------------------------------------
+
+📁 Archivo: scripts/optimize_database_types.py:137
+❌ Línea original: parsed = ast.literal_eval(value)
+✅ Sugerencia:    parsed = ast.literal_eval(value)
+----------------------------------------
+
+📁 Archivo: scripts/optimize_database_types.py:201
+❌ Línea original: parsed = ast.literal_eval(value)
+✅ Sugerencia:    parsed = ast.literal_eval(value)
+----------------------------------------
+
+📁 Archivo: scripts/optimize_database_types.py:201
+❌ Línea original: parsed = ast.literal_eval(value)
+✅ Sugerencia:    parsed = ast.literal_eval(value)
+----------------------------------------
+
+📁 Archivo: scripts/repair_album_images.py:21
+❌ Línea original: parsed = ast.literal_eval(images_field)
+✅ Sugerencia:    parsed = ast.literal_eval(images_field)
+----------------------------------------
+
+📁 Archivo: scripts/repair_album_images.py:21
+❌ Línea original: parsed = ast.literal_eval(images_field)
+✅ Sugerencia:    parsed = ast.literal_eval(images_field)
+----------------------------------------
+
+📊 Resumen: 69 usos peligrosos de eval() encontrados
+⚠️  Prioridad: CRÍTICA - Aplicar inmediatamente

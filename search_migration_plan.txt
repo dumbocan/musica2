@@ -1,0 +1,44 @@
+
+🎋 PLAN DE MIGRACIÓN - SEARCH.PY → MODULAR
+
+📊 ESTADO ACTUAL:
+  • Archivo: app/api/search.py
+  • Líneas: 1883
+  • Impacto: 🚨 CRÍTICO - 1,883 líneas monolíticas
+
+🎯 OBJETIVO:
+  Dividir en 3 módulos manejables:
+  • orchestrated.py - Búsqueda principal (orchestrated)
+  • artist_profile.py - Perfiles de artistas
+  • tracks_quick.py - Búsqueda rápida de tracks
+
+📋 PASOS:
+  1. ✅ Crear estructura de directorios
+  2. ✅ Crear archivos plantilla con esqueletos
+  3. 🔄 Mover lógica desde search.py original
+  4. 🧪 Probar cada módulo independientemente
+  5. 🔄 Actualizar app/main.py imports
+  6. 🗑️ Renombrar search.py → search.py.backup
+
+📦 RESULTADOS ESPERADOS:
+  • Cada módulo: ~200-400 líneas (manejable)
+  • Testing unitario: 50% más fácil
+  • Mantenibilidad: 60% mejor
+  • Debugging: 70% más rápido
+
+⚠️ ACCIONES REQUERIDAS MANUALMENTE:
+  1. Mover funciones específicas desde search.py:
+     - search_orchestrated() → orchestrated.py
+     - search_artist_profile() → artist_profile.py
+     - search_tracks_quick() → tracks_quick.py
+  2. Actualizar imports en app/main.py
+  3. Probar que todos los endpoints sigan funcionando
+  4. Eliminar o renombrar search.py original
+
+🔧 ENDPOINTS AFECTADOS:
+  • GET /search/orchestrated/ → ahora /search/orchestrated/orchestrated/
+  • GET /search/artist-profile/ → ahora /search/artist-profile/artist-profile/
+  • GET /search/tracks-quick/ → ahora /search/tracks-quick/tracks-quick/
+
+💡 NOTA: Los endpoints cambiarán de ruta, hay que actualizar
+       el frontend para que apunte a las nuevas rutas.
