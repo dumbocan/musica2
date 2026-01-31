@@ -13,13 +13,13 @@ from .api.playlists import router as playlists_router
 from .api.ratings import router as ratings_router
 from .api.tags import router as tags_router
 from .api.smart_playlists import router as smart_playlists_router
-# from .api.search import router as search_router  # Temporarily disabled
+from .api.search import router as search_router
 from .api.charts import router as charts_router
-from .api.youtube import router as youtube_router
+from .api.youtube import youtube_router
 from .api.auth import router as auth_router
 from .api.favorites import router as favorites_router
 from .api.images import router as images_router
-from .api.maintenance import router as maintenance_router
+from .api.maintenance import maintenance_router
 from .api.lists import router as lists_router
 from .api.ai_router import router as ai_router
 from .core.config import settings

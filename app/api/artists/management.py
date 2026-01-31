@@ -6,18 +6,17 @@ Migrated from original artists.py for better modularity.
 import asyncio
 import json
 import logging
-from datetime import timedelta
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict
 
-from fastapi import APIRouter, Query, Depends, HTTPException, Path, Request, BackgroundTasks
-from sqlalchemy import desc, asc, func, exists
+from fastapi import APIRouter, Query, Depends, HTTPException, Path
+from sqlalchemy import asc, desc
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select
 
 from ...core.db import get_session, SessionDep
 from ...core.spotify import spotify_client
 from ...core.lastfm import lastfm_client
-from ...models.base import Artist, Track, UserHiddenArtist, UserFavorite, FavoriteTargetType
+from ...models.base import Artist, Track
 from ...core.config import settings
 from ...core.genre_backfill import (
     derive_genres_from_artist_tags,
@@ -29,6 +28,7 @@ from ...services.data_quality import collect_artist_quality_report
 from ...core.action_status import set_action_status
 
 logger = logging.getLogger(__name__)
+
 
 router = APIRouter(prefix="/management", tags=["artists"])
 
@@ -53,7 +53,7 @@ async def sync_artist_discography(
     session: AsyncSession = Depends(SessionDep),
 ) -> Dict[str, Any]:
     """Sync artist's discography: fetch and save new albums/tracks from Spotify."""
-    from ...crud import save_album, save_artist
+    from ...crud import save_album
     artist = (await session.exec(select(Artist).where(Artist.spotify_id == spotify_id))).first()
     if not artist:
         raise HTTPException(status_code=404, detail="Artist not saved locally")

@@ -4,26 +4,25 @@ Migrated from original artists.py for better modularity.
 """
 
 import asyncio
-import json
 import ast
+import json
 import logging
 from datetime import timedelta
-from typing import Dict, Any, List, Optional
+from typing import List
 
-from fastapi import APIRouter, Query, Depends, HTTPException, Path, Request
-from sqlalchemy import desc, asc, func, exists
+from fastapi import APIRouter, Query, Depends, Path
+from sqlalchemy import asc, desc, func
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select
-from sqlalchemy.orm import selectinload
 
-from ...core.db import get_session, SessionDep
+from ...core.db import SessionDep
 from ...core.spotify import spotify_client
-from ...models.base import Artist, Album, Track, YouTubeDownload
-from ...core.config import settings
-from ...core.image_proxy import proxy_image_list, has_valid_images
+from ...models.base import Album, Artist, Track, YouTubeDownload
+from ...core.image_proxy import proxy_image_list
 from ...core.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
+
 
 router = APIRouter(prefix="/discography", tags=["artists"])
 ARTIST_REFRESH_DAYS = 7
@@ -232,3 +231,4 @@ async def _refresh_artist_albums(spotify_id: str) -> None:
     if not albums_data:
         return
     await _persist_albums(albums_data)
+

@@ -3,14 +3,12 @@ Artist search and discovery endpoints.
 """
 
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any
 
-from fastapi import APIRouter, Query, Depends, HTTPException, Path, Request
+from fastapi import APIRouter, Query, Depends
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from ...core.db import get_session, SessionDep
-from ...models.base import Artist
-from ...core.config import settings
+from ...core.db import SessionDep
 
 logger = logging.getLogger(__name__)
 

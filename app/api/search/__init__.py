@@ -15,7 +15,7 @@ from .tracks_quick import router as tracks_quick_router
 # Main router
 router = APIRouter(prefix="/search", tags=["search"])
 
-# Include all sub-routers
+# Include all sub-routers with prefixes to organize endpoints
 router.include_router(orchestrated_router, prefix="/orchestrated")
 router.include_router(artist_profile_router, prefix="/artist-profile")
 router.include_router(tracks_quick_router, prefix="/tracks-quick")

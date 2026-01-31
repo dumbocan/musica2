@@ -5,18 +5,16 @@ Provides fast track searching capabilities.
 """
 
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any
 
-from fastapi import APIRouter, Query, Depends, HTTPException
+from fastapi import APIRouter, Query, Depends, Request
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from ...core.db import get_session, SessionDep
-from ...models.base import Artist, Album, Track
-from ...core.config import settings
+from ...core.db import SessionDep
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/tracks-quick", tags=["tracks-quick"])
+router = APIRouter(tags=["search"])
 
 @router.get("/")
 async def search_tracks_quick(
@@ -29,7 +27,7 @@ async def search_tracks_quick(
     """Quick track search with optional artist filter."""
     # TODO: Move search_tracks_quick logic from original search.py
     # This should be optimized for speed
-    pass
+    return {"tracks": [], "total": 0, "query": query}
 
 @router.get("/album/{album_id}")
 async def get_album_tracks_quick(
@@ -38,4 +36,4 @@ async def get_album_tracks_quick(
 ) -> Dict[str, Any]:
     """Get tracks from an album quickly."""
     # TODO: Implement album tracks quick search
-    pass
+    return {"tracks": [], "total": 0, "album_id": album_id}

@@ -5,17 +5,15 @@ Handles play tracking, history, and playback-related functionality.
 """
 
 import logging
-from typing import Dict, Any, List
-from datetime import datetime
+from typing import Dict, Any
 
-from fastapi import APIRouter, Query, Depends, HTTPException, Path, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy import func
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from ...core.db import get_session, SessionDep
-from ...models.base import Track, PlayHistory
-from ...core.config import settings
+from ...models.base import Track, Artist, Album, YouTubeDownload, PlayHistory
 
 logger = logging.getLogger(__name__)
 
@@ -73,19 +71,18 @@ def record_track_play(
 @router.get("/most-played")
 def get_most_played_tracks(
     request: Request,
-    limit: int = Query(default=50, ge=1, le=100, description="Límite de resultados"),
+    limit: int = Query(20, ge=1, le=50, description="Number of tracks"),
     verify_files: bool = Query(False, description="Check file existence on disk"),
     session: AsyncSession = Depends(SessionDep)
 ) -> Dict[str, Any]:
-    """Get most played tracks."""
-    from sqlalchemy import func
-    from ...models.base import PlayHistory
+    """Get most played tracks for current user."""
     from pathlib import Path as FsPath
-    
+
     user_id = getattr(request.state, "user_id", None)
     if user_id is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     
+    # Get play history aggregated
     with get_session() as sync_session:
         rows = sync_session.exec(
             select(
@@ -101,7 +98,8 @@ def get_most_played_tracks(
         
         if not rows:
             return {"items": []}
-
+        
+        # Get track details
         track_ids = [row[0] for row in rows]
         track_rows = sync_session.exec(
             select(Track, Artist, Album)
@@ -109,7 +107,7 @@ def get_most_played_tracks(
             .outerjoin(Album, Album.id == Track.album_id)
             .where(Track.id.in_(track_ids))
         ).all()
-
+        
         track_map = {track.id: (track, artist, album) for track, artist, album in track_rows}
         spotify_ids = [
             track.spotify_id
@@ -117,6 +115,7 @@ def get_most_played_tracks(
             if track.spotify_id
         ]
         
+        # Get YouTube downloads
         downloads = []
         if spotify_ids:
             downloads = sync_session.exec(
@@ -173,11 +172,11 @@ def get_recent_plays(
 ) -> Dict[str, Any]:
     """Get recent play history."""
     from pathlib import Path as FsPath
-    
+
     user_id = getattr(request.state, "user_id", None)
     if user_id is None:
         raise HTTPException(status_code=401, detail="Authentication required")
-    
+
     with get_session() as sync_session:
         history_query = (
             select(PlayHistory, Track, Artist, Album)
@@ -244,9 +243,7 @@ def get_chart_statistics(
     session: AsyncSession = Depends(SessionDep)
 ) -> Dict[str, Any]:
     """Get chart statistics for tracks."""
-    from ...models.base import TrackChartStats, ChartEntryRaw
-    from ...services.billboard import extract_primary_artist, normalize_artist_name, normalize_track_title
-    from datetime import date
+    from ...models.base import TrackChartStats
     
     spotify_list = [t for t in (spotify_ids or "").split(",") if t]
     track_id_list = [int(t) for t in (track_ids or "").split(",") if t.isdigit()]

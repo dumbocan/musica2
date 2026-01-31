@@ -6,9 +6,9 @@ Migrated from original artists.py for better modularity.
 import asyncio
 import logging
 from datetime import timedelta
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict
 
-from fastapi import APIRouter, Query, Depends, HTTPException, Path, Request
+from fastapi import APIRouter, Query, Depends, HTTPException, Path
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select
 from sqlalchemy.orm import selectinload
@@ -16,13 +16,14 @@ from sqlalchemy.orm import selectinload
 from ...core.db import get_session, SessionDep
 from ...core.spotify import spotify_client
 from ...core.lastfm import lastfm_client
-from ...models.base import Artist, Album, Track
+from ...models.base import Artist, Track
 from ...core.config import settings
 from ...core.image_proxy import proxy_image_list, has_valid_images
 from ...core.time_utils import utc_now
 from ...services.library_expansion import schedule_artist_expansion
 
 logger = logging.getLogger(__name__)
+
 
 router = APIRouter(prefix="/info", tags=["artists"])
 ARTIST_REFRESH_DAYS = 7
