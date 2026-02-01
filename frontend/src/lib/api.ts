@@ -182,6 +182,8 @@ export const audio2Api = {
     api.post('/maintenance/repair-album-images', null, { params }),
   revalidateYtdlpLinks: (params?: { limit?: number }) =>
     api.post('/maintenance/revalidate-ytdlp-links', null, { params }),
+  dedupeYoutubeLinks: (params?: { limit?: number }) =>
+    api.post('/maintenance/dedupe-youtube-links', null, { params }),
   getTrackChartStats: (spotifyTrackIds: string[]) =>
     api.get('/tracks/chart-stats', {
       params: { spotify_ids: spotifyTrackIds.join(',') },

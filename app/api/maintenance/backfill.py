@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 import random
+import re
 import subprocess
 import sys
 from datetime import date, timedelta
@@ -372,6 +373,77 @@ async def _run_ytdlp_revalidate(limit: int) -> None:
     )
 
 
+def _normalize_track_title(name: str) -> str:
+    cleaned = re.sub(r"\s*[\[(].*?[\])]\s*", " ", name or "")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return normalize_name(cleaned)
+
+
+async def _run_youtube_dedupe(limit: int) -> None:
+    if maintenance_stop_requested():
+        return
+    logger.info("[maintenance] youtube dedupe start (limit=%d)", limit)
+    with get_session() as session:
+        stmt = (
+            select(Track, Artist, YouTubeDownload)
+            .join(Artist, Artist.id == Track.artist_id)
+            .outerjoin(YouTubeDownload, YouTubeDownload.spotify_track_id == Track.spotify_id)
+            .where(Track.spotify_id.is_not(None))
+            .where(Artist.name.is_not(None))
+            .limit(limit)
+        )
+        rows = session.exec(stmt).all()
+
+        groups: dict[str, list[tuple[Track, Artist, YouTubeDownload | None]]] = {}
+        for track, artist, download in rows:
+            key = f"{normalize_name(artist.name)}|{_normalize_track_title(track.name)}"
+            groups.setdefault(key, []).append((track, artist, download))
+
+        deduped = 0
+        checked = 0
+        for key, items in groups.items():
+            if maintenance_stop_requested():
+                break
+            # pick best: local file > youtube_api > ytdlp > any link
+            best: YouTubeDownload | None = None
+            for _, _, download in items:
+                if not download or not download.youtube_video_id:
+                    continue
+                if download.download_path:
+                    best = download
+                    break
+                if download.link_source == "youtube_api":
+                    best = download
+            if best is None:
+                for _, _, download in items:
+                    if download and download.youtube_video_id:
+                        best = download
+                        break
+            if best is None:
+                continue
+
+            for _, _, download in items:
+                if not download or download is best:
+                    continue
+                if not download.youtube_video_id:
+                    continue
+                download.youtube_video_id = ""
+                download.download_status = "missing"
+                download.error_message = "Deduplicated link (grouped by artist+track)"
+                download.updated_at = utc_now()
+                deduped += 1
+            checked += 1
+            if checked % 100 == 0:
+                session.commit()
+        session.commit()
+
+    logger.info(
+        "[maintenance] youtube dedupe done: groups=%d deduped=%d",
+        checked,
+        deduped,
+    )
+
+
 async def _run_images_backfill(limit_artists: int | None, limit_albums: int | None) -> None:
     if maintenance_stop_requested():
         return
@@ -598,6 +670,14 @@ async def revalidate_ytdlp_links(
     limit: int = Query(500, ge=1, le=5000),
 ) -> dict:
     _schedule_action_task("ytdlp_revalidate", _run_ytdlp_revalidate, limit)
+    return {"scheduled": True, "limit": limit}
+
+
+@router.post("/dedupe-youtube-links")
+async def dedupe_youtube_links(
+    limit: int = Query(20000, ge=1, le=200000),
+) -> dict:
+    _schedule_action_task("youtube_dedupe", _run_youtube_dedupe, limit)
     return {"scheduled": True, "limit": limit}
 
 

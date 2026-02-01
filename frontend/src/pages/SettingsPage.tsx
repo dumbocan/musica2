@@ -45,6 +45,7 @@ export function SettingsPage() {
   const [chartBackfillStatus, setChartBackfillStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [albumImageRepairStatus, setAlbumImageRepairStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [ytdlpRevalidateStatus, setYtdlpRevalidateStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
+  const [youtubeDedupeStatus, setYoutubeDedupeStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [purgeId, setPurgeId] = useState('');
   const [purgeStatus, setPurgeStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [actionStatuses, setActionStatuses] = useState<Record<string, boolean>>({});
@@ -509,6 +510,20 @@ export function SettingsPage() {
     }
   };
 
+  const handleDedupeYoutubeLinks = async () => {
+    if (youtubeDedupeStatus === 'running') return;
+    setYoutubeDedupeStatus('running');
+    try {
+      await audio2Api.dedupeYoutubeLinks({ limit: 20000 });
+      setYoutubeDedupeStatus('done');
+    } catch {
+      setYoutubeDedupeStatus('error');
+    } finally {
+      void refreshDashboardStats();
+      void refreshActionStatuses();
+    }
+  };
+
   const handleBackfillImages = async () => {
     if (imagesBackfillStatus === 'running') return;
     setImagesBackfillStatus('running');
@@ -879,6 +894,19 @@ export function SettingsPage() {
               </button>
               <div style={{ fontSize: 11, opacity: 0.7 }}>
                 Estado: {ytdlpRevalidateStatus === 'done' ? 'enviado' : ytdlpRevalidateStatus === 'error' ? 'error' : 'en espera'}
+              </div>
+
+              <button
+                type="button"
+                className="btn-ghost"
+                style={actionButtonStyle('youtube_dedupe')}
+                onClick={handleDedupeYoutubeLinks}
+                disabled={youtubeDedupeStatus === 'running'}
+              >
+                {actionLabel('Deduplicar links YouTube', youtubeDedupeStatus, 'youtube_dedupe')}
+              </button>
+              <div style={{ fontSize: 11, opacity: 0.7 }}>
+                Estado: {youtubeDedupeStatus === 'done' ? 'enviado' : youtubeDedupeStatus === 'error' ? 'error' : 'en espera'}
               </div>
 
               <button

@@ -84,6 +84,7 @@ Se ha realizado una revisión exhaustiva del código del frontend para mejorar l
 - **Log de fallback (30 días)**: los videos guardados vía yt-dlp se registran en `storage/logs/ytdlp_fallback.log` (respeta `STORAGE_ROOT`). El archivo se recorta según `LOG_RETENTION_DAYS`.
 - **Validación anti “Not Found”**: los links del fallback pasan por un chequeo ligero (oEmbed) antes de guardarse.
 - **Revalidar y limpiar**: botón/endpoint `/maintenance/revalidate-ytdlp-links` revisa links ya guardados y limpia los inválidos.
+- **Deduplicar por artista+canción**: `/maintenance/dedupe-youtube-links` deja un solo link “ganador” por grupo (prioriza local > API > fallback) para evitar errores de reproducción.
 
 ## 🧭 Fallback YouTube (explicado fácil + por qué existe)
 
