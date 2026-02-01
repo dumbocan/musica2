@@ -249,6 +249,7 @@ export function PlayerFooter() {
   useEffect(() => {
     if (!nowPlaying || audioSourceMode !== 'stream') return;
     if (audioDownloadStatus === 'downloaded' || audioDownloadStatus === 'error') return;
+    if (!isPlaying) return;
     let interval = 0;
     interval = window.setInterval(async () => {
       if (document.visibilityState !== 'visible') return;
@@ -264,7 +265,7 @@ export function PlayerFooter() {
       }
     }, 8000);
     return () => window.clearInterval(interval);
-  }, [audioDownloadStatus, audioSourceMode, nowPlaying, tryUpgradeToFile]);
+  }, [audioDownloadStatus, audioSourceMode, isPlaying, nowPlaying, tryUpgradeToFile]);
 
   const formatTime = (value: number) => {
     if (!Number.isFinite(value) || value <= 0) return '0:00';

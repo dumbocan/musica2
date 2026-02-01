@@ -1342,14 +1342,15 @@ class YouTubeClient:
                         with contextlib.suppress(FileNotFoundError):
                             temp_path.unlink()
                     logger.warning("Streaming audio failed for %s: %s", video_id, exc)
-                    return
+                    raise
 
             return {
                 "type": "stream",
                 "stream": stream(),
                 "media_type": media_type,
                 "title": info.get("title") or video_id,
-                "ext": ext
+                "ext": ext,
+                "cache_file_path": str(output_path),
             }
 
         except HTTPException:
