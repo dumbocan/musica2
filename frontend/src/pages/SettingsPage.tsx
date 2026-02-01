@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { audio2Api } from '@/lib/api';
 import { useApiStore } from '@/store/useApiStore';
 
@@ -30,6 +31,8 @@ type YtdlpLogEntry = {
 };
 
 export function SettingsPage() {
+  const location = useLocation();
+  const isSettingsRoute = location.pathname.startsWith('/settings');
   const setServiceStatus = useApiStore((s) => s.setServiceStatus);
   const [maintenanceEnabled, setMaintenanceEnabled] = useState(true);
   const [maintenanceState, setMaintenanceState] = useState<'unknown' | 'running' | 'stopping' | 'idle' | 'error'>('unknown');
@@ -106,6 +109,7 @@ export function SettingsPage() {
   };
 
   useEffect(() => {
+    if (!isSettingsRoute) return;
     let active = true;
     setHealthLoading(true);
     audio2Api
@@ -132,9 +136,10 @@ export function SettingsPage() {
     return () => {
       active = false;
     };
-  }, [setServiceStatus]);
+  }, [isSettingsRoute, setServiceStatus]);
 
   useEffect(() => {
+    if (!isSettingsRoute) return;
     let active = true;
     let interval: ReturnType<typeof setInterval> | null = null;
     const pollIntervalMs = 5 * 60 * 1000;
@@ -180,7 +185,7 @@ export function SettingsPage() {
       stopPolling();
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, []);
+  }, [isSettingsRoute]);
 
   const refreshYtdlpStatus = useCallback(async () => {
     try {
@@ -214,6 +219,7 @@ export function SettingsPage() {
   }, []);
 
   useEffect(() => {
+    if (!isSettingsRoute) return;
     let active = true;
     let interval: ReturnType<typeof setInterval> | null = null;
     const pollIntervalMs = 60 * 1000;
@@ -253,7 +259,7 @@ export function SettingsPage() {
       stopPolling();
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [refreshYtdlpLogs, refreshYtdlpStatus]);
+  }, [isSettingsRoute, refreshYtdlpLogs, refreshYtdlpStatus]);
 
   const refreshDashboardStats = useCallback(async () => {
     setDashboardLoading(true);
@@ -269,10 +275,12 @@ export function SettingsPage() {
   }, []);
 
   useEffect(() => {
+    if (!isSettingsRoute) return;
     refreshDashboardStats();
-  }, [refreshDashboardStats]);
+  }, [isSettingsRoute, refreshDashboardStats]);
 
   useEffect(() => {
+    if (!isSettingsRoute) return;
     let active = true;
     const refreshMaintenance = async () => {
       try {
@@ -301,9 +309,10 @@ export function SettingsPage() {
       active = false;
       window.clearInterval(interval);
     };
-  }, []);
+  }, [isSettingsRoute]);
 
   useEffect(() => {
+    if (!isSettingsRoute) return;
     if (!logsEnabled) return;
     let cancelled = false;
     const fetchLogs = async () => {
@@ -348,7 +357,7 @@ export function SettingsPage() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [logsEnabled]);
+  }, [isSettingsRoute, logsEnabled]);
 
   const handleMaintenanceToggleEnabled = useCallback(async () => {
     const newValue = !maintenanceEnabled;
@@ -438,12 +447,14 @@ export function SettingsPage() {
   }, []);
 
   useEffect(() => {
+    if (!isSettingsRoute) return;
     refreshActionStatuses();
     const interval = window.setInterval(refreshActionStatuses, 8000);
     return () => window.clearInterval(interval);
-  }, [refreshActionStatuses]);
+  }, [isSettingsRoute, refreshActionStatuses]);
 
   useEffect(() => {
+    if (!isSettingsRoute) return;
     const hasRunningAction = Object.values(actionStatuses).some(Boolean);
     if (!hasRunningAction) return;
     const interval = window.setInterval(() => {
