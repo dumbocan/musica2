@@ -231,4 +231,3 @@ async def _refresh_artist_albums(spotify_id: str) -> None:
     if not albums_data:
         return
     await _persist_albums(albums_data)
-

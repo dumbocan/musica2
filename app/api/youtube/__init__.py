@@ -30,6 +30,12 @@ except ImportError as e:
     print(f"⚠️ Warning: Could not import prefetch router: {e}")
     prefetch_router = None
 
+try:
+    from .usage import router as usage_router
+except ImportError as e:
+    print(f"⚠️ Warning: Could not import usage router: {e}")
+    usage_router = None
+
 # Create main youtube router
 youtube_router = APIRouter(prefix="/youtube", tags=["youtube"])
 
@@ -42,6 +48,8 @@ if links_router:
     youtube_router.include_router(links_router)
 if prefetch_router:
     youtube_router.include_router(prefetch_router)
+if usage_router:
+    youtube_router.include_router(usage_router)
 
 # Export for main.py
 __all__ = ["youtube_router"]

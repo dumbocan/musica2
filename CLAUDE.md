@@ -25,6 +25,12 @@
 - NEVER skip or disable pre-commit hooks (flake8 validation)
 - Ask how to handle uncommitted changes before starting
 
+## Code quality
+- ALL Python code MUST pass flake8 before committing
+- Run: `flake8 app/ --max-line-length=120 --ignore=E501,W503`
+- Fix any lint errors (F401 unused imports, E302 blank lines, W293 whitespace, etc.)
+- Pre-commit hooks will block commits with flake8 errors - do not bypass with --no-verify
+
 ## Do not
 - Skip frontmatter on any documentation files
 - Use absolute URLs for internal links
