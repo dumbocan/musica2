@@ -108,6 +108,7 @@ class AutoDownloadService:
 
                 best_video = videos[0]  # Take first (already scored)
                 youtube_video_id = best_video['video_id']
+                link_source = best_video.get("source")
 
                 # Download the audio with organized folder structure
                 result = await youtube_client.download_audio_for_organized_track(
@@ -125,6 +126,7 @@ class AutoDownloadService:
                         spotify_track_id=spotify_track_id,
                         spotify_artist_id=spotify_artist_id,
                         youtube_video_id=youtube_video_id,
+                        link_source=link_source,
                         download_path=result['file_path'],
                         download_status="completed",
                         format_type=format_type,
@@ -135,6 +137,17 @@ class AutoDownloadService:
                     logger.info(f"✅ Successfully downloaded and recorded: {track_name}")
                 finally:
                     session.close()
+
+                if link_source == "ytdlp":
+                    from app.core.ytdlp_fallback_log import append_ytdlp_log
+                    append_ytdlp_log({
+                        "spotify_track_id": spotify_track_id,
+                        "spotify_artist_id": spotify_artist_id,
+                        "youtube_video_id": youtube_video_id,
+                        "track_name": track_name,
+                        "artist_name": artist_name,
+                        "source": "ytdlp",
+                    })
 
             except Exception as e:
                 logger.error(f"Failed to download {track_name}: {str(e)}")

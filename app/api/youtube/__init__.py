@@ -36,6 +36,12 @@ except ImportError as e:
     print(f"⚠️ Warning: Could not import usage router: {e}")
     usage_router = None
 
+try:
+    from .fallback import router as fallback_router
+except ImportError as e:
+    print(f"⚠️ Warning: Could not import fallback router: {e}")
+    fallback_router = None
+
 # Create main youtube router
 youtube_router = APIRouter(prefix="/youtube", tags=["youtube"])
 
@@ -50,6 +56,8 @@ if prefetch_router:
     youtube_router.include_router(prefetch_router)
 if usage_router:
     youtube_router.include_router(usage_router)
+if fallback_router:
+    youtube_router.include_router(fallback_router)
 
 # Export for main.py
 __all__ = ["youtube_router"]

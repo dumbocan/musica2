@@ -49,13 +49,14 @@ class YouTubeClient:
         self._ytdlp_last_request_time = 0.0
         self._ytdlp_daily_limit = settings.YTDLP_DAILY_LIMIT
         self._ytdlp_min_interval_seconds = settings.YTDLP_MIN_INTERVAL_SECONDS
+        self._ytdlp_enabled_override: bool | None = None
         now = datetime.now()
         last_reset = self._get_last_reset_anchor(now)
         self._request_count_started_at = last_reset.timestamp()
 
-        if not self.api_key and not settings.YTDLP_FALLBACK_ENABLED:
+        if not self.api_key and not self.is_ytdlp_enabled():
             raise ValueError("YouTube API key not configured")
-        if not self.api_key and settings.YTDLP_FALLBACK_ENABLED:
+        if not self.api_key and self.is_ytdlp_enabled():
             logger.warning("YouTube API key missing; using yt-dlp fallback only")
 
         self._noise_tokens = {
@@ -302,6 +303,7 @@ class YouTubeClient:
                     "published_at": entry.get("upload_date"),
                     "thumbnails": entry.get("thumbnails"),
                     "url": entry.get("url") or f"https://www.youtube.com/watch?v={video_id}",
+                    "source": "ytdlp",
                 }
             )
         return results
@@ -313,7 +315,7 @@ class YouTubeClient:
         album: Optional[str] = None,
         max_results: int = 5,
     ) -> List[Dict[str, Any]]:
-        if not settings.YTDLP_FALLBACK_ENABLED:
+        if not self.is_ytdlp_enabled():
             return []
         if not self._ytdlp_can_request():
             logger.warning("yt-dlp daily limit reached (%d/%d)", self._ytdlp_request_count, self._ytdlp_daily_limit)
@@ -361,6 +363,18 @@ class YouTubeClient:
             "next_reset_at_unix": int(next_reset.timestamp()),
             "reset_hour_local": self._quota_reset_hour,
             "remaining": max(0, self._daily_request_limit - self._request_count),
+        }
+
+    def get_ytdlp_usage(self) -> Dict[str, Any]:
+        self._maybe_reset_ytdlp_counter()
+        last_reset = datetime.fromtimestamp(self._ytdlp_request_count_started_at)
+        next_reset = last_reset + timedelta(days=1)
+        return {
+            "requests_total": self._ytdlp_request_count,
+            "requests_limit": self._ytdlp_daily_limit,
+            "started_at_unix": int(self._ytdlp_request_count_started_at),
+            "next_reset_at_unix": int(next_reset.timestamp()),
+            "remaining": max(0, self._ytdlp_daily_limit - self._ytdlp_request_count),
         }
 
     def should_stop_for_quota(self) -> bool:
@@ -433,7 +447,8 @@ class YouTubeClient:
                     'channel_title': item['snippet']['channelTitle'],
                     'published_at': item['snippet']['publishedAt'],
                     'thumbnails': item['snippet']['thumbnails'],
-                    'url': f"https://www.youtube.com/watch?v={item['id']['videoId']}"
+                    'url': f"https://www.youtube.com/watch?v={item['id']['videoId']}",
+                    'source': "youtube_api",
                 }
                 for item in data.get('items', [])
             ]
@@ -535,14 +550,23 @@ class YouTubeClient:
                     self._set_cached_search(cache_key, trimmed)
                     return trimmed
 
-        if settings.YTDLP_FALLBACK_ENABLED:
+        if self.is_ytdlp_enabled():
             fallback = await self.search_music_videos_ytdlp(artist, track, album, max_results)
             if fallback:
+                logger.info("[ytdlp] fallback used for %s - %s", artist, track)
                 self._set_cached_search(cache_key, fallback)
                 return fallback
 
         self._set_cached_search(cache_key, [])
         return []
+
+    def is_ytdlp_enabled(self) -> bool:
+        if self._ytdlp_enabled_override is None:
+            return settings.YTDLP_FALLBACK_ENABLED
+        return self._ytdlp_enabled_override
+
+    def set_ytdlp_enabled(self, enabled: bool) -> None:
+        self._ytdlp_enabled_override = bool(enabled)
 
     def _filter_music_videos(
         self,

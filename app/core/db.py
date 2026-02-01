@@ -62,6 +62,7 @@ def create_db_and_tables() -> None:
     SQLModel.metadata.create_all(sync_engine)
     try:
         with sync_engine.begin() as conn:
+            conn.execute(text("ALTER TABLE youtubedownload ADD COLUMN IF NOT EXISTS link_source TEXT"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_playhistory_user_id ON playhistory (user_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_playhistory_user_track ON playhistory (user_id, track_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_playhistory_user_played_at ON playhistory (user_id, played_at DESC)"))
@@ -74,5 +75,6 @@ def create_db_and_tables() -> None:
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_artist_popularity ON artist (popularity DESC, id ASC)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_artist_name_order ON artist (name ASC, id ASC)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_searchcache_cache_key ON search_cache_entry (cache_key)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_youtubedownload_link_source ON youtubedownload (link_source)"))
     except Exception as exc:
         logger.warning("Index setup skipped: %s", exc)

@@ -643,7 +643,7 @@ class DataFreshnessManager:
     async def save_track_with_youtube_link(self, track_data: Dict[str, any], album_id: int, artist_id: int) -> None:
         """Save a track and automatically search for its YouTube link"""
         from ..core.youtube import youtube_client
-        from ..crud import save_track
+        from ..crud import save_track, save_youtube_download
 
         # Save the track first
         save_track(track_data, album_id, artist_id)
@@ -686,43 +686,28 @@ class DataFreshnessManager:
                     video_id = best_video['video_id']
                     video_url = best_video['url']
 
-                    # Save the YouTube link (but not download yet)
-                    download_record = YouTubeDownload(
-                        spotify_track_id=track_data['id'],
-                        spotify_artist_id=track_data['artists'][0]['id'],
-                        youtube_video_id=video_id,
-                        download_path="",  # Not downloaded yet
-                        download_status="link_found",  # Track found, ready for download
-                        error_message=None
-                    )
-
-                    session = get_session()
-                    try:
-                        session.add(download_record)
-                        session.commit()
-                        logger.info(f"🔗 Saved YouTube link for: {artist_name} - {track_data['name']}")
-                        logger.info(f"   URL: {video_url}")
-                    finally:
-                        session.close()
+                    save_youtube_download({
+                        "spotify_track_id": track_data['id'],
+                        "spotify_artist_id": track_data['artists'][0]['id'],
+                        "youtube_video_id": video_id,
+                        "link_source": best_video.get("source"),
+                        "download_path": "",
+                        "download_status": "link_found",
+                        "error_message": None,
+                    })
+                    logger.info(f"🔗 Saved YouTube link for: {artist_name} - {track_data['name']}")
+                    logger.info(f"   URL: {video_url}")
 
                 else:
-                    # Save with "video not found" status
-                    download_record = YouTubeDownload(
-                        spotify_track_id=track_data['id'],
-                        spotify_artist_id=track_data['artists'][0]['id'],
-                        youtube_video_id="",
-                        download_path="",
-                        download_status="video_not_found",
-                        error_message="YouTube video not found or restricted"
-                    )
-
-                    session = get_session()
-                    try:
-                        session.add(download_record)
-                        session.commit()
-                        logger.warning(f"❌ No YouTube video found for: {artist_name} - {track_data['name']}")
-                    finally:
-                        session.close()
+                    save_youtube_download({
+                        "spotify_track_id": track_data['id'],
+                        "spotify_artist_id": track_data['artists'][0]['id'],
+                        "youtube_video_id": "",
+                        "download_path": "",
+                        "download_status": "video_not_found",
+                        "error_message": "YouTube video not found or restricted",
+                    })
+                    logger.warning(f"❌ No YouTube video found for: {artist_name} - {track_data['name']}")
 
         except Exception as youtube_error:
             logger.warning(f"YouTube search failed for {track_data['name']}: {youtube_error}")

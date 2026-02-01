@@ -302,6 +302,7 @@ async def _run_youtube_backfill(limit: int, retry_failed: bool) -> None:
                 "spotify_track_id": track.spotify_id,
                 "spotify_artist_id": artist.spotify_id,
                 "youtube_video_id": best.get("video_id", ""),
+                "link_source": best.get("source"),
                 "download_path": "",
                 "download_status": "link_found",
                 "error_message": None,

@@ -234,6 +234,7 @@ class YouTubeDownload(SQLModel, table=True):
     spotify_track_id: str = Field(index=True)  # Spotify track ID
     spotify_artist_id: str = Field(index=True)  # Spotify artist ID
     youtube_video_id: str = Field(index=True)
+    link_source: Optional[str] = Field(default=None, index=True)
     download_path: str
     download_status: str = Field(default="pending")  # 'pending', 'downloading', 'completed', 'error'
     file_size: Optional[int] = None

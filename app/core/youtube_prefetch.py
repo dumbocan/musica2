@@ -100,6 +100,7 @@ async def youtube_prefetch_loop(poll_interval: int = 60):
                     "spotify_track_id": target_track.spotify_id,
                     "spotify_artist_id": target_artist.spotify_id if target_artist else None,
                     "youtube_video_id": best["video_id"],
+                    "link_source": best.get("source"),
                     "download_path": "",
                     "download_status": "link_found",
                 })

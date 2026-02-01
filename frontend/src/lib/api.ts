@@ -237,4 +237,7 @@ export const audio2Api = {
   getYoutubeTrackLinks: (spotifyTrackIds: string[]) =>
     api.post('/youtube/links', { spotify_track_ids: spotifyTrackIds }),
   getYoutubeUsage: () => api.get('/youtube/usage'),
+  getYoutubeFallbackStatus: () => api.get('/youtube/fallback/status'),
+  toggleYoutubeFallback: (enabled: boolean) => api.post(`/youtube/fallback/toggle?enabled=${enabled}`),
+  getYoutubeFallbackLogs: (params?: { limit?: number }) => api.get('/youtube/fallback/logs', { params }),
 };

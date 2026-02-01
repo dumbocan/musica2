@@ -79,6 +79,48 @@ Se ha realizado una revisión exhaustiva del código del frontend para mejorar l
 - **Contadores híbridos en álbumes**: `GET /artists/{spotify_id}/albums` ahora suma tanto los links guardados en la BD como los MP3 descargados que coincidan con los track IDs de Spotify. Eso evita mostrar `0` aunque todavía no se haya guardado el álbum localmente.
 - **Logs y depuración**: los prefetches registran líneas `[youtube_prefetch] Cached ARTIST - TRACK` en la consola. Si ves `Stopping YouTube prefetch ... 403`, espera 15 min o baja la cadencia de peticiones antes de reintentar.
 - **Credenciales obligatorias**: sin `YOUTUBE_API_KEY` en `.env` los endpoints `/youtube/...` devuelven `401/500` y la UI marca error. Asegúrate de tener la clave incluida antes de visitar las páginas de álbumes o la vista global de tracks.
+- **Fallback yt-dlp (opt-in)**: cuando la cuota de YouTube se agota, el backend puede buscar links con yt-dlp si activas `YTDLP_FALLBACK_ENABLED=true`. Ajusta `YTDLP_DAILY_LIMIT` y `YTDLP_MIN_INTERVAL_SECONDS` para controlar el coste diario.
+- **Toggle + métricas en Settings**: la pantalla de ajustes permite activar/desactivar el fallback, ver el contador de links guardados y el uso diario del fallback.
+- **Log de fallback (30 días)**: los videos guardados vía yt-dlp se registran en `storage/logs/ytdlp_fallback.log` (respeta `STORAGE_ROOT`). El archivo se recorta según `LOG_RETENTION_DAYS`.
+
+## 🧭 Fallback YouTube (explicado fácil + por qué existe)
+
+### ¿Qué es el fallback?
+Cuando la API de YouTube llega al límite diario, el backend **intenta otra fuente** (yt-dlp) para buscar el link del video. Es opcional y se controla desde Settings o con `YTDLP_FALLBACK_ENABLED`.
+
+### ¿Por qué hay “tanto código”?
+Porque el fallback debe ser **seguro y controlado**:
+1) **No romper la app** si no hay API key.  
+2) **No abusar** de la red (límites diarios y pausas).  
+3) **Guardar el origen** de cada link (API vs yt‑dlp).  
+4) **Dejar rastro** en logs para poder limpiar si hay falsos positivos.  
+5) **Mostrarlo en Settings** con un botón y un contador claro.  
+
+### Viaje del dato (ejemplo: “Eminem — Without Me”)
+1) **Buscas “Without Me”** en la app (o entras al artista/álbum).  
+2) El backend mira primero en BD:  
+   - Si ya existe un `YouTubeDownload` con `youtube_video_id`, **se usa directamente** (DB‑first).  
+3) Si no hay link en BD, el backend intenta la **API de YouTube**.  
+   - Si encuentra un video: se guarda en BD con `link_source="youtube_api"` y ya queda cacheado.  
+4) Si la API falla por cuota o no devuelve resultados, **y el fallback está activo**:  
+   - Se usa **yt‑dlp** para buscar el link.  
+   - Si encuentra uno: se guarda en BD con `link_source="ytdlp"`.  
+   - Se registra una línea en `storage/logs/ytdlp_fallback.log` con artista/track/video_id.  
+5) A partir de ahí, **las siguientes veces se lee desde BD** (no repite llamadas externas).  
+
+Resumen: **primero BD → luego YouTube API → luego yt‑dlp (si está activo)**.  
+Una vez guardado el link, siempre es DB‑first.
+
+### Diagrama rápido (texto)
+```
+UI → Backend
+   └─ ¿Existe en BD? → Sí → responde link
+                   └→ No → intenta YouTube API
+                          └→ encontrado → guarda en BD (link_source=youtube_api)
+                          └→ no encontrado / cuota → si fallback ON → yt‑dlp
+                                                     └→ encontrado → guarda en BD (link_source=ytdlp) + log
+                                                     └→ no encontrado → guarda status "video_not_found"
+```
 
 ## 🎛️ Tracks dashboard + endpoint de estado
 
@@ -278,6 +320,9 @@ PY
 | `/youtube/status/{track_id}` | GET | Get download status |
 | `/youtube/album/{spotify_id}/prefetch` | POST | Cache links for every track in an album |
 | `/youtube/track/{spotify_track_id}/link` | GET | Read cached link info (status/url) |
+| `/youtube/fallback/status` | GET | Estado y cuota del fallback yt-dlp |
+| `/youtube/fallback/toggle` | POST | Activar/desactivar fallback yt-dlp |
+| `/youtube/fallback/logs` | GET | Últimos links guardados por fallback |
 
 ## 🎯 **Key Features in Action**
 
@@ -329,7 +374,7 @@ UserFavorite (
 )
 
 YouTubeDownload (
-  id, spotify_track_id, youtube_video_id,
+  id, spotify_track_id, youtube_video_id, link_source,
   download_status, file_size, error_message
 )
 ```
@@ -346,6 +391,12 @@ SPOTIFY_CLIENT_ID=your_spotify_client_id
 SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
 LASTFM_API_KEY=your_lastfm_api_key
 YOUTUBE_API_KEY=your_youtube_api_key
+YTDLP_FALLBACK_ENABLED=false
+YTDLP_DAILY_LIMIT=120
+YTDLP_MIN_INTERVAL_SECONDS=2.0
+
+# Logs
+LOG_RETENTION_DAYS=30
 ```
 
 ## 🚀 **Usage Examples**
@@ -390,6 +441,7 @@ most_played = api.get_most_played(user_id)
 - `storage/images/artists` → retratos finales (ya optimizados).
 - `storage/images/albums` → portadas finales.
 - `storage/music_downloads` → audio descargado/local.
+- `storage/logs/ytdlp_fallback.log` → log JSONL de links encontrados por el fallback yt-dlp (respeta `LOG_RETENTION_DAYS`).
 - `cache/images` → caché WebP generada por `/images/proxy`.
 - `downloads/` (histórico) y `cache/` se pueden limpiar si necesitas espacio; los favoritos bloquean borrados de registros en BD.
 - En pruebas, las descargas se guardan localmente en `downloads/`; a futuro se planea soportar discos externos y/o carpetas gestionadas por torrents, por lo que las rutas deben mantenerse configurables.

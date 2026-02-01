@@ -18,6 +18,17 @@ type DashboardStats = {
   youtube_links_failed: number;
 };
 
+type YtdlpLogEntry = {
+  ts?: string;
+  spotify_track_id?: string;
+  spotify_artist_id?: string;
+  youtube_video_id?: string;
+  track_name?: string;
+  artist_name?: string;
+  album_name?: string;
+  source?: string;
+};
+
 export function SettingsPage() {
   const setServiceStatus = useApiStore((s) => s.setServiceStatus);
   const [maintenanceEnabled, setMaintenanceEnabled] = useState(true);
@@ -45,8 +56,21 @@ export function SettingsPage() {
     requests_total?: number;
     next_reset_at_unix?: number;
     reset_hour_local?: number;
+    requests_limit?: number;
+    remaining?: number;
   } | null>(null);
   const [youtubeUsageError, setYoutubeUsageError] = useState<string | null>(null);
+  const [ytdlpEnabled, setYtdlpEnabled] = useState<boolean | null>(null);
+  const [ytdlpUsage, setYtdlpUsage] = useState<{
+    requests_total?: number;
+    requests_limit?: number;
+    remaining?: number;
+    next_reset_at_unix?: number;
+  } | null>(null);
+  const [ytdlpLogCount, setYtdlpLogCount] = useState<number | null>(null);
+  const [ytdlpLogPath, setYtdlpLogPath] = useState<string | null>(null);
+  const [ytdlpLogs, setYtdlpLogs] = useState<YtdlpLogEntry[]>([]);
+  const [ytdlpError, setYtdlpError] = useState<string | null>(null);
   const [serviceSnapshot, setServiceSnapshot] = useState<{
     spotify?: { status?: string | null; last_error?: string | null };
     lastfm?: { status?: string | null; last_error?: string | null };
@@ -156,6 +180,79 @@ export function SettingsPage() {
     };
   }, []);
 
+  const refreshYtdlpStatus = useCallback(async () => {
+    try {
+      const res = await audio2Api.getYoutubeFallbackStatus();
+      const data = res.data ?? {};
+      setYtdlpEnabled(Boolean(data.enabled));
+      setYtdlpUsage(data.usage ?? null);
+      setYtdlpLogCount(typeof data.log_count === 'number' ? data.log_count : null);
+      setYtdlpLogPath(typeof data.log_path === 'string' ? data.log_path : null);
+      setYtdlpError(null);
+    } catch (err) {
+      setYtdlpError(err instanceof Error ? err.message : 'Error cargando fallback');
+    }
+  }, []);
+
+  const refreshYtdlpLogs = useCallback(async () => {
+    try {
+      const res = await audio2Api.getYoutubeFallbackLogs({ limit: 200 });
+      const items = Array.isArray(res.data?.items) ? res.data.items : [];
+      setYtdlpLogs(items);
+      if (typeof res.data?.count === 'number') {
+        setYtdlpLogCount(res.data.count);
+      }
+      if (typeof res.data?.log_path === 'string') {
+        setYtdlpLogPath(res.data.log_path);
+      }
+      setYtdlpError(null);
+    } catch (err) {
+      setYtdlpError(err instanceof Error ? err.message : 'Error cargando logs de fallback');
+    }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const pollIntervalMs = 60 * 1000;
+
+    const load = async () => {
+      if (!active) return;
+      await refreshYtdlpStatus();
+      await refreshYtdlpLogs();
+    };
+
+    const stopPolling = () => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+    };
+
+    const startPolling = () => {
+      if (!interval) {
+        interval = setInterval(load, pollIntervalMs);
+      }
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void load();
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    };
+
+    handleVisibility();
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      active = false;
+      stopPolling();
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [refreshYtdlpLogs, refreshYtdlpStatus]);
+
   const refreshDashboardStats = useCallback(async () => {
     setDashboardLoading(true);
     try {
@@ -260,6 +357,19 @@ export function SettingsPage() {
       // ignore error
     }
   }, [maintenanceEnabled]);
+
+  const handleToggleYtdlp = useCallback(async () => {
+    const newValue = !(ytdlpEnabled ?? false);
+    try {
+      await audio2Api.toggleYoutubeFallback(newValue);
+      setYtdlpEnabled(newValue);
+    } catch (err) {
+      setYtdlpError(err instanceof Error ? err.message : 'Error cambiando fallback');
+    } finally {
+      void refreshYtdlpStatus();
+      void refreshYtdlpLogs();
+    }
+  }, [refreshYtdlpLogs, refreshYtdlpStatus, ytdlpEnabled]);
 
   const handleMaintenanceStart = useCallback(async () => {
     setMaintenanceStarting(true);
@@ -933,6 +1043,104 @@ export function SettingsPage() {
                 </div>
               </div>
             )}
+          </div>
+
+          <div className="card">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 16 }}>Fallback yt-dlp</div>
+                <div style={{ color: 'var(--muted)', fontSize: 12 }}>
+                  Controla el respaldo de enlaces cuando la API está limitada.
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => {
+                  void refreshYtdlpStatus();
+                  void refreshYtdlpLogs();
+                }}
+                style={{ padding: '4px 10px', fontSize: 11 }}
+              >
+                Actualizar
+              </button>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(ytdlpEnabled)}
+                  onChange={handleToggleYtdlp}
+                  style={{ width: 16, height: 16, cursor: 'pointer' }}
+                />
+                <span style={{ fontSize: 13 }}>Fallback habilitado</span>
+              </label>
+              <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+                Guardados: {typeof ytdlpLogCount === 'number' ? ytdlpLogCount.toLocaleString() : '—'}
+              </span>
+            </div>
+            <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 12, fontSize: 11, color: 'var(--muted)' }}>
+              <span>
+                Uso:{' '}
+                <strong style={{ color: 'inherit' }}>
+                  {typeof ytdlpUsage?.requests_total === 'number'
+                    ? ytdlpUsage.requests_total.toLocaleString()
+                    : '—'}
+                </strong>
+                / {typeof ytdlpUsage?.requests_limit === 'number'
+                    ? ytdlpUsage.requests_limit
+                    : '—'}
+              </span>
+              <span>
+                Restante:{' '}
+                <strong style={{ color: ytdlpUsage?.remaining !== undefined && ytdlpUsage.remaining < 10 ? '#ef4444' : 'inherit' }}>
+                  {typeof ytdlpUsage?.remaining === 'number'
+                    ? ytdlpUsage.remaining
+                    : '—'}
+                </strong>
+              </span>
+              <span>
+                Reset: {ytdlpUsage?.next_reset_at_unix
+                  ? new Date(ytdlpUsage.next_reset_at_unix * 1000).toLocaleString()
+                  : '—'}
+              </span>
+            </div>
+            {ytdlpLogPath && (
+              <div style={{ marginTop: 6, fontSize: 10, color: 'var(--muted)' }}>
+                Log: {ytdlpLogPath}
+              </div>
+            )}
+            {ytdlpError && (
+              <div style={{ marginTop: 6, fontSize: 10, color: '#ef4444' }}>{ytdlpError}</div>
+            )}
+            <div
+              style={{
+                marginTop: 10,
+                maxHeight: 220,
+                overflow: 'auto',
+                background: 'rgba(10, 12, 18, 0.85)',
+                border: '1px solid rgba(255,255,255,0.08)',
+                borderRadius: 10,
+                padding: 10,
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                fontSize: 11,
+                lineHeight: 1.5,
+                color: '#d1d5db',
+                whiteSpace: 'pre-wrap',
+              }}
+            >
+              {ytdlpLogs.length
+                ? ytdlpLogs
+                    .map((entry) => {
+                      const ts = entry.ts ? new Date(entry.ts).toLocaleString() : '—';
+                      const artist = entry.artist_name || entry.spotify_artist_id || 'artista?';
+                      const track = entry.track_name || entry.spotify_track_id || 'track?';
+                      const video = entry.youtube_video_id || 'sin video';
+                      return `${ts} · ${artist} — ${track} · ${video}`;
+                    })
+                    .join('\n')
+                : 'Sin logs todavía...'}
+            </div>
           </div>
         </main>
 

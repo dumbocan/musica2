@@ -648,8 +648,11 @@ def save_youtube_download(youtube_data: dict):
     session = get_session()
     try:
         from .models.base import YouTubeDownload as YT
+        from .models.base import Track as TrackModel, Artist as ArtistModel
+        from .core.ytdlp_fallback_log import append_ytdlp_log
         status = youtube_data.get("download_status")
         youtube_video_id = youtube_data.get("youtube_video_id")
+        link_source = youtube_data.get("link_source")
         if status in ("error", "video_not_found") and not youtube_video_id:
             youtube_data["download_status"] = "missing"
 
@@ -657,6 +660,7 @@ def save_youtube_download(youtube_data: dict):
         existing = session.exec(
             select(YT).where(YT.spotify_track_id == youtube_data['spotify_track_id'])
         ).first()
+        previous_video_id = existing.youtube_video_id if existing else None
 
         if existing:
             # Update existing
@@ -664,6 +668,8 @@ def save_youtube_download(youtube_data: dict):
             existing.download_status = youtube_data.get('download_status', existing.download_status)
             existing.download_path = youtube_data.get('download_path', existing.download_path)
             existing.file_size = youtube_data.get('file_size', existing.file_size)
+            if link_source:
+                existing.link_source = link_source
             if existing.youtube_video_id:
                 existing.error_message = None
             else:
@@ -677,6 +683,7 @@ def save_youtube_download(youtube_data: dict):
                 spotify_track_id=youtube_data['spotify_track_id'],
                 spotify_artist_id=youtube_data.get('spotify_artist_id'),
                 youtube_video_id=youtube_data.get('youtube_video_id'),
+                link_source=link_source,
                 download_path=youtube_data.get('download_path'),
                 download_status=youtube_data.get('download_status', 'video_not_found'),
                 error_message=youtube_data.get('error_message')
@@ -685,6 +692,33 @@ def save_youtube_download(youtube_data: dict):
             result = download
 
         session.commit()
+        if link_source == "ytdlp" and youtube_video_id and youtube_video_id != previous_video_id:
+            track_name = None
+            artist_name = None
+            album_name = None
+            track = session.exec(
+                select(TrackModel).where(TrackModel.spotify_id == youtube_data['spotify_track_id'])
+            ).first()
+            if track:
+                track_name = track.name
+                album_name = track.album.name if track.album else None
+                if track.artist:
+                    artist_name = track.artist.name
+            if not artist_name and youtube_data.get("spotify_artist_id"):
+                artist = session.exec(
+                    select(ArtistModel).where(ArtistModel.spotify_id == youtube_data.get("spotify_artist_id"))
+                ).first()
+                if artist:
+                    artist_name = artist.name
+            append_ytdlp_log({
+                "spotify_track_id": youtube_data.get("spotify_track_id"),
+                "spotify_artist_id": youtube_data.get("spotify_artist_id"),
+                "youtube_video_id": youtube_video_id,
+                "track_name": track_name,
+                "artist_name": artist_name,
+                "album_name": album_name,
+                "source": "ytdlp",
+            })
         return result
     finally:
         session.close()
