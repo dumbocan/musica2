@@ -34,6 +34,13 @@ export function SettingsPage() {
   const location = useLocation();
   const isSettingsRoute = location.pathname.startsWith('/settings');
   const setServiceStatus = useApiStore((s) => s.setServiceStatus);
+  const [pauseSettingsPolling, setPauseSettingsPolling] = useState(() => {
+    try {
+      return localStorage.getItem('pauseSettingsPolling') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [maintenanceEnabled, setMaintenanceEnabled] = useState(true);
   const [maintenanceState, setMaintenanceState] = useState<'unknown' | 'running' | 'stopping' | 'idle' | 'error'>('unknown');
   const [maintenanceStarting, setMaintenanceStarting] = useState(false);
@@ -109,7 +116,7 @@ export function SettingsPage() {
   };
 
   useEffect(() => {
-    if (!isSettingsRoute) return;
+    if (!isSettingsRoute || pauseSettingsPolling) return;
     let active = true;
     setHealthLoading(true);
     audio2Api
@@ -136,10 +143,22 @@ export function SettingsPage() {
     return () => {
       active = false;
     };
-  }, [isSettingsRoute, setServiceStatus]);
+  }, [isSettingsRoute, pauseSettingsPolling, setServiceStatus]);
+
+  const handleTogglePauseSettingsPolling = useCallback(() => {
+    setPauseSettingsPolling((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('pauseSettingsPolling', String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
-    if (!isSettingsRoute) return;
+    if (!isSettingsRoute || pauseSettingsPolling) return;
     let active = true;
     let interval: ReturnType<typeof setInterval> | null = null;
     const pollIntervalMs = 5 * 60 * 1000;
@@ -185,7 +204,7 @@ export function SettingsPage() {
       stopPolling();
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [isSettingsRoute]);
+  }, [isSettingsRoute, pauseSettingsPolling]);
 
   const refreshYtdlpStatus = useCallback(async () => {
     try {
@@ -219,7 +238,7 @@ export function SettingsPage() {
   }, []);
 
   useEffect(() => {
-    if (!isSettingsRoute) return;
+    if (!isSettingsRoute || pauseSettingsPolling) return;
     let active = true;
     let interval: ReturnType<typeof setInterval> | null = null;
     const pollIntervalMs = 60 * 1000;
@@ -259,7 +278,7 @@ export function SettingsPage() {
       stopPolling();
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [isSettingsRoute, refreshYtdlpLogs, refreshYtdlpStatus]);
+  }, [isSettingsRoute, pauseSettingsPolling, refreshYtdlpLogs, refreshYtdlpStatus]);
 
   const refreshDashboardStats = useCallback(async () => {
     setDashboardLoading(true);
@@ -275,12 +294,12 @@ export function SettingsPage() {
   }, []);
 
   useEffect(() => {
-    if (!isSettingsRoute) return;
+    if (!isSettingsRoute || pauseSettingsPolling) return;
     refreshDashboardStats();
-  }, [isSettingsRoute, refreshDashboardStats]);
+  }, [isSettingsRoute, pauseSettingsPolling, refreshDashboardStats]);
 
   useEffect(() => {
-    if (!isSettingsRoute) return;
+    if (!isSettingsRoute || pauseSettingsPolling) return;
     let active = true;
     const refreshMaintenance = async () => {
       try {
@@ -309,10 +328,10 @@ export function SettingsPage() {
       active = false;
       window.clearInterval(interval);
     };
-  }, [isSettingsRoute]);
+  }, [isSettingsRoute, pauseSettingsPolling]);
 
   useEffect(() => {
-    if (!isSettingsRoute) return;
+    if (!isSettingsRoute || pauseSettingsPolling) return;
     if (!logsEnabled) return;
     let cancelled = false;
     const fetchLogs = async () => {
@@ -357,7 +376,7 @@ export function SettingsPage() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [isSettingsRoute, logsEnabled]);
+  }, [isSettingsRoute, logsEnabled, pauseSettingsPolling]);
 
   const handleMaintenanceToggleEnabled = useCallback(async () => {
     const newValue = !maintenanceEnabled;
@@ -447,21 +466,21 @@ export function SettingsPage() {
   }, []);
 
   useEffect(() => {
-    if (!isSettingsRoute) return;
+    if (!isSettingsRoute || pauseSettingsPolling) return;
     refreshActionStatuses();
     const interval = window.setInterval(refreshActionStatuses, 8000);
     return () => window.clearInterval(interval);
-  }, [isSettingsRoute, refreshActionStatuses]);
+  }, [isSettingsRoute, pauseSettingsPolling, refreshActionStatuses]);
 
   useEffect(() => {
-    if (!isSettingsRoute) return;
+    if (!isSettingsRoute || pauseSettingsPolling) return;
     const hasRunningAction = Object.values(actionStatuses).some(Boolean);
     if (!hasRunningAction) return;
     const interval = window.setInterval(() => {
       void refreshDashboardStats();
     }, 6000);
     return () => window.clearInterval(interval);
-  }, [actionStatuses, refreshDashboardStats]);
+  }, [actionStatuses, pauseSettingsPolling, refreshDashboardStats]);
 
   const handleBackfillAlbumsMissing = async () => {
     if (albumMissingStatus === 'running') return;
@@ -770,16 +789,16 @@ export function SettingsPage() {
             <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 4 }}>
               Acciones críticas y medidas rápidas para controlar la sincronización.
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14 }}>
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  cursor: 'pointer',
-                  userSelect: 'none',
-                }}
-              >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14 }}>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                cursor: 'pointer',
+                userSelect: 'none',
+              }}
+            >
                 <input
                   type="checkbox"
                   checked={maintenanceEnabled}
@@ -788,6 +807,25 @@ export function SettingsPage() {
                 />
                 <span style={{ fontSize: 13 }}>Mant. habilitado</span>
               </label>
+            </div>
+            <button
+              type="button"
+              className="btn-ghost"
+              style={{
+                width: '100%',
+                justifyContent: 'center',
+                marginTop: 10,
+                transition: 'box-shadow 0.4s ease, background 0.4s ease',
+                ...(pauseSettingsPolling ? actionGlowStyle : {}),
+              }}
+              onClick={handleTogglePauseSettingsPolling}
+            >
+              {pauseSettingsPolling ? 'Reanudar comunicación Settings' : 'Parar comunicación Settings'}
+            </button>
+            <div style={{ marginTop: 4, fontSize: 11, opacity: 0.7 }}>
+              {pauseSettingsPolling
+                ? 'Se pausarán los refrescos automáticos de Settings.'
+                : 'Settings seguirá actualizando estados y logs.'}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 14 }}>
               <button
