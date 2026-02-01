@@ -180,6 +180,8 @@ export const audio2Api = {
   clearMaintenanceLogs: () => api.post('/maintenance/logs/clear'),
   repairAlbumImages: (params?: { limit?: number; background?: boolean }) =>
     api.post('/maintenance/repair-album-images', null, { params }),
+  revalidateYtdlpLinks: (params?: { limit?: number }) =>
+    api.post('/maintenance/revalidate-ytdlp-links', null, { params }),
   getTrackChartStats: (spotifyTrackIds: string[]) =>
     api.get('/tracks/chart-stats', {
       params: { spotify_ids: spotifyTrackIds.join(',') },

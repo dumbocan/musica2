@@ -15,6 +15,7 @@ AVAILABLE_ACTIONS = {
     "audit",
     "images_backfill",
     "repair_album_images",
+    "ytdlp_revalidate",
 }
 
 _lock = Lock()

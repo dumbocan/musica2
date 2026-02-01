@@ -44,6 +44,7 @@ export function SettingsPage() {
   const [metadataStatus, setMetadataStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [chartBackfillStatus, setChartBackfillStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [albumImageRepairStatus, setAlbumImageRepairStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
+  const [ytdlpRevalidateStatus, setYtdlpRevalidateStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [purgeId, setPurgeId] = useState('');
   const [purgeStatus, setPurgeStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [actionStatuses, setActionStatuses] = useState<Record<string, boolean>>({});
@@ -492,6 +493,22 @@ export function SettingsPage() {
     }
   };
 
+  const handleRevalidateYtdlpLinks = async () => {
+    if (ytdlpRevalidateStatus === 'running') return;
+    setYtdlpRevalidateStatus('running');
+    try {
+      await audio2Api.revalidateYtdlpLinks({ limit: 500 });
+      setYtdlpRevalidateStatus('done');
+    } catch {
+      setYtdlpRevalidateStatus('error');
+    } finally {
+      void refreshDashboardStats();
+      void refreshActionStatuses();
+      void refreshYtdlpStatus();
+      void refreshYtdlpLogs();
+    }
+  };
+
   const handleBackfillImages = async () => {
     if (imagesBackfillStatus === 'running') return;
     setImagesBackfillStatus('running');
@@ -849,6 +866,19 @@ export function SettingsPage() {
               </button>
               <div style={{ fontSize: 11, opacity: 0.7 }}>
                 Estado: {youtubeBackfillStatus === 'done' ? 'enviado' : youtubeBackfillStatus === 'error' ? 'error' : 'en espera'}
+              </div>
+
+              <button
+                type="button"
+                className="btn-ghost"
+                style={actionButtonStyle('ytdlp_revalidate')}
+                onClick={handleRevalidateYtdlpLinks}
+                disabled={ytdlpRevalidateStatus === 'running'}
+              >
+                {actionLabel('Revalidar links fallback', ytdlpRevalidateStatus, 'ytdlp_revalidate')}
+              </button>
+              <div style={{ fontSize: 11, opacity: 0.7 }}>
+                Estado: {ytdlpRevalidateStatus === 'done' ? 'enviado' : ytdlpRevalidateStatus === 'error' ? 'error' : 'en espera'}
               </div>
 
               <button

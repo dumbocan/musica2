@@ -321,6 +321,57 @@ async def _run_youtube_backfill(limit: int, retry_failed: bool) -> None:
     logger.info("[maintenance] youtube backfill complete")
 
 
+async def _run_ytdlp_revalidate(limit: int) -> None:
+    if maintenance_stop_requested():
+        return
+    try:
+        from ...core.youtube import youtube_client
+    except Exception as exc:
+        logger.warning("[maintenance] ytdlp revalidate skipped: %s", exc)
+        return
+
+    logger.info("[maintenance] ytdlp revalidate start (limit=%d)", limit)
+    with get_session() as session:
+        stmt = (
+            select(YouTubeDownload)
+            .where(YouTubeDownload.link_source == "ytdlp")
+            .where(YouTubeDownload.youtube_video_id.is_not(None))
+            .where(YouTubeDownload.youtube_video_id != "")
+            .limit(limit)
+        )
+        rows = session.exec(stmt).all()
+
+        checked = 0
+        invalidated = 0
+        for record in rows:
+            if maintenance_stop_requested():
+                break
+            video_id = record.youtube_video_id or ""
+            if not video_id:
+                continue
+            is_valid = await youtube_client._validate_video_id(video_id)
+            checked += 1
+            if not is_valid:
+                record.youtube_video_id = ""
+                record.download_status = "video_not_found"
+                record.error_message = "Fallback link invalid or unavailable"
+                record.updated_at = utc_now()
+                invalidated += 1
+            elif record.download_status in ("video_not_found", "error", "missing"):
+                record.download_status = "link_found"
+                record.error_message = None
+                record.updated_at = utc_now()
+            if checked % 50 == 0:
+                session.commit()
+        session.commit()
+
+    logger.info(
+        "[maintenance] ytdlp revalidate done: checked=%d invalidated=%d",
+        checked,
+        invalidated,
+    )
+
+
 async def _run_images_backfill(limit_artists: int | None, limit_albums: int | None) -> None:
     if maintenance_stop_requested():
         return
@@ -540,6 +591,14 @@ async def backfill_youtube_links(
 ) -> dict:
     _schedule_action_task("youtube_links", _run_youtube_backfill, limit, retry_failed)
     return {"scheduled": True, "limit": limit, "retry_failed": retry_failed}
+
+
+@router.post("/revalidate-ytdlp-links")
+async def revalidate_ytdlp_links(
+    limit: int = Query(500, ge=1, le=5000),
+) -> dict:
+    _schedule_action_task("ytdlp_revalidate", _run_ytdlp_revalidate, limit)
+    return {"scheduled": True, "limit": limit}
 
 
 @router.post("/backfill-images")

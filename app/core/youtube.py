@@ -40,6 +40,11 @@ class YouTubeClient:
         self._search_cache: "OrderedDict[str, tuple[float, List[Dict[str, Any]]]]" = OrderedDict()
         self._search_cache_ttl_seconds = 60 * 60 * 6
         self._search_cache_max_entries = 2000
+        self._embed_cache: "OrderedDict[str, tuple[float, bool]]" = OrderedDict()
+        self._embed_cache_ttl_seconds = 60 * 60 * 12
+        self._embed_cache_max_entries = 4000
+        self._embed_last_request_time = 0.0
+        self._embed_min_interval_seconds = 0.3
         self._request_count = 0
         self._quota_reset_hour = 4
         self._daily_request_limit = 80  # Leave 20 for user browsing
@@ -345,9 +350,16 @@ class YouTubeClient:
 
             filtered = self._filter_music_videos(videos, artist, track)
             if filtered:
-                trimmed = filtered[:max_results]
-                self._set_cached_search(cache_key, trimmed)
-                return trimmed
+                validated = []
+                for candidate in filtered:
+                    if await self._validate_video_id(candidate.get("video_id", "")):
+                        validated.append(candidate)
+                        if len(validated) >= max_results:
+                            break
+                if validated:
+                    trimmed = validated[:max_results]
+                    self._set_cached_search(cache_key, trimmed)
+                    return trimmed
 
         self._set_cached_search(cache_key, [])
         return []
@@ -407,6 +419,54 @@ class YouTubeClient:
         self._search_cache.move_to_end(key)
         if len(self._search_cache) > self._search_cache_max_entries:
             self._search_cache.popitem(last=False)
+
+    def _get_cached_embed(self, key: str) -> Optional[bool]:
+        entry = self._embed_cache.get(key)
+        if not entry:
+            return None
+        timestamp, result = entry
+        if time.monotonic() - timestamp > self._embed_cache_ttl_seconds:
+            self._embed_cache.pop(key, None)
+            return None
+        self._embed_cache.move_to_end(key)
+        return result
+
+    def _set_cached_embed(self, key: str, result: bool) -> None:
+        self._embed_cache[key] = (time.monotonic(), result)
+        self._embed_cache.move_to_end(key)
+        if len(self._embed_cache) > self._embed_cache_max_entries:
+            self._embed_cache.popitem(last=False)
+
+    async def _embed_throttle(self) -> None:
+        now = time.monotonic()
+        wait_time = self._embed_min_interval_seconds - (now - self._embed_last_request_time)
+        if wait_time > 0:
+            await asyncio.sleep(wait_time)
+        self._embed_last_request_time = time.monotonic()
+
+    async def _validate_video_id(self, video_id: str) -> bool:
+        if not video_id:
+            return False
+        cached = self._get_cached_embed(video_id)
+        if cached is not None:
+            return cached
+        await self._embed_throttle()
+        url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                response = await client.get(url)
+            if response.status_code == 200:
+                self._set_cached_embed(video_id, True)
+                return True
+            if response.status_code in (401, 403, 404, 410):
+                self._set_cached_embed(video_id, False)
+                return False
+            response.raise_for_status()
+        except Exception:
+            # On transient errors, avoid marking invalid so we can retry later.
+            return False
+        self._set_cached_embed(video_id, False)
+        return False
 
     async def search_videos(
         self,

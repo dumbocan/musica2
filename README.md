@@ -82,6 +82,8 @@ Se ha realizado una revisión exhaustiva del código del frontend para mejorar l
 - **Fallback yt-dlp (opt-in)**: cuando la cuota de YouTube se agota, el backend puede buscar links con yt-dlp si activas `YTDLP_FALLBACK_ENABLED=true`. Ajusta `YTDLP_DAILY_LIMIT` y `YTDLP_MIN_INTERVAL_SECONDS` para controlar el coste diario.
 - **Toggle + métricas en Settings**: la pantalla de ajustes permite activar/desactivar el fallback, ver el contador de links guardados y el uso diario del fallback.
 - **Log de fallback (30 días)**: los videos guardados vía yt-dlp se registran en `storage/logs/ytdlp_fallback.log` (respeta `STORAGE_ROOT`). El archivo se recorta según `LOG_RETENTION_DAYS`.
+- **Validación anti “Not Found”**: los links del fallback pasan por un chequeo ligero (oEmbed) antes de guardarse.
+- **Revalidar y limpiar**: botón/endpoint `/maintenance/revalidate-ytdlp-links` revisa links ya guardados y limpia los inválidos.
 
 ## 🧭 Fallback YouTube (explicado fácil + por qué existe)
 
@@ -436,6 +438,7 @@ most_played = api.get_most_played(user_id)
 - `/artists/profile/{spotify_id}` y `/search/artist-profile`: al consultarlos, guardan en background la discografía del artista + hasta 5 similares.
 - `/albums/spotify/{id}`: devuelve wiki de Last.fm y URLs de imagen ya proxied.
 - `DELETE /albums/id/{id}` / `delete_track` (CRUD) bloquean la operación si el recurso está en favoritos.
+- `/maintenance/revalidate-ytdlp-links`: revalida y limpia links obtenidos por fallback yt‑dlp.
 
 ## 📂 Rutas de almacenamiento y caché
 - `storage/images/artists` → retratos finales (ya optimizados).
