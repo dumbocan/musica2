@@ -248,18 +248,23 @@ export function PlayerFooter() {
 
   useEffect(() => {
     if (!nowPlaying || audioSourceMode !== 'stream') return;
+    if (audioDownloadStatus === 'downloaded' || audioDownloadStatus === 'error') return;
     let interval = 0;
     interval = window.setInterval(async () => {
+      if (document.visibilityState !== 'visible') return;
       if (upgradeInFlightRef.current) return;
       upgradeInFlightRef.current = true;
       try {
-        await tryUpgradeToFile();
+        const upgraded = await tryUpgradeToFile();
+        if (upgraded) {
+          window.clearInterval(interval);
+        }
       } finally {
         upgradeInFlightRef.current = false;
       }
-    }, 2500);
+    }, 8000);
     return () => window.clearInterval(interval);
-  }, [audioSourceMode, nowPlaying, tryUpgradeToFile]);
+  }, [audioDownloadStatus, audioSourceMode, nowPlaying, tryUpgradeToFile]);
 
   const formatTime = (value: number) => {
     if (!Number.isFinite(value) || value <= 0) return '0:00';

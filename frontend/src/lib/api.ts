@@ -138,7 +138,7 @@ export const audio2Api = {
     filter?: 'all' | 'favorites' | 'withLink' | 'noLink' | 'hasFile' | 'missingFile';
     search?: string;
   }) =>
-    api.get('/tracks/overview', { params, timeout: 60000 }),
+    api.get('/tracks/overview/', { params, timeout: 60000 }),
   resolveTracks: (spotifyTrackIds: string[]) =>
     api.post('/tracks/resolve', { spotify_track_ids: spotifyTrackIds }),
   getRecentlyAddedTracks: (params?: { limit?: number }) =>
