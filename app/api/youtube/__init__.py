@@ -13,10 +13,11 @@ except ImportError as e:
     search_router = None
 
 try:
-    from .downloads import router as downloads_router
+    from .downloads import router as downloads_router, stream_router
 except ImportError as e:
     print(f"⚠️ Warning: Could not import downloads router: {e}")
     downloads_router = None
+    stream_router = None
 
 try:
     from .links import router as links_router
@@ -50,6 +51,8 @@ if search_router:
     youtube_router.include_router(search_router)
 if downloads_router:
     youtube_router.include_router(downloads_router)
+if stream_router:
+    youtube_router.include_router(stream_router)
 if links_router:
     youtube_router.include_router(links_router)
 if prefetch_router:

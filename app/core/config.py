@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     YTDLP_FALLBACK_ENABLED: bool = False
     YTDLP_DAILY_LIMIT: int = 120
     YTDLP_MIN_INTERVAL_SECONDS: float = 2.0
+    YTDLP_COOKIES_FROM_BROWSER: Optional[str] = None
+    YTDLP_COOKIES_FILE: Optional[str] = None
     GITHUB_TOKEN: Optional[str] = None
 
     # Chart scraping (Billboard)

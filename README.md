@@ -80,6 +80,8 @@ Se ha realizado una revisión exhaustiva del código del frontend para mejorar l
 - **Logs y depuración**: los prefetches registran líneas `[youtube_prefetch] Cached ARTIST - TRACK` en la consola. Si ves `Stopping YouTube prefetch ... 403`, espera 15 min o baja la cadencia de peticiones antes de reintentar.
 - **Credenciales obligatorias**: sin `YOUTUBE_API_KEY` en `.env` los endpoints `/youtube/...` devuelven `401/500` y la UI marca error. Asegúrate de tener la clave incluida antes de visitar las páginas de álbumes o la vista global de tracks.
 - **Fallback yt-dlp (opt-in)**: cuando la cuota de YouTube se agota, el backend puede buscar links con yt-dlp si activas `YTDLP_FALLBACK_ENABLED=true`. Ajusta `YTDLP_DAILY_LIMIT` y `YTDLP_MIN_INTERVAL_SECONDS` para controlar el coste diario.
+- **Cookies para yt-dlp (recomendado)**: para reducir bloqueos `Sign in to confirm you're not a bot`, configura `YTDLP_COOKIES_FROM_BROWSER=firefox` (o `chrome/brave` según tu sesión) en `.env`. También puedes usar `YTDLP_COOKIES_FILE=/ruta/cookies.txt`.
+- **Streaming robusto ante 403 de googlevideo**: el backend usa cabeceras del extractor y descarga por rangos cerrados (`bytes=start-end`) para evitar errores de reproducción donde el navegador veía `200` pero el stream real fallaba.
 - **Toggle + métricas en Settings**: la pantalla de ajustes permite activar/desactivar el fallback, ver el contador de links guardados y el uso diario del fallback.
 - **Log de fallback (30 días)**: los videos guardados vía yt-dlp se registran en `storage/logs/ytdlp_fallback.log` (respeta `STORAGE_ROOT`). El archivo se recorta según `LOG_RETENTION_DAYS`.
 - **Validación anti “Not Found”**: los links del fallback pasan por un chequeo ligero (oEmbed) antes de guardarse.
@@ -228,10 +230,26 @@ cp .env.example .env
 
 4. **Start the server:**
 ```bash
-uvicorn app.main:app --reload
+/home/micasa/audio2/venv/bin/uvicorn app.main:app --reload
 ```
 
 **Server URL**: http://localhost:8000
+
+### Backend control (venv, recomendado)
+
+```bash
+# Parar backend en puerto 8000 (si hay uno corriendo)
+pkill -f "uvicorn app.main:app --reload" || true
+
+# Arrancar backend usando SIEMPRE el venv del proyecto
+/home/micasa/audio2/venv/bin/uvicorn app.main:app --reload
+```
+
+Verificacion rapida:
+```bash
+pgrep -af "uvicorn app.main:app --reload"
+```
+Debes ver el ejecutable dentro de `.../audio2/venv/bin/python3` / `.../audio2/venv/bin/uvicorn`.
 
 ### Quick API Test
 ```bash

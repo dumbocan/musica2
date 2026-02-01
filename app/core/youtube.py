@@ -172,6 +172,35 @@ class YouTubeClient:
             }],
         }
 
+    def _parse_cookies_browser_spec(self, raw: str) -> tuple:
+        # Expected syntax: browser[:profile]
+        value = (raw or "").strip()
+        if not value:
+            return ("firefox",)
+        browser, _, profile = value.partition(":")
+        browser = browser.strip().lower()
+        if profile.strip():
+            return (browser, profile.strip())
+        return (browser,)
+
+    def _build_ytdlp_auth_candidates(self) -> List[Dict[str, Any]]:
+        candidates: List[Dict[str, Any]] = [{}]
+        cookie_file = (settings.YTDLP_COOKIES_FILE or "").strip()
+        if cookie_file:
+            path = Path(cookie_file).expanduser()
+            if path.exists():
+                candidates.append({"cookiefile": str(path)})
+            else:
+                logger.warning("YTDLP_COOKIES_FILE does not exist: %s", path)
+
+        browser_spec = (settings.YTDLP_COOKIES_FROM_BROWSER or "").strip()
+        if browser_spec:
+            candidates.append({"cookiesfrombrowser": self._parse_cookies_browser_spec(browser_spec)})
+        else:
+            # Useful default on Linux where Firefox cookies are often available without keyring issues.
+            candidates.append({"cookiesfrombrowser": ("firefox",)})
+        return candidates
+
     async def _throttle(self):
         """Ensure there's at least `min_interval_seconds` between API requests."""
         async with self._rate_lock:
@@ -283,7 +312,7 @@ class YouTubeClient:
         return self._ytdlp_request_count < self._ytdlp_daily_limit
 
     def _ytdlp_search_sync(self, query: str, max_results: int) -> List[Dict[str, Any]]:
-        ydl_opts = {
+        base_opts = {
             "quiet": True,
             "no_warnings": True,
             "skip_download": True,
@@ -291,8 +320,19 @@ class YouTubeClient:
             "default_search": f"ytsearch{max_results}",
             "noplaylist": True,
         }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(query, download=False)
+        info = None
+        last_exc: Exception | None = None
+        for auth_opts in self._build_ytdlp_auth_candidates():
+            ydl_opts = {**base_opts, **auth_opts}
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(query, download=False)
+                break
+            except Exception as exc:
+                last_exc = exc
+                continue
+        if info is None:
+            raise last_exc or RuntimeError("yt-dlp search failed")
         entries = info.get("entries") or []
         results: List[Dict[str, Any]] = []
         for entry in entries:
@@ -808,11 +848,17 @@ class YouTubeClient:
             loop = asyncio.get_event_loop()
 
             def download_sync():
-                try:
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
-                except Exception as e:
-                    raise e
+                last_exc: Exception | None = None
+                for auth_opts in self._build_ytdlp_auth_candidates():
+                    run_opts = {**ydl_opts, **auth_opts}
+                    try:
+                        with yt_dlp.YoutubeDL(run_opts) as ydl:
+                            ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+                        return
+                    except Exception as exc:
+                        last_exc = exc
+                        continue
+                raise last_exc or RuntimeError("yt-dlp download failed")
 
             await loop.run_in_executor(None, download_sync)
 
@@ -1168,22 +1214,40 @@ class YouTubeClient:
             if output_format not in ("m4a", "webm"):
                 raise HTTPException(status_code=400, detail="Unsupported stream format")
 
-            format_selector = "bestaudio[ext=m4a]/bestaudio" if output_format == "m4a" else "bestaudio[ext=webm]/bestaudio"
+            format_selector = (
+                "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio"
+                if output_format == "m4a"
+                else "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio"
+            )
             loop = asyncio.get_running_loop()
 
             def extract_info():
-                with yt_dlp.YoutubeDL({
+                base_opts = {
                     "format": format_selector,
                     "quiet": True,
                     "no_warnings": True,
                     "noplaylist": True,
-                }) as ydl:
-                    return ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+                }
+                last_exc: Exception | None = None
+                for auth_opts in self._build_ytdlp_auth_candidates():
+                    ydl_opts = {**base_opts, **auth_opts}
+                    try:
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            return ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+                    except Exception as exc:
+                        last_exc = exc
+                        continue
+                raise last_exc or RuntimeError("yt-dlp extract failed")
 
             info = await loop.run_in_executor(None, extract_info)
             stream_url = info.get("url")
             if not stream_url:
                 raise HTTPException(status_code=500, detail="Unable to resolve audio stream URL")
+            upstream_headers = {
+                str(k): str(v)
+                for k, v in (info.get("http_headers") or {}).items()
+                if v is not None
+            }
 
             ext = (info.get("ext") or output_format).lower()
             media_type = "audio/mp4" if ext == "m4a" else "audio/webm"
@@ -1202,6 +1266,32 @@ class YouTubeClient:
                     "ext": ext
                 }
 
+            # Validate the resolved URL before opening a 200 streaming response.
+            # This avoids "audio error" in the browser when YouTube returns 403/HTML.
+            async with httpx.AsyncClient(follow_redirects=True, timeout=20.0) as client:
+                probe_headers = {"Range": "bytes=0-1", **upstream_headers}
+                probe = await client.get(stream_url, headers=probe_headers)
+                if probe.status_code >= 400:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Upstream audio URL unavailable ({probe.status_code})",
+                    )
+                content_type = (probe.headers.get("content-type") or "").lower()
+                if "audio" not in content_type and "octet-stream" not in content_type:
+                    raise HTTPException(
+                        status_code=502,
+                        detail="Upstream URL did not return audio content",
+                    )
+                total_bytes = None
+                content_range = probe.headers.get("content-range") or ""
+                if "/" in content_range:
+                    try:
+                        total_candidate = content_range.rsplit("/", 1)[1].strip()
+                        if total_candidate.isdigit():
+                            total_bytes = int(total_candidate)
+                    except Exception:
+                        total_bytes = None
+
             temp_path = output_path.with_name(f"{output_path.stem}.partial.{ext}")
 
             async def stream():
@@ -1210,12 +1300,29 @@ class YouTubeClient:
                     if cache:
                         file_handle = open(temp_path, "wb")
                     async with httpx.AsyncClient(follow_redirects=True, timeout=None) as client:
-                        async with client.stream("GET", stream_url) as response:
-                            response.raise_for_status()
-                            async for chunk in response.aiter_bytes(65536):
+                        if total_bytes and total_bytes > 0:
+                            start = 0
+                            window = 256 * 1024
+                            while start < total_bytes:
+                                end = min(start + window - 1, total_bytes - 1)
+                                range_headers = {"Range": f"bytes={start}-{end}", **upstream_headers}
+                                response = await client.get(stream_url, headers=range_headers)
+                                response.raise_for_status()
+                                chunk = response.content
+                                if not chunk:
+                                    break
                                 if file_handle:
                                     file_handle.write(chunk)
                                 yield chunk
+                                start += len(chunk)
+                        else:
+                            stream_headers = {"Range": "bytes=0-", **upstream_headers}
+                            async with client.stream("GET", stream_url, headers=stream_headers) as response:
+                                response.raise_for_status()
+                                async for chunk in response.aiter_bytes(65536):
+                                    if file_handle:
+                                        file_handle.write(chunk)
+                                    yield chunk
                     if file_handle:
                         file_handle.flush()
                         file_handle.close()
@@ -1235,6 +1342,7 @@ class YouTubeClient:
                         with contextlib.suppress(FileNotFoundError):
                             temp_path.unlink()
                     logger.warning("Streaming audio failed for %s: %s", video_id, exc)
+                    return
 
             return {
                 "type": "stream",
