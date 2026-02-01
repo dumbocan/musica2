@@ -29,7 +29,10 @@ Follow modern web performance and HTTP caching standards across the app:
 - For third-party assets (fonts), add `preconnect` + `dns-prefetch` in `frontend/index.html`, or self-host where possible.
 
 ## Linting & Quality Gates
-- Backend: follow PEP 8 and keep code flake8-compatible (line length, imports, unused vars). Use flake8 as the Python lint standard; when available, run `flake8` (or `python -m flake8`) before merging.
+- Backend: follow PEP 8 and keep code flake8-compatible (line length, imports, unused vars). Use flake8 as the Python lint standard.
+- Run flake8 before committing: `flake8 app/ --max-line-length=120 --ignore=E501,W503`
+- Fix any lint errors (F401 unused imports, E302 blank lines, W293 whitespace, etc.)
+- Pre-commit hooks will block commits with flake8 errors - do NOT use `--no-verify` to bypass
 - Frontend: keep ESLint clean (no new warnings) and respect `react-hooks/exhaustive-deps`.
 
 ## Testing Guidelines
