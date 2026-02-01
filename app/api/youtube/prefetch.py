@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/prefetch", tags=["youtube"])
 
+
 @router.post("/album/{spotify_id}")
 async def prefetch_album_youtube(
     spotify_id: str,
@@ -23,6 +24,7 @@ async def prefetch_album_youtube(
     """Prefetch YouTube links for entire album."""
     # TODO: Implement album YouTube prefetch
     return {"message": "Album prefetch started", "spotify_id": spotify_id}
+
 
 @router.get("/status")
 async def get_prefetch_status(

@@ -16,8 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.core.image_cache import CACHE_DIR
-from app.core.image_db_store import store_image, IMAGE_STORAGE, _ensure_storage_dirs
+from app.core.image_cache import CACHE_DIR  # noqa: E402
+from app.core.image_db_store import store_image, IMAGE_STORAGE, _ensure_storage_dirs  # noqa: E402
 
 
 async def _migrate_image(webp_file: Path) -> tuple[bool, str]:

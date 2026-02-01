@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/download", tags=["youtube"])
 
+
 @router.get("/{video_id}")
 async def get_download_status(
     video_id: str,
@@ -22,6 +23,7 @@ async def get_download_status(
     """Get download status for a YouTube video."""
     # TODO: Implement download status check
     return {"video_id": video_id, "status": "unknown"}
+
 
 @router.post("/{video_id}")
 async def start_download(
@@ -32,6 +34,7 @@ async def start_download(
     # TODO: Implement video download
     return {"message": "Download started", "video_id": video_id}
 
+
 @router.get("/{video_id}/status")
 async def get_download_progress(
     video_id: str,
@@ -41,6 +44,7 @@ async def get_download_progress(
     # TODO: Implement download progress
     return {"video_id": video_id, "progress": 0, "status": "pending"}
 
+
 @router.get("/{video_id}/file")
 async def get_download_file(
     video_id: str,
@@ -49,6 +53,7 @@ async def get_download_file(
     """Get downloaded file."""
     # TODO: Implement file serving
     return {"video_id": video_id, "message": "File not available"}
+
 
 @router.delete("/{video_id}")
 async def delete_download(

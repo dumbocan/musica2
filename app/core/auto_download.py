@@ -15,6 +15,7 @@ from app.models.base import YouTubeDownload
 
 logger = logging.getLogger(__name__)
 
+
 class AutoDownloadService:
     """Service for automatic music downloading from YouTube."""
 

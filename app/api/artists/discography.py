@@ -15,7 +15,7 @@ from sqlalchemy import asc, desc, func
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select
 
-from ...core.db import SessionDep
+from ...core.db import SessionDep, get_session
 from ...core.spotify import spotify_client
 from ...models.base import Album, Artist, Track, YouTubeDownload
 from ...core.image_proxy import proxy_image_list
@@ -54,7 +54,6 @@ async def get_artist_albums(
         select(Artist).where(Artist.spotify_id == spotify_id)
     )).first()
     albums: list[dict] = []
-    local_count = 0
     if artist:
         local_albums = (await session.exec(
             select(Album)
@@ -76,38 +75,17 @@ async def get_artist_albums(
                 "image_path_id": album.image_path_id,
                 "local_id": album.id,
             })
-        local_count = len(albums)
 
     if refresh:
         asyncio.create_task(_refresh_artist_albums(spotify_id))
 
-    needs_spotify = not albums
-    if not refresh and artist and not needs_spotify and local_count:
-        try:
-            total = await asyncio.wait_for(
-                spotify_client.get_artist_albums_total(
-                    spotify_id,
-                    include_groups="album,single,compilation",
-                ),
-                timeout=3.0,
-            )
-            if total is not None and total > local_count:
-                needs_spotify = True
-        except Exception as exc:
-            logger.info(
-                "Spotify albums total check failed for %s: %r",
-                spotify_id,
-                exc,
-                exc_info=True,
-            )
-
-    if needs_spotify:
+    if not albums:
         try:
             spotify_albums = await asyncio.wait_for(
                 spotify_client.get_artist_albums(
                     spotify_id,
                     include_groups="album,single,compilation",
-                    fetch_all=not refresh,
+                    fetch_all=True,
                 ),
                 timeout=10.0,
             )
@@ -115,8 +93,32 @@ async def get_artist_albums(
             logger.warning("Spotify albums fetch failed for %s: %r", spotify_id, exc, exc_info=True)
             spotify_albums = []
         if spotify_albums:
-            albums = spotify_albums
-            asyncio.create_task(_persist_albums(spotify_albums))
+            await _persist_albums(spotify_albums)
+            # Rebuild response from local shape to keep DB-first contract.
+            with get_session() as sync_session:
+                local_artist = sync_session.exec(select(Artist).where(Artist.spotify_id == spotify_id)).first()
+                if local_artist:
+                    local_albums = sync_session.exec(
+                        select(Album)
+                        .where(Album.artist_id == local_artist.id)
+                        .order_by(desc(Album.release_date), asc(Album.id))
+                    ).all()
+                    albums = []
+                    for album in local_albums:
+                        if not album.spotify_id:
+                            continue
+                        images = _parse_images_field(album.images)
+                        albums.append({
+                            "id": album.spotify_id,
+                            "name": album.name,
+                            "release_date": album.release_date,
+                            "total_tracks": album.total_tracks,
+                            "images": proxy_image_list(images, size=384),
+                            "label": album.label,
+                            "artists": [{"id": local_artist.spotify_id, "name": local_artist.name}] if local_artist.spotify_id else [{"name": local_artist.name}],
+                            "image_path_id": album.image_path_id,
+                            "local_id": album.id,
+                        })
 
     if artist:
         stale_at = artist.last_refreshed_at

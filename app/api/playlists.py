@@ -14,6 +14,7 @@ from sqlmodel import select
 
 router = APIRouter(prefix="/playlists", tags=["playlists"])
 
+
 @router.post("/")
 def create_new_playlist(
     name: str = Query(..., description="Playlist name"),
@@ -24,12 +25,14 @@ def create_new_playlist(
     playlist = create_playlist(name, description, user_id)
     return playlist
 
+
 @router.get("/")
 def get_playlists() -> List[Playlist]:
     """Get all playlists from DB."""
     with get_session() as session:
         playlists = session.exec(select(Playlist)).all()
     return playlists
+
 
 @router.get("/id/{playlist_id}")
 def get_playlist(playlist_id: int = Path(..., description="Local playlist ID")) -> Playlist:
@@ -39,6 +42,7 @@ def get_playlist(playlist_id: int = Path(..., description="Local playlist ID")) 
         if not playlist:
             raise HTTPException(status_code=404, detail="Playlist not found")
     return playlist
+
 
 @router.get("/id/{playlist_id}/tracks")
 def get_playlist_tracks(playlist_id: int = Path(..., description="Local playlist ID")) -> List[Track]:
@@ -60,6 +64,7 @@ def get_playlist_tracks(playlist_id: int = Path(..., description="Local playlist
 
         return tracks
 
+
 @router.put("/id/{playlist_id}")
 def update_playlist_endpoint(
     playlist_id: int = Path(..., description="Local playlist ID"),
@@ -72,6 +77,7 @@ def update_playlist_endpoint(
         raise HTTPException(status_code=404, detail="Playlist not found")
     return playlist
 
+
 @router.delete("/id/{playlist_id}")
 def delete_playlist_endpoint(playlist_id: int = Path(..., description="Local playlist ID")):
     """Delete playlist and its tracks."""
@@ -79,6 +85,7 @@ def delete_playlist_endpoint(playlist_id: int = Path(..., description="Local pla
     if not ok:
         raise HTTPException(status_code=404, detail="Playlist not found")
     return {"message": "Playlist and related data deleted"}
+
 
 @router.post("/id/{playlist_id}/tracks/{track_id}")
 def add_track_to_playlist_endpoint(
@@ -90,6 +97,7 @@ def add_track_to_playlist_endpoint(
     if not playlist_track:
         raise HTTPException(status_code=404, detail="Playlist or track not found, or track already in playlist")
     return {"message": "Track added to playlist", "playlist_track": playlist_track}
+
 
 @router.delete("/id/{playlist_id}/tracks/{track_id}")
 def remove_track_from_playlist_endpoint(

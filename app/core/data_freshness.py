@@ -343,8 +343,8 @@ class DataFreshnessManager:
 
             stale_artists = session.exec(
                 select(Artist).where(
-                    (Artist.updated_at.is_(None)) |
-                    (Artist.updated_at < cutoff_time)
+                    (Artist.updated_at.is_(None))
+                    | (Artist.updated_at < cutoff_time)
                 ).limit(max_artists)
             ).all()
 
@@ -390,7 +390,6 @@ class DataFreshnessManager:
         include_youtube_links: bool = False,
         include_full_albums: bool = True
     ) -> Dict[str, any]:
-
         """
         EXPAND USER LIBRARY WITH COMPLETE DISCOGRAPHY:
         - Full artist discography (all albums)
@@ -741,8 +740,8 @@ class DataFreshnessManager:
                 select(Artist)
             ).all()
 
-            fresh_artists = sum(1 for a in artist_stats if a.updated_at and
-                                (now - a.updated_at).days <= self.max_artist_age_days)
+            fresh_artists = sum(1 for a in artist_stats if a.updated_at
+                                and (now - a.updated_at).days <= self.max_artist_age_days)
             total_artists = len(artist_stats)
 
             # Download stats

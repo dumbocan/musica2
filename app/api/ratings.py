@@ -11,6 +11,7 @@ from sqlmodel import select
 
 router = APIRouter(prefix="/ratings", tags=["ratings"])
 
+
 @router.post("/tracks/{track_id}/favorite")
 def toggle_favorite(track_id: int = Path(..., description="Local track ID")):
     """Toggle favorite status for a track."""
@@ -25,6 +26,7 @@ def toggle_favorite(track_id: int = Path(..., description="Local track ID")):
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
 
 @router.post("/tracks/{track_id}/rate")
 def rate_track(
@@ -46,12 +48,14 @@ def rate_track(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
 @router.get("/favorites")
 def get_favorite_tracks():
     """Get all favorite tracks."""
     with get_session() as session:
         tracks = session.exec(select(Track).where(Track.is_favorite.is_(True))).all()
         return [track.dict() for track in tracks]
+
 
 @router.get("/top-rated")
 def get_top_rated_tracks(limit: int = Query(10, description="Number of tracks to return")):

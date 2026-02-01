@@ -4,7 +4,6 @@ Análisis rápido de archivos monolíticos - versión simplificada y rápida.
 Identifica archivos que necesitan división inmediata.
 """
 
-import os
 from pathlib import Path
 import sys
 from typing import List, Dict
@@ -13,22 +12,23 @@ from typing import List, Dict
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+
 class SimpleMonolithicAnalyzer:
     def __init__(self):
         self.root = Path(".")
         self.app_dir = self.root / "app" / "api"
         self.large_files = []
-        
+
     def analyze_large_files(self) -> List[Dict]:
         """Analiza archivos grandes de forma simple y rápida."""
         large_files = []
-        
+
         # Analizar archivos .py en app/api/
         for file_path in self.app_dir.glob("*.py"):
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     lines = sum(1 for _ in f)
-                    
+
                 if lines >= 300:  # Umbral más bajo para detectar problemas
                     large_files.append({
                         'path': file_path,
@@ -36,14 +36,14 @@ class SimpleMonolithicAnalyzer:
                         'name': file_path.stem,
                         'size_kb': file_path.stat().st_size // 1024
                     })
-                    
+
             except Exception as e:
                 print(f"Error reading {file_path}: {e}")
-        
+
         # Ordenar por tamaño
         large_files.sort(key=lambda x: x['lines'], reverse=True)
         return large_files
-    
+
     def categorize_file_size(self, lines: int) -> Dict:
         """Categoriza el tamaño del archivo."""
         if lines >= 1000:
@@ -55,7 +55,7 @@ class SimpleMonolithicAnalyzer:
             }
         elif lines >= 700:
             return {
-                'category': 'HIGH', 
+                'category': 'HIGH',
                 'emoji': '⚠️',
                 'description': 'NECESITA DIVISIÓN',
                 'action': 'Planificar división pronto'
@@ -63,7 +63,7 @@ class SimpleMonolithicAnalyzer:
         elif lines >= 400:
             return {
                 'category': 'MEDIUM',
-                'emoji': '⚡', 
+                'emoji': '⚡',
                 'description': 'MEJORAR MANTENIBILIDAD',
                 'action': 'Considerar división futura'
             }
@@ -74,13 +74,13 @@ class SimpleMonolithicAnalyzer:
                 'description': 'ACEPTABLE',
                 'action': 'Mantener como está'
             }
-    
+
     def suggest_modules(self, file_name: str) -> List[str]:
         """Sugiere módulos específicos basados en el nombre del archivo."""
         suggestions = {
             'tracks': [
                 '🎵 overview.py - Vista general y listado',
-                '▶️  playback.py - Reproducción e historial', 
+                '▶️  playback.py - Reproducción e historial',
                 '📥 downloads.py - Descargas y YouTube',
                 '⭐ favorites.py - Favoritos y ratings'
             ],
@@ -101,11 +101,11 @@ class SimpleMonolithicAnalyzer:
             ]
         }
         return suggestions.get(file_name, ['📄 utils.py - Utilidades comunes'])
-    
+
     def generate_analysis_report(self) -> str:
         """Genera reporte completo del análisis."""
         large_files = self.analyze_large_files()
-        
+
         if not large_files:
             return """
 ✅ ANÁLISIS DE ARQUITECTURA - RESULTADO EXCELENTE
@@ -116,39 +116,39 @@ class SimpleMonolithicAnalyzer:
 
 ¡Excelente trabajo de organización del código!
 """
-        
+
         report = [
             "🏗️ ANÁLISIS DE ARCHIVOS MONOLÍTICOS - RESULTADO CRÍTICO",
             "=" * 80,
             f"\n📊 Resumen: {len(large_files)} archivos necesitan atención"
         ]
-        
+
         total_lines = sum(f['lines'] for f in large_files)
         critical_files = [f for f in large_files if f['lines'] >= 1000]
         high_files = [f for f in large_files if 700 <= f['lines'] < 1000]
-        
+
         report.extend([
             f"📈 Líneas totales: {total_lines:,}",
             f"🚨 Archivos críticos: {len(critical_files)}",
             f"⚠️  Archivos urgentes: {len(high_files)}",
             f"📅 Promedio líneas/archivo: {total_lines // len(large_files):,} si hay {len(large_files)} archivos"
         ])
-        
+
         # Detalle por archivo
         report.extend([
             "\n" + "=" * 80,
             "\n📋 DETALLE DE ARCHIVOS PROBLEMÁTICOS:",
             "=" * 80
         ])
-        
+
         for i, file_info in enumerate(large_files, 1):
             file_name = file_info['name']
             lines = file_info['lines']
             size_kb = file_info['size_kb']
-            
+
             category_info = self.categorize_file_size(lines)
             modules = self.suggest_modules(file_name)
-            
+
             report.extend([
                 f"\n{i}. 📁 {file_name.upper()}.PY",
                 f"   📊 Tamaño: {lines:,} líneas ({size_kb:,} KB)",
@@ -156,13 +156,13 @@ class SimpleMonolithicAnalyzer:
                 f"   🎯 Acción recomendada: {category_info['action']}",
                 f"   🗂  Estructura sugerida: app/api/{file_name}/"
             ])
-            
+
             report.extend([
-                f"   📦 Módulos sugeridos:",
-                f"      " + "\n      ".join(modules),
+                "   📦 Módulos sugeridos:",
+                "      " + "\n      ".join(modules),
                 f"   📋 Impacto en mantenibilidad: {'ALTO' if lines >= 1000 else 'MEDIO' if lines >= 700 else 'BAJO'}"
             ])
-        
+
         # Plan de acción
         report.extend([
             "\n" + "=" * 80,
@@ -183,52 +183,53 @@ class SimpleMonolithicAnalyzer:
             "   3. Mejorar documentación interna",
             "",
             "🔧 COMANDOS EJECUTAR:",
-            f"   # Para análisis completo:",
+            "   # Para análisis completo:",
             "   python3 scripts/split_monolithic_files.py --analyze",
-            f"   # Para scaffolding de archivo específico:",
+            "   # Para scaffolding de archivo específico:",
             f"   python3 scripts/split_monolithic_files.py --scaffold {critical_files[0]['name'] if critical_files else 'tracks'}",
             "",
             "📊 BENEFICIOS ESPERADOS:",
             "   • 70% reducción en tiempo de debugging",
-            "   • 60% mejora en mantenibilidad", 
+            "   • 60% mejora en mantenibilidad",
             "   • 50% más fácil testing unitario",
             "   • 40% menos bugs al modificar código"
         ])
-        
+
         return "\n".join(report)
 
+
 def main():
-    import argparse
-    
+    import argparse  # noqa: E402
+
     parser = argparse.ArgumentParser(description="Análisis rápido de archivos monolíticos")
     parser.add_argument("--analyze", action="store_true", help="Analizar archivos grandes")
     parser.add_argument("--report", action="store_true", help="Generar reporte completo")
     parser.add_argument("--quick", action="store_true", help="Análisis ultra rápido")
-    
+
     args = parser.parse_args()
-    
+
     if not any([args.analyze, args.report, args.quick]):
         print("Uso: python analyze_architecture_quick.py --analyze|--report|--quick")
         return
-    
+
     print("🏗️ Analizando arquitectura de Audio2...")
     print("=" * 60)
-    
+
     analyzer = SimpleMonolithicAnalyzer()
-    
+
     if args.analyze or args.report:
         try:
             large_files = analyzer.analyze_large_files()
-            
+
             if not large_files:
                 print("\n✅ ¡Excelente! No se encontraron archivos monolíticos problemáticos")
                 return 0
-            
+
             # Generar reporte
             if args.report:
                 report = analyzer.generate_analysis_report()
                 print("\n" + report)
-                
+
                 # Guardar reporte
                 with open("architecture_analysis_report.txt", "w", encoding="utf-8") as f:
                     f.write(report)
@@ -239,37 +240,38 @@ def main():
                 for f in large_files:
                     category = analyzer.categorize_file_size(f['lines'])
                     print(f"   {category['emoji']} {f['name']}: {f['lines']:,} líneas - {category['description']}")
-        
+
         except Exception as e:
             print(f"❌ Error durante el análisis: {e}")
             return 1
-    
+
     elif args.quick:
         try:
             large_files = analyzer.analyze_large_files()
             critical_count = len([f for f in large_files if f['lines'] >= 1000])
             urgent_count = len([f for f in large_files if 700 <= f['lines'] < 1000])
-            
-            print(f"🔍 Análisis rápido:")
+
+            print("🔍 Análisis rápido:")
             print(f"   📁 Archivos grandes: {len(large_files)}")
             print(f"   🚨 Críticos (>1000 líneas): {critical_count}")
             print(f"   ⚠️  Urgentes (700-1000 líneas): {urgent_count}")
-            
+
             if critical_count > 0:
-                print(f"\n🎯 ARCHIVOS CRÍTICOS:")
+                print("\n🎯 ARCHIVOS CRÍTICOS:")
                 for f in large_files:
                     if f['lines'] >= 1000:
                         print(f"   📁 {f['name']}: {f['lines']:,} líneas")
-                print(f"\n⚡ ACCIÓN INMEDIATA:")
+                print("\n⚡ ACCIÓN INMEDIATA:")
                 print(f"   python3 scripts/split_monolithic_files.py --scaffold {large_files[0]['name']}")
-            
+
             return 0
-            
+
         except Exception as e:
             print(f"❌ Error: {e}")
             return 1
-    
+
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

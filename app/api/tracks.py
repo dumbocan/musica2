@@ -1579,8 +1579,8 @@ async def bulk_enrich_tracks_lastfm(
     # Get tracks that don't have Last.fm data yet
     tracks_to_enrich = (await session.exec(
         select(Track).join(Artist).where(
-            (Track.lastfm_listeners.is_(None)) |
-            (Track.lastfm_listeners == 0)
+            (Track.lastfm_listeners.is_(None))
+            | (Track.lastfm_listeners == 0)
         ).limit(limit)
     )).all()
 
@@ -1664,10 +1664,10 @@ async def bulk_enrich_tracks_spotify(
             Track.spotify_id.is_not(None),
             Track.spotify_id != '',
             (
-                (Track.popularity.is_(None)) |
-                (Track.popularity == 0) |
-                (Track.preview_url.is_(None)) |
-                (Track.preview_url == '')
+                (Track.popularity.is_(None))
+                | (Track.popularity == 0)
+                | (Track.preview_url.is_(None))
+                | (Track.preview_url == '')
             )
         ).limit(limit)
     )).all()

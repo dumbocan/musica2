@@ -30,6 +30,7 @@ from app.schemas.auth import (
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
+
 def require_user_id(request: Request) -> int:
     user_id = getattr(request.state, "user_id", None)
     if user_id is None:
@@ -38,6 +39,7 @@ def require_user_id(request: Request) -> int:
             detail="Authorization bearer token required"
         )
     return user_id
+
 
 def _validate_recovery_code(recovery_code: str) -> None:
     if not settings.AUTH_RECOVERY_CODE:
@@ -51,6 +53,7 @@ def _validate_recovery_code(recovery_code: str) -> None:
             detail="Invalid recovery code"
         )
 
+
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register_user(
     user_data: UserCreate,
@@ -58,7 +61,7 @@ async def register_user(
 ):
     """
     Register a new user.
-    
+
     - **name**: User's full name (required, max 100 chars)
     - **email**: User's email address (required, unique)
     - **password**: Password (required, min 8 chars)
@@ -68,13 +71,13 @@ async def register_user(
         select(User).where(User.email == user_data.email)
     )
     existing_user = result.scalar_one_or_none()
-    
+
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered"
         )
-    
+
     # Create new user
     hashed_password = get_password_hash(user_data.password)
     base_username = user_data.email.split("@")[0] or "user"
@@ -94,11 +97,11 @@ async def register_user(
         email=user_data.email,
         password_hash=hashed_password
     )
-    
+
     session.add(new_user)
     await session.commit()
     await session.refresh(new_user)
-    
+
     return new_user
 
 
@@ -109,7 +112,7 @@ async def login_user(
 ):
     """
     Authenticate user and return JWT token.
-    
+
     - **email**: User's email address
     - **password**: User's password
     """
@@ -118,17 +121,17 @@ async def login_user(
         select(User).where(User.email == login_data.email)
     )
     user = result.scalar_one_or_none()
-    
+
     if not user or not verify_password(login_data.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     # Create access token
     access_token = create_user_token(user_id=user.id, email=user.email)
-    
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -149,13 +152,13 @@ async def get_current_user(
         select(User).where(User.id == current_user_id)
     )
     user = result.scalar_one_or_none()
-    
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
+
     return user
 
 
@@ -173,16 +176,16 @@ async def update_current_user(
         select(User).where(User.id == current_user_id)
     )
     user = result.scalar_one_or_none()
-    
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
+
     # Update fields if provided
     update_data = user_data.dict(exclude_unset=True)
-    
+
     # Check for email uniqueness if email is being updated
     if "email" in update_data and update_data["email"] != user.email:
         email_result = await session.execute(
@@ -194,18 +197,18 @@ async def update_current_user(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Email already registered"
             )
-    
+
     # Hash password if provided
     if "password" in update_data:
         update_data["password_hash"] = get_password_hash(update_data.pop("password"))
-    
+
     # Update user
     for field, value in update_data.items():
         setattr(user, field, value)
-    
+
     await session.commit()
     await session.refresh(user)
-    
+
     return user
 
 
@@ -223,24 +226,24 @@ async def change_password(
         select(User).where(User.id == current_user_id)
     )
     user = result.scalar_one_or_none()
-    
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
+
     # Verify current password
     if not verify_password(password_data.current_password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Incorrect current password"
         )
-    
+
     # Update password
     user.password_hash = get_password_hash(password_data.new_password)
     await session.commit()
-    
+
     return {"message": "Password updated successfully"}
 
 
@@ -309,17 +312,17 @@ async def delete_current_user(
         select(User).where(User.id == current_user_id)
     )
     user = result.scalar_one_or_none()
-    
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
+
     # Delete user (cascade will handle related records)
     await session.delete(user)
     await session.commit()
-    
+
     return {"message": "User account deleted successfully"}
 
 

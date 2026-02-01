@@ -19,6 +19,7 @@ from ...models.base import (
 
 logger = logging.getLogger(__name__)
 
+
 def _select_best_downloads(downloads: list) -> dict:
     """Select the best download for each Spotify track ID."""
     download_map = {}
@@ -46,13 +47,14 @@ def _select_best_downloads(downloads: list) -> dict:
                 download_map[download.spotify_track_id] = download
     return download_map
 
+
 def _load_best_position_dates(session, track_ids: list) -> dict:
     """Load best position dates for chart statistics."""
     if not track_ids:
         return {}
     from sqlalchemy import func
     from sqlmodel import select
-    
+
     rows = session.exec(
         select(
             TrackChartEntry.track_id,
@@ -82,7 +84,9 @@ def _load_best_position_dates(session, track_ids: list) -> dict:
         if chart_date
     }
 
+
 router = APIRouter(prefix="/overview", tags=["tracks"])
+
 
 @router.get("/")
 async def get_tracks_overview(
@@ -99,7 +103,7 @@ async def get_tracks_overview(
 ) -> Dict[str, Any]:
     """
     Return tracks with artist, album, cached YouTube link/status and local file info.
-    
+
     Enhanced version with:
     - After-ID pagination (more efficient than offset)
     - Summary statistics toggle
@@ -123,11 +127,11 @@ async def get_tracks_overview(
         filter = None
     elif filter and filter not in {"withLink", "noLink", "hasFile", "missingFile", "favorites"}:
         raise HTTPException(status_code=400, detail="Invalid filter value")
-    
+
     # Get user ID
     if user_id is None:
         user_id = getattr(request.state, "user_id", None)
-    
+
     # Check for hidden artists
     hidden_exists = None
     if user_id:
@@ -139,7 +143,7 @@ async def get_tracks_overview(
                 )
             )
         )
-    
+
     # Summary statistics (optional)
     summary = None
     if include_summary:
@@ -181,7 +185,7 @@ async def get_tracks_overview(
     # Main query construction
     search_term = normalize_search(search) if search else ""
     is_filtered_query = bool(filter or search_term)
-    
+
     with get_session() as sync_session:
         base_query = (
             select(Track, Artist, Album)
@@ -189,10 +193,10 @@ async def get_tracks_overview(
             .outerjoin(Album, Album.id == Track.album_id)
             .order_by(Track.id.asc())
         )
-        
+
         if hidden_exists is not None:
             base_query = base_query.where(~hidden_exists)
-        
+
         # Apply search filters
         if search_term:
             pattern = f"%{search_term}%"
@@ -203,7 +207,7 @@ async def get_tracks_overview(
                     normalized_column(Album.name).ilike(pattern),
                 )
             )
-        
+
         # Apply specific filters
         if filter:
             link_exists = exists(
@@ -220,7 +224,7 @@ async def get_tracks_overview(
                     & (YouTubeDownload.download_path != "")
                 )
             )
-            
+
             if filter == "favorites":
                 if not user_id:
                     raise HTTPException(status_code=401, detail="User not authenticated")
@@ -240,15 +244,15 @@ async def get_tracks_overview(
                 base_query = base_query.where(file_exists)
             elif filter == "missingFile":
                 base_query = base_query.where(~file_exists)
-        
+
         # After-ID pagination (more efficient than offset)
         if after_id is not None:
             base_query = base_query.where(Track.id > after_id)
         else:
             base_query = base_query.offset(offset)
-        
+
         rows = sync_session.exec(base_query.limit(limit + 1)).all()
-        
+
         # Get filtered total count
         filtered_total = None
         if is_filtered_query:
@@ -259,7 +263,7 @@ async def get_tracks_overview(
             )
             if hidden_exists is not None:
                 count_query = count_query.where(~hidden_exists)
-            
+
             if search_term:
                 pattern = f"%{search_term}%"
                 count_query = count_query.where(
@@ -269,7 +273,7 @@ async def get_tracks_overview(
                         normalized_column(Album.name).ilike(pattern),
                     )
                 )
-            
+
             if filter:
                 if filter == "favorites":
                     if not user_id:
@@ -290,15 +294,15 @@ async def get_tracks_overview(
                     count_query = count_query.where(file_exists)
                 elif filter == "missingFile":
                     count_query = count_query.where(~file_exists)
-            
+
             filtered_total = sync_session.exec(count_query).one()
             filtered_total = int(filtered_total or 0)
-        
+
         # Process results
         raw_rows = rows
         has_more = len(raw_rows) > limit
         track_rows = raw_rows[:limit]
-        
+
         # Get YouTube downloads and chart stats efficiently
         track_ids = [track.id for track, _, _ in track_rows]
         spotify_ids = [track.spotify_id for track, _, _ in track_rows if track.spotify_id]
@@ -306,20 +310,20 @@ async def get_tracks_overview(
         # Get downloads and chart data
         download_map = {}
         chart_stats_map = {}
-        
+
         if spotify_ids:
             with get_session() as download_session:
                 downloads = download_session.exec(
                     select(YouTubeDownload).where(YouTubeDownload.spotify_track_id.in_(spotify_ids))
                 ).all()
                 download_map = _select_best_downloads(downloads)
-                
+
                 # Get chart statistics
                 from ...models.base import TrackChartStats
                 stats_rows = download_session.exec(
                     select(TrackChartStats).where(TrackChartStats.track_id.in_(track_ids))
                 ).all()
-                
+
                 priority = {"billboard-global-200": 0, "hot-100": 1}
                 for row in stats_rows:
                     current = chart_stats_map.get(row.track_id)
@@ -330,13 +334,13 @@ async def get_tracks_overview(
                     next_rank = priority.get(row.chart_name, 99)
                     if next_rank < current_rank:
                         chart_stats_map[row.track_id] = row
-        
+
         # Get chart dates efficiently
         best_date_map = {}
         if chart_stats_map:
             with get_session() as chart_session:
                 best_date_map = _load_best_position_dates(chart_session, list(chart_stats_map.keys()))
-        
+
         # Build response items
         items = []
         for track, artist, album in track_rows:
@@ -345,24 +349,24 @@ async def get_tracks_overview(
             youtube_status = download.download_status if download else None
             youtube_url = f"https://www.youtube.com/watch?v={youtube_video_id}" if youtube_video_id else None
             file_path = download.download_path if download else None
-            
+
             if verify_files and file_path:
                 file_exists = FsPath(file_path).exists()
             else:
                 file_exists = False
-            
+
             if file_exists:
                 youtube_status = "completed"
             elif youtube_video_id and not youtube_status:
                 youtube_status = "link_found"
-            
+
             chart_stats = chart_stats_map.get(track.id)
             best_date = None
             if chart_stats:
                 best_date = best_date_map.get(
                     (track.id, chart_stats.chart_source, chart_stats.chart_name)
                 )
-            
+
             items.append({
                 "track_id": track.id,
                 "track_name": track.name,
@@ -386,10 +390,10 @@ async def get_tracks_overview(
                 "chart_weeks_top5": chart_stats.weeks_top5 if chart_stats else 0,
                 "chart_weeks_top10": chart_stats.weeks_top10 if chart_stats else 0,
             })
-        
+
         # Determine next_after for pagination
         next_after = track_rows[-1][0].id if track_rows and has_more else after_id
-        
+
         # Build response
         response = {
             "items": items,
@@ -398,14 +402,15 @@ async def get_tracks_overview(
             "has_more": has_more,
             "next_after": next_after if has_more else None,
         }
-        
+
         if summary:
             response["summary"] = summary
-        
+
         if filtered_total is not None:
             response["filtered_total"] = filtered_total
-        
+
         return response
+
 
 @router.get("/metrics")
 async def get_tracks_metrics(
@@ -414,7 +419,7 @@ async def get_tracks_metrics(
     """Get aggregated track metrics."""
     from sqlalchemy import func
     from sqlmodel import select
-    
+
     with get_session() as sync_session:
         total = sync_session.exec(select(func.count(Track.id))).one()
         with_youtube = sync_session.exec(
@@ -427,7 +432,7 @@ async def get_tracks_metrics(
             .join(YouTubeDownload, YouTubeDownload.spotify_track_id == Track.spotify_id)
             .where(YouTubeDownload.download_path.is_not(None))
         ).one()
-        
+
         return {
             "total_tracks": total,
             "tracks_with_youtube": with_youtube,
@@ -435,6 +440,7 @@ async def get_tracks_metrics(
             "tracks_missing_youtube": total - with_youtube,
             "tracks_missing_files": total - with_files,
         }
+
 
 @router.get("/favorites/{user_id}")
 async def get_user_favorites(
@@ -448,7 +454,7 @@ async def get_user_favorites(
     from sqlalchemy import func
     from sqlmodel import select
     from pathlib import Path as FsPath
-    
+
     with get_session() as sync_session:
         base_query = (
             select(Track, Artist, Album)
@@ -462,29 +468,29 @@ async def get_user_favorites(
             .limit(limit)
         )
         rows = sync_session.exec(base_query).all()
-        
+
         # Get YouTube info
         spotify_ids = [track.spotify_id for track, _, _ in rows if track.spotify_id]
-        
+
         download_map = {}
         if spotify_ids:
             downloads = sync_session.exec(
                 select(YouTubeDownload).where(YouTubeDownload.spotify_track_id.in_(spotify_ids))
             ).all()
             download_map = _select_best_downloads(downloads)
-        
+
         items = []
         for track, artist, album in rows:
             download = download_map.get(track.spotify_id) if track.spotify_id else None
             youtube_video_id = (download.youtube_video_id or None) if download else None
             youtube_url = f"https://www.youtube.com/watch?v={youtube_video_id}" if youtube_video_id else None
             file_path = download.download_path if download else None
-            
+
             if verify_files and file_path:
                 file_exists = FsPath(file_path).exists()
             else:
                 file_exists = False
-            
+
             items.append({
                 "track_id": track.id,
                 "track_name": track.name,
@@ -501,14 +507,14 @@ async def get_user_favorites(
                 "local_file_exists": file_exists,
                 "favorited_at": None,  # Would need to join UserFavorite to get created_at
             })
-        
+
         total = sync_session.exec(
             select(func.count(func.distinct(Track.id)))
             .join(UserFavorite, UserFavorite.track_id == Track.id)
             .where(UserFavorite.user_id == user_id)
             .where(UserFavorite.target_type == FavoriteTargetType.TRACK)
         ).one()
-        
+
         return {
             "items": items,
             "offset": offset,

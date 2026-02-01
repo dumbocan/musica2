@@ -633,6 +633,7 @@ async def _local_similar_artists(
             break
     return results
 
+
 def _artist_to_spotify_dict(artist: Artist, size: int = 512) -> dict:
     images = proxy_image_list(_parse_images_field(artist.images), size=size)
     return {
@@ -772,6 +773,7 @@ def _is_confident_artist_match(query: str, candidate: str, score: float) -> bool
     if flat_query and flat_candidate:
         return _token_similarity(flat_query, flat_candidate) >= 0.78
     return False
+
 
 @router.get("/spotify")
 async def search_spotify(
@@ -1470,8 +1472,8 @@ async def search_artist_profile(
         local_artist = (await session.exec(
             select(Artist)
             .where(
-                (Artist.name.ilike(f"%{q}%")) |
-                (Artist.normalized_name == normalized)
+                (Artist.name.ilike(f"%{q}%"))
+                | (Artist.normalized_name == normalized)
             )
             .order_by(desc(Artist.popularity))
             .limit(1)
@@ -1612,6 +1614,7 @@ def search_metrics() -> dict:
     """Search resolution metrics snapshot (local vs external)."""
     return fetch_search_metrics()
 
+
 @router.get("/advanced")
 async def advanced_search(
     request: Request,
@@ -1679,6 +1682,7 @@ async def advanced_search(
         "results": results
     }
 
+
 @router.get("/fuzzy")
 def fuzzy_search(
     query: str = Query(..., description="Fuzzy search query"),
@@ -1728,6 +1732,7 @@ def fuzzy_search(
         }
     finally:
         session.close()
+
 
 @router.get("/by-tags")
 def search_by_tags(
@@ -1784,6 +1789,7 @@ def search_by_tags(
     finally:
         session.close()
 
+
 @router.get("/by-rating-range")
 def search_by_rating_range(
     min_rating: int = Query(0, description="Minimum rating (0-5)"),
@@ -1818,6 +1824,7 @@ def search_by_rating_range(
         }
     finally:
         session.close()
+
 
 @router.get("/combined")
 def combined_search(

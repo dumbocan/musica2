@@ -67,7 +67,7 @@ async def get_album_from_spotify(
     request: Request,
     spotify_id: str = Path(..., description="Spotify album ID"),
 ):
-    """Get album details and tracks directly from Spotify."""
+    """DB-first album detail; fetch from Spotify only if missing."""
     user_id = getattr(request.state, "user_id", None) if request else None
     album_payload = None
     with get_session() as session:
@@ -93,22 +93,10 @@ async def get_album_from_spotify(
 
     if not settings.SPOTIFY_CLIENT_ID or not settings.SPOTIFY_CLIENT_SECRET:
         return album_payload if album_payload is not None else {}
+
     try:
         tracks_timeout = 12.0
         album_timeout = 10.0
-        if local_album and album_payload:
-            tracks = await _safe_timed(
-                "Spotify album tracks fetch",
-                spotify_client.get_album_tracks(spotify_id),
-                tracks_timeout,
-                [],
-            )
-            if tracks:
-                album_payload["tracks"] = tracks
-                for track_data in tracks:
-                    save_track(track_data, local_album.id, local_album.artist_id)
-            return album_payload
-
         album_task = asyncio.create_task(
             _safe_timed(
                 "Spotify album fetch",
@@ -131,25 +119,33 @@ async def get_album_from_spotify(
         tracks = await tracks_task
         if tracks:
             album["tracks"] = tracks
-        album["images"] = proxy_image_list(album.get("images", []), size=512)
-        # Enrich with Last.fm wiki if possible
-        try:
-            artist_name = (album.get("artists") or [{}])[0].get("name")
-            album_name = album.get("name")
-            if artist_name and album_name and settings.LASTFM_API_KEY:
-                lfm_info = await _safe_timed(
-                    "Last.fm album info",
-                    lastfm_client.get_album_info(artist_name, album_name),
-                    6.0,
-                    {},
-                )
-                album["lastfm"] = lfm_info
-        except Exception:
-            album["lastfm"] = {}
-        if local_album and tracks:
-            for track_data in tracks:
-                save_track(track_data, local_album.id, local_album.artist_id)
-        return album
+
+        saved_album = await save_album(album)
+        for track_data in tracks:
+            save_track(track_data, saved_album.id, saved_album.artist_id)
+
+        with get_session() as session:
+            local_album = session.exec(select(Album).where(Album.id == saved_album.id)).first()
+            artist = session.exec(select(Artist).where(Artist.id == saved_album.artist_id)).first()
+            local_tracks = session.exec(select(Track).where(Track.album_id == saved_album.id)).all()
+        if local_album:
+            album_payload = _album_from_local(local_album, artist, local_tracks)
+            if settings.LASTFM_API_KEY:
+                try:
+                    artist_name = (album.get("artists") or [{}])[0].get("name")
+                    album_name = album.get("name")
+                    if artist_name and album_name:
+                        lfm_info = await _safe_timed(
+                            "Last.fm album info",
+                            lastfm_client.get_album_info(artist_name, album_name),
+                            6.0,
+                            {},
+                        )
+                        album_payload["lastfm"] = lfm_info
+                except Exception:
+                    album_payload["lastfm"] = {}
+            return album_payload
+        return {}
     except HTTPException:
         raise
     except Exception as e:
@@ -163,7 +159,7 @@ async def get_album_tracks(
     request: Request,
     spotify_id: str = Path(..., description="Spotify album ID"),
 ) -> List[dict]:
-    """Get all tracks for an album via Spotify API."""
+    """DB-first album tracks; fetch from Spotify only if missing."""
     user_id = getattr(request.state, "user_id", None) if request else None
     local_album = None
     with get_session() as session:
@@ -181,6 +177,8 @@ async def get_album_tracks(
             tracks = session.exec(select(Track).where(Track.album_id == local_album.id)).all()
             if tracks:
                 return [_track_from_local(track, artist) for track in tracks]
+    if not settings.SPOTIFY_CLIENT_ID or not settings.SPOTIFY_CLIENT_SECRET:
+        return []
     try:
         tracks = await _safe_timed(
             "Spotify album tracks fetch",
@@ -192,9 +190,18 @@ async def get_album_tracks(
         logger.warning("Spotify album tracks fetch failed for %s: %r", spotify_id, exc, exc_info=True)
         return []
 
-    if local_album and tracks:
-        for track_data in tracks:
-            save_track(track_data, local_album.id, local_album.artist_id)
+    if tracks:
+        if local_album:
+            for track_data in tracks:
+                save_track(track_data, local_album.id, local_album.artist_id)
+        with get_session() as session:
+            local_album = session.exec(select(Album).where(Album.spotify_id == spotify_id)).first()
+            if not local_album:
+                return tracks
+            artist = session.exec(select(Artist).where(Artist.id == local_album.artist_id)).first()
+            local_tracks = session.exec(select(Track).where(Track.album_id == local_album.id)).all()
+            if local_tracks:
+                return [_track_from_local(track, artist) for track in local_tracks]
     return tracks
 
 

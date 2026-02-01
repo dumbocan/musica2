@@ -11,9 +11,9 @@ from pathlib import Path
 # Add parent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.core.security import create_access_token
-from app.models.base import User, get_engine
-from sqlmodel import Session, select
+from app.core.security import create_access_token  # noqa: E402
+from app.models.base import User, get_engine  # noqa: E402
+from sqlmodel import Session, select  # noqa: E402
 
 
 BASE_URL = "http://localhost:8000"
@@ -68,7 +68,7 @@ def test_record_play(token, track_id=1):
 
 
 def main():
-    import argparse
+    import argparse  # noqa: E402
     parser = argparse.ArgumentParser(description="Test Audio2 API")
     parser.add_argument("endpoint", nargs="?", choices=["health", "most-played", "recent-plays", "record-play", "all"],
                         default="all", help="Endpoint to test")

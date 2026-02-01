@@ -169,10 +169,10 @@ def get_image_path(entity_type: str, entity_id: int, size: int = 512, entity_nam
             sanitized_name = _sanitize_filename(entity_name)
             # Try to find any image path that contains the entity name in the folder structure
             stmt = select(StoredImagePath).where(
-                (StoredImagePath.entity_type == entity_type) &
-                (
-                    (StoredImagePath.path_256.like(f"%/{sanitized_name}/%")) |
-                    (StoredImagePath.path_256.like(f"{sanitized_name}/%"))
+                (StoredImagePath.entity_type == entity_type)
+                & (
+                    (StoredImagePath.path_256.like(f"%/{sanitized_name}/%"))
+                    | (StoredImagePath.path_256.like(f"{sanitized_name}/%"))
                 )
             ).limit(1)
             stored = session.exec(stmt).first()

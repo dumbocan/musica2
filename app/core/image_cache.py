@@ -21,6 +21,7 @@ DEFAULT_IMAGE_QUALITY = 70
 WARM_CACHE_MAX_IMAGES = 3
 WARM_CACHE_CONCURRENCY = 3
 
+
 def _is_safe_url(url: str) -> bool:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:

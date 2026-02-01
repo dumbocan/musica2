@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     MUSIXMATCH_API_KEY: Optional[str] = None
     YOUTUBE_API_KEY: Optional[str] = None
     YOUTUBE_API_KEY_2: Optional[str] = None
+    YTDLP_FALLBACK_ENABLED: bool = False
+    YTDLP_DAILY_LIMIT: int = 120
+    YTDLP_MIN_INTERVAL_SECONDS: float = 2.0
     GITHUB_TOKEN: Optional[str] = None
 
     # Chart scraping (Billboard)
@@ -69,6 +72,11 @@ class Settings(BaseSettings):
     MAINTENANCE_LIBRARY_LOOP_SECONDS: int = 2 * 60 * 60
     MAINTENANCE_LIBRARY_DELAY_SECONDS: float = 0.2
     MAINTENANCE_LIBRARY_TOTAL_TIMEOUT_SECONDS: float = 3.0
+    MAINTENANCE_DAILY_REFRESH_FRACTION: float = 0.15
+    MAINTENANCE_DAILY_REFRESH_MAX_ARTISTS: int = 300
+    MAINTENANCE_DAILY_REFRESH_MAX_ALBUMS: int = 800
+    MAINTENANCE_DAILY_REFRESH_HOUR: int = 3
+    LOG_RETENTION_DAYS: int = 30
     MAINTENANCE_IMAGE_REPAIR_BATCH_SIZE: int = 200
     MAINTENANCE_IMAGE_REPAIR_LOOP_SECONDS: int = 6 * 60 * 60
 

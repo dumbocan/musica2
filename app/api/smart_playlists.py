@@ -12,6 +12,7 @@ from ..crud import (
 
 router = APIRouter(prefix="/smart-playlists", tags=["smart-playlists"])
 
+
 @router.post("/top-rated")
 def create_top_rated_playlist(
     user_id: int = Query(1, description="User ID"),
@@ -29,6 +30,7 @@ def create_top_rated_playlist(
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
 
 @router.post("/most-played")
 def create_most_played_playlist(
@@ -48,6 +50,7 @@ def create_most_played_playlist(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
 @router.post("/favorites")
 def create_favorites_playlist(
     user_id: int = Query(1, description="User ID"),
@@ -65,6 +68,7 @@ def create_favorites_playlist(
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
 
 @router.post("/recently-played")
 def create_recently_played_playlist(
@@ -84,6 +88,7 @@ def create_recently_played_playlist(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
 @router.post("/by-tag")
 def create_by_tag_playlist(
     tag_name: str = Query(..., description="Tag name"),
@@ -102,6 +107,7 @@ def create_by_tag_playlist(
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
 
 @router.post("/discover-weekly")
 def create_discover_weekly_playlist(

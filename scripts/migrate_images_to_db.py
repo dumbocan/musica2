@@ -11,8 +11,8 @@ from pathlib import Path
 # Add parent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.core.image_cache import CACHE_DIR
-from app.core.image_db_store import store_image, IMAGE_STORAGE
+from app.core.image_cache import CACHE_DIR  # noqa: E402
+from app.core.image_db_store import store_image, IMAGE_STORAGE  # noqa: E402
 
 
 def migrate_images(dry_run: bool = True):

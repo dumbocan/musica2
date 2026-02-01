@@ -6,7 +6,10 @@ This module exports all artists-related endpoints through separate router module
 import logging
 from typing import Any, Dict
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+from ...core.db import SessionDep
 
 # Import all sub-routers - direct imports since all modules exist
 from .listing import router as listing_router
@@ -29,6 +32,40 @@ artists_router.include_router(info_router)
 
 
 # Frontend compatibility aliases
+@artists_router.get("/{spotify_id}/info")
+async def get_artist_info_alias(
+    spotify_id: str,
+    session: AsyncSession = Depends(SessionDep),
+) -> Dict[str, Any]:
+    """Alias for /artists/info/{spotify_id}/info."""
+    from .info import get_artist_info
+
+    return await get_artist_info(spotify_id=spotify_id, session=session)
+
+
+@artists_router.get("/{spotify_id}/albums")
+async def get_artist_albums_alias(
+    spotify_id: str,
+    refresh: bool = Query(False, description="Force refresh from Spotify if available"),
+    session: AsyncSession = Depends(SessionDep),
+) -> Any:
+    """Alias for /artists/discography/{spotify_id}/albums."""
+    from .discography import get_artist_albums
+
+    return await get_artist_albums(spotify_id=spotify_id, refresh=refresh, session=session)
+
+
+@artists_router.get("/spotify/{spotify_id}/local")
+async def get_local_artist_by_spotify_id_alias(
+    spotify_id: str,
+    session: AsyncSession = Depends(SessionDep),
+) -> Any:
+    """Alias for /artists/info/spotify/{spotify_id}/local."""
+    from .info import get_local_artist_by_spotify_id
+
+    return await get_local_artist_by_spotify_id(spotify_id=spotify_id, session=session)
+
+
 @artists_router.post("/refresh-missing")
 async def refresh_missing_artists_alias(
     limit: int = Query(200, ge=1, le=1000, description="Artists to refresh"),
@@ -36,9 +73,19 @@ async def refresh_missing_artists_alias(
     use_lastfm: bool = Query(True, description="Use Last.fm for missing metadata"),
 ) -> Dict[str, Any]:
     """Alias for /artists/management/refresh-missing - refresh missing artist metadata."""
-    logger.info(f"[refresh-missing-alias] Starting refresh with limit={limit}, spotify={use_spotify}, lastfm={use_lastfm}")
-    # This is a placeholder - actual implementation is in management router
-    return {"message": "Refresh started", "limit": limit, "use_spotify": use_spotify, "use_lastfm": use_lastfm}
+    logger.info(
+        "[refresh-missing-alias] Starting refresh with limit=%s, spotify=%s, lastfm=%s",
+        limit,
+        use_spotify,
+        use_lastfm,
+    )
+    from .management import refresh_missing_artist_metadata
+
+    return await refresh_missing_artist_metadata(
+        limit=limit,
+        use_spotify=use_spotify,
+        use_lastfm=use_lastfm,
+    )
 
 
 # Export for main.py

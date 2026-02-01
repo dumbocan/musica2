@@ -4,9 +4,10 @@ import logging
 import threading
 import traceback
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Deque, Dict, List, Tuple
 
+from .config import settings
 _BUFFER_MAX = 2000
 _buffer: Deque[Dict[str, object]] = deque(maxlen=_BUFFER_MAX)
 _lock = threading.Lock()
@@ -80,14 +81,30 @@ def install_log_buffer() -> None:
 
 
 def get_log_entries(since_id: int | None, limit: int) -> Tuple[List[Dict[str, object]], int | None]:
+    retention_days = max(1, int(getattr(settings, "LOG_RETENTION_DAYS", 30)))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
     with _lock:
-        items = list(_buffer)
+        # Drop entries older than retention window.
+        items = [entry for entry in _buffer if _entry_is_recent(entry, cutoff)]
     if since_id is not None:
         items = [entry for entry in items if int(entry.get("id", 0)) > since_id]
     if limit and len(items) > limit:
         items = items[-limit:]
     last_id = int(items[-1]["id"]) if items else (int(_buffer[-1]["id"]) if _buffer else None)
     return items, last_id
+
+
+def _entry_is_recent(entry: Dict[str, object], cutoff: datetime) -> bool:
+    ts = entry.get("ts")
+    if not ts:
+        return True
+    try:
+        dt = datetime.fromisoformat(str(ts))
+    except ValueError:
+        return True
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt >= cutoff
 
 
 def clear_log_entries() -> None:

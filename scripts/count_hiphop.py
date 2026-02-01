@@ -7,10 +7,12 @@ import requests
 
 BASE = "http://localhost:8000"
 
+
 def search(term: str, limit: int = 50):
     resp = requests.get(f"{BASE}/search/spotify", params={"q": term, "limit": limit}, timeout=15)
     resp.raise_for_status()
     return resp.json().get("artists", [])
+
 
 def matches_genre(artist):
     disallow = ['tamil', 'kollywood', 'tollywood', 'telugu', 'k-pop', 'kpop', 'pop']
@@ -22,6 +24,7 @@ def matches_genre(artist):
         return False
     return any(any(key in g for key in keywords) for g in genres)
 
+
 def main():
     term = "hip hop"
     artists = search(term, limit=50)
@@ -31,7 +34,8 @@ def main():
     print(f"Matched hip hop filter: {len(matched)}")
     print("Top matched names:")
     for a in matched[:10]:
-        print(f"- {a.get('name')} | followers: {a.get('followers',{}).get('total')} | genres: {', '.join(a.get('genres', []))}")
+        print(f"- {a.get('name')} | followers: {a.get('followers', {}).get('total')} | genres: {', '.join(a.get('genres', []))}")
+
 
 if __name__ == "__main__":
     main()

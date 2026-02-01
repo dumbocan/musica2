@@ -22,6 +22,7 @@ from sqlmodel import select, func, and_
 
 router = APIRouter(prefix="/charts", tags=["charts"])
 
+
 def get_date_range(days: int = None, start_date: str = None, end_date: str = None) -> tuple:
     """Get date range for chart filtering."""
     end = utc_now()
@@ -33,6 +34,7 @@ def get_date_range(days: int = None, start_date: str = None, end_date: str = Non
         end = datetime.fromisoformat(end_date)
 
     return start, end
+
 
 @router.get("/top-tracks")
 def get_top_tracks_chart(
@@ -90,6 +92,7 @@ def get_top_tracks_chart(
         }
     finally:
         session.close()
+
 
 @router.get("/top-artists")
 def get_top_artists_chart(
@@ -149,6 +152,7 @@ def get_top_artists_chart(
     finally:
         session.close()
 
+
 @router.get("/top-albums")
 def get_top_albums_chart(
     limit: int = Query(10, description="Number of albums to return"),
@@ -207,6 +211,7 @@ def get_top_albums_chart(
     finally:
         session.close()
 
+
 @router.get("/top-rated")
 def get_top_rated_chart(
     limit: int = Query(10, description="Number of tracks to return"),
@@ -256,6 +261,7 @@ def get_top_rated_chart(
         }
     finally:
         session.close()
+
 
 @router.get("/play-trends")
 def get_play_trends_chart(
@@ -312,6 +318,7 @@ def get_play_trends_chart(
         }
     finally:
         session.close()
+
 
 @router.get("/tag-popularity")
 def get_tag_popularity_chart(

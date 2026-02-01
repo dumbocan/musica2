@@ -11,10 +11,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
-from app.core.db import get_session
-from app.core.spotify import spotify_client
-from app.core.time_utils import utc_now
-from app.models.base import Artist
+from app.core.db import get_session  # noqa: E402
+from app.core.spotify import spotify_client  # noqa: E402
+from app.core.time_utils import utc_now  # noqa: E402
+from app.models.base import Artist  # noqa: E402
 
 
 @dataclass
@@ -30,9 +30,9 @@ async def run(config: BackfillConfig) -> None:
         artists = session.exec(
             select(Artist)
             .where(
-                (Artist.genres.is_(None)) |
-                (Artist.genres == "") |
-                (Artist.genres == "[]")
+                (Artist.genres.is_(None))
+                | (Artist.genres == "")
+                | (Artist.genres == "[]")
             )
             .order_by(Artist.popularity.desc(), Artist.id.asc())
             .limit(config.limit)

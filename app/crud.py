@@ -293,6 +293,7 @@ def get_track_by_spotify_id(spotify_id: str) -> Optional[Track]:
     finally:
         session.close()
 
+
 def save_track(track_data: dict, album_id: Optional[int] = None, artist_id: Optional[int] = None) -> Track:
     spotify_id = track_data['id']
     track = get_track_by_spotify_id(spotify_id)
@@ -346,6 +347,7 @@ def update_track_lastfm(track_id: int, listeners: int, playcount: int):
         return track
     finally:
         session.close()
+
 
 def update_track_spotify_data(track_id: int, spotify_data: dict):
     """Update track with fresh Spotify data."""
@@ -504,7 +506,6 @@ def unhide_artist_for_user(user_id: int, artist_id: int) -> bool:
         session.close()
 
 
-
 def update_album_spotify_data(album_id: int, spotify_data: dict):
     """Update album with fresh Spotify data."""
     session = get_session()
@@ -522,6 +523,7 @@ def update_album_spotify_data(album_id: int, spotify_data: dict):
     finally:
         session.close()
 
+
 def toggle_track_favorite(track_id: int) -> Track:
     """Toggle favorite status for a track."""
     session = get_session()
@@ -533,6 +535,7 @@ def toggle_track_favorite(track_id: int) -> Track:
         return track
     finally:
         session.close()
+
 
 def set_track_rating(track_id: int, rating: int) -> Track:
     """Set user rating for a track (1-5)."""
@@ -638,6 +641,8 @@ def rate_track(track_id: int, rating: int) -> Optional["Track"]:
         session.close()
 
 # YouTube Download Records
+
+
 def save_youtube_download(youtube_data: dict):
     """Save YouTube download/link record."""
     session = get_session()
@@ -685,6 +690,8 @@ def save_youtube_download(youtube_data: dict):
         session.close()
 
 # Playlists
+
+
 def get_playlist_by_id(playlist_id: int) -> Optional[Playlist]:
     session = get_session()
     try:
@@ -693,6 +700,7 @@ def get_playlist_by_id(playlist_id: int) -> Optional[Playlist]:
         return playlist
     finally:
         session.close()
+
 
 def create_playlist(name: str, description: str = "", user_id: int = 1) -> Playlist:
     """Create a new playlist."""
@@ -723,6 +731,7 @@ def create_playlist(name: str, description: str = "", user_id: int = 1) -> Playl
     finally:
         session.close()
 
+
 def update_playlist(playlist_id: int, name: str = None, description: str = None) -> Optional[Playlist]:
     """Update playlist name and/or description."""
     session = get_session()
@@ -738,6 +747,7 @@ def update_playlist(playlist_id: int, name: str = None, description: str = None)
     finally:
         session.close()
 
+
 def delete_playlist(playlist_id: int) -> bool:
     """Delete playlist and its tracks."""
     session = get_session()
@@ -750,6 +760,7 @@ def delete_playlist(playlist_id: int) -> bool:
         return False
     finally:
         session.close()
+
 
 def add_track_to_playlist(playlist_id: int, track_id: int) -> Optional["PlaylistTrack"]:
     """Add track to playlist."""
@@ -788,6 +799,7 @@ def add_track_to_playlist(playlist_id: int, track_id: int) -> Optional["Playlist
     finally:
         session.close()
 
+
 def remove_track_from_playlist(playlist_id: int, track_id: int) -> bool:
     """Remove track from playlist."""
     session = get_session()
@@ -807,6 +819,8 @@ def remove_track_from_playlist(playlist_id: int, track_id: int) -> bool:
         session.close()
 
 # Tags CRUD
+
+
 def create_tag(name: str, color: str = "#666666") -> Tag:
     """Create a new tag."""
     session = get_session()
@@ -824,6 +838,7 @@ def create_tag(name: str, color: str = "#666666") -> Tag:
     finally:
         session.close()
 
+
 def get_tag_by_id(tag_id: int) -> Optional[Tag]:
     """Get tag by ID."""
     session = get_session()
@@ -831,6 +846,7 @@ def get_tag_by_id(tag_id: int) -> Optional[Tag]:
         return session.exec(select(Tag).where(Tag.id == tag_id)).first()
     finally:
         session.close()
+
 
 def get_tag_by_name(name: str) -> Optional[Tag]:
     """Get tag by name."""
@@ -840,6 +856,7 @@ def get_tag_by_name(name: str) -> Optional[Tag]:
     finally:
         session.close()
 
+
 def get_all_tags() -> List[Tag]:
     """Get all tags."""
     session = get_session()
@@ -847,6 +864,7 @@ def get_all_tags() -> List[Tag]:
         return session.exec(select(Tag)).all()
     finally:
         session.close()
+
 
 def add_tag_to_track(track_id: int, tag_id: int) -> Optional[TrackTag]:
     """Add tag to track."""
@@ -873,6 +891,7 @@ def add_tag_to_track(track_id: int, tag_id: int) -> Optional[TrackTag]:
     finally:
         session.close()
 
+
 def remove_tag_from_track(track_id: int, tag_id: int) -> bool:
     """Remove tag from track."""
     session = get_session()
@@ -891,6 +910,7 @@ def remove_tag_from_track(track_id: int, tag_id: int) -> bool:
         return False
     finally:
         session.close()
+
 
 def get_track_tags(track_id: int) -> List[Tag]:
     """Get all tags for a track."""
@@ -911,6 +931,8 @@ def get_track_tags(track_id: int) -> List[Tag]:
         session.close()
 
 # Play History CRUD
+
+
 def record_play(track_id: int, user_id: int = 1) -> Optional[PlayHistory]:
     """Record a track play in history."""
     session = get_session()
@@ -930,6 +952,7 @@ def record_play(track_id: int, user_id: int = 1) -> Optional[PlayHistory]:
     finally:
         session.close()
 
+
 def get_play_history(track_id: int, limit: int = 10) -> List[PlayHistory]:
     """Get play history for a track."""
     session = get_session()
@@ -943,6 +966,7 @@ def get_play_history(track_id: int, limit: int = 10) -> List[PlayHistory]:
     finally:
         session.close()
 
+
 def get_recent_plays(limit: int = 20) -> List[PlayHistory]:
     """Get most recent plays across all tracks."""
     session = get_session()
@@ -954,6 +978,7 @@ def get_recent_plays(limit: int = 20) -> List[PlayHistory]:
         ).all()
     finally:
         session.close()
+
 
 def get_most_played_tracks(limit: int = 10) -> List[dict]:
     """Get most played tracks with play count."""
@@ -989,6 +1014,8 @@ def get_most_played_tracks(limit: int = 10) -> List[dict]:
         session.close()
 
 # Algorithm Learning CRUD
+
+
 def record_artist_search(user_id: int, artist_name: str):
     """Record when a user searches for an artist to train algorithm."""
     session = get_session()
@@ -1016,11 +1043,12 @@ def record_artist_search(user_id: int, artist_name: str):
                 compatibility_score=0.5  # Default neutral score
             )
             session.add(learning)
-        
+
         session.commit()
         return True
     finally:
         session.close()
+
 
 def get_user_learned_artists(user_id: int, limit: int = 10):
     """Get artists that user has searched for, sorted by search frequency."""
@@ -1036,6 +1064,7 @@ def get_user_learned_artists(user_id: int, limit: int = 10):
     finally:
         session.close()
 
+
 def update_artist_rating(user_id: int, artist_name: str, rating: int):
     """Update user rating for an artist (1-5 stars)."""
     session = get_session()
@@ -1049,13 +1078,13 @@ def update_artist_rating(user_id: int, artist_name: str, rating: int):
         if learning:
             learning.user_rating = rating
             learning.last_searched = utc_now()
-            
+
             # Update algorithm weights based on rating
             if rating >= 4:
                 learning.compatibility_score = min(1.0, learning.compatibility_score + 0.2)
             elif rating <= 2:
                 learning.compatibility_score = max(0.0, learning.compatibility_score - 0.2)
-            
+
             session.add(learning)
             session.commit()
             return learning
@@ -1076,6 +1105,7 @@ def update_artist_rating(user_id: int, artist_name: str, rating: int):
     finally:
         session.close()
 
+
 def mark_artist_as_favorite(user_id: int, artist_name: str, is_favorite: bool = True):
     """Mark/unmark an artist as favorite for the user."""
     session = get_session()
@@ -1089,11 +1119,11 @@ def mark_artist_as_favorite(user_id: int, artist_name: str, is_favorite: bool = 
         if learning:
             learning.is_favorite = is_favorite
             learning.last_searched = utc_now()
-            
+
             # Boost compatibility score for favorites
             if is_favorite:
                 learning.compatibility_score = min(1.0, learning.compatibility_score + 0.3)
-            
+
             session.add(learning)
             session.commit()
             return learning
@@ -1114,6 +1144,7 @@ def mark_artist_as_favorite(user_id: int, artist_name: str, is_favorite: bool = 
     finally:
         session.close()
 
+
 def get_user_preferred_genres(user_id: int):
     """Extract preferred genres from user's learned artists."""
     session = get_session()
@@ -1128,14 +1159,14 @@ def get_user_preferred_genres(user_id: int):
 
         # Get actual artists from database to extract genres
         artist_names = [la.artist_name for la in learned_artists]
-        
+
         genres = []
         for artist_name in artist_names:
             artist = session.exec(
                 select(Artist)
                 .where(Artist.name.ilike(f"%{artist_name}%"))
             ).first()
-            
+
             if artist and artist.genres:
                 try:
                     artist_genres = json.loads(artist.genres) if isinstance(artist.genres, str) else artist.genres
@@ -1143,13 +1174,14 @@ def get_user_preferred_genres(user_id: int):
                         genres.extend(artist_genres)
                 except Exception:
                     pass
-        
+
         # Count genre frequencies
         from collections import Counter
         genre_counts = Counter(genres)
         return genre_counts.most_common(5)
     finally:
         session.close()
+
 
 def get_recommendations_for_user(user_id: int, limit: int = 10):
     """Generate artist recommendations based on user's learned preferences."""
@@ -1177,7 +1209,7 @@ def get_recommendations_for_user(user_id: int, limit: int = 10):
                 .where(Artist.genres.ilike(f"%{learned.artist_name.lower()}%"))
                 .limit(3)
             ).all()
-            
+
             for artist in similar:
                 if artist.name.lower() != learned.artist_name.lower():
                     recommendations.append({
@@ -1185,7 +1217,7 @@ def get_recommendations_for_user(user_id: int, limit: int = 10):
                         "reason": f"Similar to {learned.artist_name}",
                         "confidence": learned.compatibility_score
                     })
-        
+
         # Deduplicate
         seen = set()
         unique_recs = []
@@ -1194,7 +1226,7 @@ def get_recommendations_for_user(user_id: int, limit: int = 10):
             if artist_id not in seen:
                 seen.add(artist_id)
                 unique_recs.append(rec)
-        
+
         return unique_recs[:limit]
     finally:
         session.close()
@@ -1227,6 +1259,7 @@ def generate_top_rated_playlist(user_id: int = 1, name: str = "Top Rated", limit
     finally:
         session.close()
 
+
 def generate_most_played_playlist(user_id: int = 1, name: str = "Most Played", limit: int = 20) -> Optional[Playlist]:
     """Generate a playlist of most played tracks."""
     session = get_session()
@@ -1248,6 +1281,7 @@ def generate_most_played_playlist(user_id: int = 1, name: str = "Most Played", l
         return playlist
     finally:
         session.close()
+
 
 def generate_favorites_playlist(user_id: int = 1, name: str = "Favorites", limit: int = 50) -> Optional[Playlist]:
     """Generate a playlist of favorite tracks."""
@@ -1274,6 +1308,7 @@ def generate_favorites_playlist(user_id: int = 1, name: str = "Favorites", limit
     finally:
         session.close()
 
+
 def generate_recently_played_playlist(user_id: int = 1, name: str = "Recently Played", limit: int = 20) -> Optional[Playlist]:
     """Generate a playlist of recently played tracks."""
     session = get_session()
@@ -1295,6 +1330,7 @@ def generate_recently_played_playlist(user_id: int = 1, name: str = "Recently Pl
         return playlist
     finally:
         session.close()
+
 
 def generate_by_tag_playlist(tag_name: str, user_id: int = 1, name: str = None, limit: int = 30) -> Optional[Playlist]:
     """Generate a playlist of tracks with specific tag."""
@@ -1330,6 +1366,7 @@ def generate_by_tag_playlist(tag_name: str, user_id: int = 1, name: str = None, 
         return playlist
     finally:
         session.close()
+
 
 def generate_discover_weekly_playlist(user_id: int = 1, name: str = "Discover Weekly", limit: int = 30) -> Optional[Playlist]:
     """Generate a discover weekly style playlist with mixed criteria."""

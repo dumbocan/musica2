@@ -17,6 +17,7 @@ from ...models.base import Track, Artist, Album, YouTubeDownload, PlayHistory
 
 logger = logging.getLogger(__name__)
 
+
 def _select_best_downloads(
     downloads: list,
 ) -> dict:
@@ -46,7 +47,9 @@ def _select_best_downloads(
                 download_map[download.spotify_track_id] = download
     return download_map
 
+
 router = APIRouter(prefix="/playback", tags=["tracks"])
+
 
 @router.post("/play/{track_id}")
 def record_track_play(
@@ -56,7 +59,7 @@ def record_track_play(
 ) -> Dict[str, Any]:
     """Record a play for a track (counts in play history)."""
     from ...crud import record_play
-    
+
     user_id = getattr(request.state, "user_id", None)
     if user_id is None:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -67,6 +70,7 @@ def record_track_play(
         "message": "Play recorded",
         "play_history": play_history.dict(),
     }
+
 
 @router.get("/most-played")
 def get_most_played_tracks(
@@ -81,7 +85,7 @@ def get_most_played_tracks(
     user_id = getattr(request.state, "user_id", None)
     if user_id is None:
         raise HTTPException(status_code=401, detail="Authentication required")
-    
+
     # Get play history aggregated
     with get_session() as sync_session:
         rows = sync_session.exec(
@@ -95,10 +99,10 @@ def get_most_played_tracks(
             .order_by(func.count(PlayHistory.id).desc(), func.max(PlayHistory.played_at).desc())
             .limit(limit)
         ).all()
-        
+
         if not rows:
             return {"items": []}
-        
+
         # Get track details
         track_ids = [row[0] for row in rows]
         track_rows = sync_session.exec(
@@ -107,14 +111,14 @@ def get_most_played_tracks(
             .outerjoin(Album, Album.id == Track.album_id)
             .where(Track.id.in_(track_ids))
         ).all()
-        
+
         track_map = {track.id: (track, artist, album) for track, artist, album in track_rows}
         spotify_ids = [
             track.spotify_id
             for track, _, _ in track_rows
             if track.spotify_id
         ]
-        
+
         # Get YouTube downloads
         downloads = []
         if spotify_ids:
@@ -162,6 +166,7 @@ def get_most_played_tracks(
                 })
 
     return {"items": items}
+
 
 @router.get("/recent-plays")
 def get_recent_plays(
@@ -236,6 +241,7 @@ def get_recent_plays(
 
     return {"items": items}
 
+
 @router.get("/chart-stats")
 def get_chart_statistics(
     spotify_ids: str | None = Query(None, description="Comma-separated Spotify track IDs"),
@@ -244,7 +250,7 @@ def get_chart_statistics(
 ) -> Dict[str, Any]:
     """Get chart statistics for tracks."""
     from ...models.base import TrackChartStats
-    
+
     spotify_list = [t for t in (spotify_ids or "").split(",") if t]
     track_id_list = [int(t) for t in (track_ids or "").split(",") if t.isdigit()]
     if not spotify_list and not track_id_list:

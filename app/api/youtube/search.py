@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/search", tags=["youtube"])
 
+
 @router.get("/")
 async def search_youtube(
     query: str = Query(..., description="Search query"),

@@ -12,6 +12,7 @@ from ..models.base import SQLModel  # Import to access all models
 
 logger = logging.getLogger(__name__)
 
+
 def _build_async_url(url: str) -> str:
     """Convert sync URL to an async-compatible URL."""
     if "postgresql+psycopg2" in url:

@@ -2,48 +2,50 @@
 Maintenance logs endpoints.
 """
 
-import logging
-from typing import Dict, Any
+from typing import Any, Dict
 
-from fastapi import APIRouter, Query, Depends
-from sqlmodel.ext.asyncio.session import AsyncSession
+from fastapi import APIRouter, Query
 
-from ...core.db import SessionDep
-
-logger = logging.getLogger(__name__)
+from ...core.log_buffer import clear_log_entries, get_log_entries
 
 router = APIRouter(prefix="/logs", tags=["maintenance"])
 
+
+@router.get("")
 @router.get("/")
 async def get_maintenance_logs(
-    limit: int = Query(100, ge=1, le=1000, description="Number of log entries"),
-    level: str = Query(None, description="Log level filter"),
-    session: AsyncSession = Depends(SessionDep)
+    since_id: int | None = Query(None, ge=0),
+    limit: int = Query(200, ge=1, le=2000),
+    scope: str = Query("all", pattern="^(all|maintenance|errors)$"),
 ) -> Dict[str, Any]:
     """Get maintenance logs."""
-    # TODO: Implement logs retrieval
-    return {"logs": [], "total": 0, "level": level}
+    items, last_id = get_log_entries(since_id, limit)
+    if scope == "maintenance":
+        tokens = ("[maintenance]", "[discography]", "[audit]", "[youtube_prefetch]", "backfill", "refresh-missing")
+        prefixes = (
+            "app.core.maintenance",
+            "app.api.maintenance",
+            "app.services.library_expansion",
+            "app.core.data_freshness",
+            "app.core.youtube_prefetch",
+        )
+        filtered = []
+        for entry in items:
+            logger_name = str(entry.get("logger") or "")
+            message = str(entry.get("message") or "")
+            if logger_name.startswith(prefixes):
+                filtered.append(entry)
+                continue
+            if any(token in message for token in tokens):
+                filtered.append(entry)
+        items = filtered
+    elif scope == "errors":
+        items = [entry for entry in items if str(entry.get("level") or "").upper() in {"ERROR", "WARNING"}]
+    return {"items": items, "last_id": last_id}
+
 
 @router.post("/clear")
-async def clear_maintenance_logs(
-    session: AsyncSession = Depends(SessionDep)
-) -> Dict[str, Any]:
+async def clear_maintenance_logs() -> Dict[str, Any]:
     """Clear maintenance logs."""
-    # TODO: Implement logs clearing
-    return {"message": "Logs cleared"}
-
-@router.post("/audit")
-async def audit_library(
-    session: AsyncSession = Depends(SessionDep)
-) -> Dict[str, Any]:
-    """Audit library for consistency issues."""
-    # TODO: Implement library audit
-    return {"message": "Library audit started"}
-
-@router.get("/dashboard")
-async def get_maintenance_dashboard(
-    session: AsyncSession = Depends(SessionDep)
-) -> Dict[str, Any]:
-    """Get maintenance dashboard data."""
-    # TODO: Implement maintenance dashboard
-    return {"status": "operational", "metrics": {}}
+    clear_log_entries()
+    return {"cleared": True}

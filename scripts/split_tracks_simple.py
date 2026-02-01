@@ -3,19 +3,19 @@
 Script simple para crear la estructura modular de tracks.py
 """
 
-import os
 from pathlib import Path
 import sys
+
 
 def main():
     print("🏗️ Creando estructura modular para TRACKS.PY")
     print("=" * 50)
-    
+
     # Directorios
     app_dir = Path("app/api")
     tracks_dir = app_dir / "tracks"
     tracks_dir.mkdir(exist_ok=True)
-    
+
     # 1. Crear __init__.py
     init_content = '''"""
 Tracks endpoints module.
@@ -44,11 +44,11 @@ router.include_router(favorites_router)
 # Export main router for app/main.py
 __all__ = ["router"]
 '''
-    
+
     with open(tracks_dir / "__init__.py", "w", encoding="utf-8") as f:
         f.write(init_content)
         print("✅ Creado: tracks/__init__.py")
-    
+
     print("📋 Estructura tracks modular creada:")
     print("   app/api/tracks/")
     print("   ├── __init__.py")
@@ -56,7 +56,7 @@ __all__ = ["router"]
     print("   ├── playback.py (reproducción)")
     print("   ├── downloads.py (descargas)")
     print("   └── favorites.py (favoritos)")
-    
+
     # Mensaje final
     print("\n🎯 ¡LISTO PARA LA FASE 2!")
     print("\n📋 Próximos pasos sugeridos:")
@@ -66,8 +66,9 @@ __all__ = ["router"]
     print("      - python3 scripts/split_architecture_quick.py --scaffold youtube")
     print("      - python3 scripts/split_architecture_quick.py --scaffold maintenance")
     print("\n📋 La Fase 1 (Críticas) está completada!")
-    
+
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

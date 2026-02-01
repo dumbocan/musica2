@@ -21,10 +21,12 @@ class FavoriteTargetType(str, Enum):
     ALBUM = "album"
     TRACK = "track"
 
+
 class SearchEntityType(str, Enum):
     ARTIST = "artist"
     ALBUM = "album"
     TRACK = "track"
+
 
 class User(SQLModel, table=True):
     """Complete user model for multiuser system."""
@@ -210,6 +212,7 @@ class UserFavorite(SQLModel, table=True):
         UniqueConstraint("user_id", "target_type", "track_id"),
     )
 
+
 class UserHiddenArtist(SQLModel, table=True):
     """Artists hidden by a user from their personal view."""
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -248,6 +251,7 @@ class YouTubeDownload(SQLModel, table=True):
     def is_failed(self) -> bool:
         return self.download_status in ["error", "failed"]
 
+
 class Tag(SQLModel, table=True):
     """Tag system for tracks."""
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -258,6 +262,7 @@ class Tag(SQLModel, table=True):
     # Relationships
     tracks: Optional[List["TrackTag"]] = Relationship(back_populates="tag")
 
+
 class TrackTag(SQLModel, table=True):
     """Many-to-many relationship between tracks and tags."""
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -267,6 +272,7 @@ class TrackTag(SQLModel, table=True):
 
     track: Track = Relationship(back_populates="tags")
     tag: Tag = Relationship(back_populates="tracks")
+
 
 class UserProfile(SQLModel, table=True):
     """Advanced user profiles for personalized recommendations."""
@@ -432,6 +438,7 @@ class SpotifyArtistResponse(SQLModel):
     popularity: int
     followers: dict = {'total': 0}  # total = followers
 
+
 class SpotifyTrackResponse(SQLModel):
     id: str
     name: str
@@ -490,4 +497,3 @@ class StoredImagePath(SQLModel, table=True):
     __table_args__ = (
         UniqueConstraint("entity_type", "entity_id"),
     )
-

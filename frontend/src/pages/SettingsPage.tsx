@@ -7,10 +7,15 @@ type DashboardStats = {
   albums_total: number;
   tracks_total: number;
   artists_missing_images: number;
+  albums_missing_images: number;
   albums_without_tracks: number;
   tracks_without_youtube: number;
+  tracks_with_spotify_id: number;
+  tracks_with_local_file: number;
   youtube_links_total: number;
   youtube_downloads_completed: number;
+  youtube_links_pending: number;
+  youtube_links_failed: number;
 };
 
 export function SettingsPage() {
@@ -461,43 +466,34 @@ export function SettingsPage() {
     { label: 'Artistas en BD', value: dashboardStats?.artists_total },
     { label: 'Álbumes en BD', value: dashboardStats?.albums_total },
     { label: 'Pistas en BD', value: dashboardStats?.tracks_total },
-    { label: 'Álbumes sin imagen', value: dashboardStats?.artists_missing_images },
+    { label: 'Artistas sin imagen', value: dashboardStats?.artists_missing_images },
+    { label: 'Álbumes sin imagen', value: dashboardStats?.albums_missing_images },
     { label: 'Álbumes sin tracks', value: dashboardStats?.albums_without_tracks },
-    { label: 'Pistas sin link YouTube', value: dashboardStats?.tracks_without_youtube },
-    { label: 'Links YouTube', value: dashboardStats?.youtube_links_total },
-    { label: 'Descargas completadas', value: dashboardStats?.youtube_downloads_completed },
+    { label: 'Tracks sin link YouTube', value: dashboardStats?.tracks_without_youtube },
+    { label: 'Tracks con archivo local', value: dashboardStats?.tracks_with_local_file },
   ];
   const tracksTotal = Math.max(dashboardStats?.tracks_total ?? 0, 1);
+  const tracksWithSpotify = Math.max(dashboardStats?.tracks_with_spotify_id ?? 0, 1);
   const artistsTotal = Math.max(dashboardStats?.artists_total ?? 0, 1);
+  const albumsTotal = Math.max(dashboardStats?.albums_total ?? 0, 1);
   const youtubeLinks = Math.max(dashboardStats?.youtube_links_total ?? 0, 0);
-  const tracksWithoutYoutube = dashboardStats?.tracks_without_youtube ?? 0;
-  const artistsMissingImages = dashboardStats?.artists_missing_images ?? 0;
-  const albumsWithoutTracks = dashboardStats?.albums_without_tracks ?? 0;
-  const albumTotal = Math.max(dashboardStats?.albums_total ?? 0, 1);
   const downloadsCompleted = dashboardStats?.youtube_downloads_completed ?? 0;
-  const linksPending = Math.max(youtubeLinks - downloadsCompleted, 0);
-  const albumsWithTracks = Math.max(albumTotal - albumsWithoutTracks, 0);
+  const linksPending = dashboardStats?.youtube_links_pending ?? Math.max(youtubeLinks - downloadsCompleted, 0);
+  const linksFailed = dashboardStats?.youtube_links_failed ?? 0;
+  const artistsMissingImages = dashboardStats?.artists_missing_images ?? 0;
+  const albumsMissingImages = dashboardStats?.albums_missing_images ?? 0;
+  const albumsWithoutTracks = dashboardStats?.albums_without_tracks ?? 0;
+  const tracksWithLocalFile = dashboardStats?.tracks_with_local_file ?? 0;
+  const albumsWithTracks = Math.max(albumsTotal - albumsWithoutTracks, 0);
+  const artistsWithImages = Math.max(artistsTotal - artistsMissingImages, 0);
+  const albumsWithImages = Math.max(albumsTotal - albumsMissingImages, 0);
   const radialData = [
     {
-      label: 'Tracks con link',
+      label: 'Links YouTube',
       value: youtubeLinks,
-      total: tracksTotal,
+      total: tracksWithSpotify,
       color: 'hsl(165, 74%, 48%)',
-      helper: 'links / pistas',
-    },
-    {
-      label: 'Tracks sin link',
-      value: tracksWithoutYoutube,
-      total: tracksTotal,
-      color: 'hsl(6, 89%, 53%)',
-      helper: 'sin link / pistas',
-    },
-    {
-      label: 'Links pendientes',
-      value: linksPending,
-      total: Math.max(youtubeLinks, 1),
-      color: 'hsl(15, 84%, 56%)',
-      helper: 'pendientes / links',
+      helper: 'links / tracks Spotify',
     },
     {
       label: 'Descargas completadas',
@@ -507,32 +503,46 @@ export function SettingsPage() {
       helper: 'completadas / links',
     },
     {
+      label: 'Links pendientes',
+      value: linksPending,
+      total: Math.max(youtubeLinks, 1),
+      color: 'hsl(15, 84%, 56%)',
+      helper: 'pendientes / links',
+    },
+    {
+      label: 'Links fallidos',
+      value: linksFailed,
+      total: Math.max(youtubeLinks, 1),
+      color: 'hsl(6, 89%, 53%)',
+      helper: 'fallidos / links',
+    },
+    {
+      label: 'Archivos locales',
+      value: tracksWithLocalFile,
+      total: tracksTotal,
+      color: 'hsl(220, 72%, 54%)',
+      helper: 'locales / tracks',
+    },
+    {
       label: 'Artistas con imagen',
-      value: Math.max(artistsTotal - artistsMissingImages, 0),
+      value: artistsWithImages,
       total: artistsTotal,
       color: 'hsl(141, 76%, 35%)',
       helper: 'con imagen / total',
     },
     {
-      label: 'Artistas sin imagen',
-      value: artistsMissingImages,
-      total: artistsTotal,
-      color: 'hsl(0, 85%, 55%)',
-      helper: 'sin imagen / total',
+      label: 'Álbumes con imagen',
+      value: albumsWithImages,
+      total: albumsTotal,
+      color: 'hsl(197, 73%, 46%)',
+      helper: 'con imagen / total',
     },
     {
       label: 'Álbumes con tracks',
       value: albumsWithTracks,
-      total: albumTotal,
+      total: albumsTotal,
       color: 'hsl(205, 79%, 52%)',
       helper: 'con tracks / total',
-    },
-    {
-      label: 'Álbumes sin tracks',
-      value: albumsWithoutTracks,
-      total: albumTotal,
-      color: 'hsl(290, 68%, 53%)',
-      helper: 'sin tracks / total',
     },
   ];
 

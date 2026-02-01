@@ -44,12 +44,19 @@ class YouTubeClient:
         self._quota_reset_hour = 4
         self._daily_request_limit = 80  # Leave 20 for user browsing
         self._quota_warned_today = False
+        self._ytdlp_request_count = 0
+        self._ytdlp_request_count_started_at = self._get_last_reset_anchor(datetime.now()).timestamp()
+        self._ytdlp_last_request_time = 0.0
+        self._ytdlp_daily_limit = settings.YTDLP_DAILY_LIMIT
+        self._ytdlp_min_interval_seconds = settings.YTDLP_MIN_INTERVAL_SECONDS
         now = datetime.now()
         last_reset = self._get_last_reset_anchor(now)
         self._request_count_started_at = last_reset.timestamp()
 
-        if not self.api_key:
+        if not self.api_key and not settings.YTDLP_FALLBACK_ENABLED:
             raise ValueError("YouTube API key not configured")
+        if not self.api_key and settings.YTDLP_FALLBACK_ENABLED:
+            logger.warning("YouTube API key missing; using yt-dlp fallback only")
 
         self._noise_tokens = {
             "official",
@@ -246,6 +253,103 @@ class YouTubeClient:
         self._request_count_started_at = last_reset.timestamp()
         self._request_count = 0
 
+    def _maybe_reset_ytdlp_counter(self) -> None:
+        now = datetime.now()
+        last_reset = datetime.fromtimestamp(self._ytdlp_request_count_started_at)
+        next_reset = last_reset + timedelta(days=1)
+        if now < next_reset:
+            return
+        while now >= next_reset:
+            last_reset = next_reset
+            next_reset = last_reset + timedelta(days=1)
+        self._ytdlp_request_count_started_at = last_reset.timestamp()
+        self._ytdlp_request_count = 0
+
+    async def _ytdlp_throttle(self) -> None:
+        now = time.monotonic()
+        wait_time = self._ytdlp_min_interval_seconds - (now - self._ytdlp_last_request_time)
+        if wait_time > 0:
+            await asyncio.sleep(wait_time)
+        self._ytdlp_last_request_time = time.monotonic()
+
+    def _ytdlp_can_request(self) -> bool:
+        self._maybe_reset_ytdlp_counter()
+        return self._ytdlp_request_count < self._ytdlp_daily_limit
+
+    def _ytdlp_search_sync(self, query: str, max_results: int) -> List[Dict[str, Any]]:
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "extract_flat": "in_playlist",
+            "default_search": f"ytsearch{max_results}",
+            "noplaylist": True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(query, download=False)
+        entries = info.get("entries") or []
+        results: List[Dict[str, Any]] = []
+        for entry in entries:
+            video_id = entry.get("id")
+            if not video_id:
+                continue
+            results.append(
+                {
+                    "video_id": video_id,
+                    "title": entry.get("title") or "",
+                    "description": entry.get("description") or "",
+                    "channel_title": entry.get("uploader") or entry.get("channel") or "",
+                    "published_at": entry.get("upload_date"),
+                    "thumbnails": entry.get("thumbnails"),
+                    "url": entry.get("url") or f"https://www.youtube.com/watch?v={video_id}",
+                }
+            )
+        return results
+
+    async def search_music_videos_ytdlp(
+        self,
+        artist: str,
+        track: str,
+        album: Optional[str] = None,
+        max_results: int = 5,
+    ) -> List[Dict[str, Any]]:
+        if not settings.YTDLP_FALLBACK_ENABLED:
+            return []
+        if not self._ytdlp_can_request():
+            logger.warning("yt-dlp daily limit reached (%d/%d)", self._ytdlp_request_count, self._ytdlp_daily_limit)
+            return []
+
+        cache_key = self._cache_key(f"ytdlp:{artist}", track, album, max_results)
+        cached = self._get_cached_search(cache_key)
+        if cached is not None:
+            return cached
+
+        queries = []
+        if album:
+            queries.append(f"{artist} {track} {album} official video")
+        queries.append(f"{artist} {track} official video")
+        queries.append(f"{artist} {track}")
+
+        fetch_results = max(max_results, 5)
+        for query in queries:
+            await self._ytdlp_throttle()
+            self._maybe_reset_ytdlp_counter()
+            self._ytdlp_request_count += 1
+            try:
+                videos = await asyncio.to_thread(self._ytdlp_search_sync, query, fetch_results)
+            except Exception as exc:
+                logger.warning("yt-dlp search failed for query %s: %r", query, exc)
+                continue
+
+            filtered = self._filter_music_videos(videos, artist, track)
+            if filtered:
+                trimmed = filtered[:max_results]
+                self._set_cached_search(cache_key, trimmed)
+                return trimmed
+
+        self._set_cached_search(cache_key, [])
+        return []
+
     def get_usage(self) -> Dict[str, Any]:
         self._maybe_reset_counter()
         last_reset = datetime.fromtimestamp(self._request_count_started_at)
@@ -416,15 +520,26 @@ class YouTubeClient:
             queries.append(f"{artist} {track}")
 
         fetch_results = max(max_results, 5)
-        for query in queries:
-            videos = await self.search_videos(query, fetch_results)
-            if not videos:
-                continue
-            filtered = self._filter_music_videos(videos, artist, track)
-            if filtered:
-                trimmed = filtered[:max_results]
-                self._set_cached_search(cache_key, trimmed)
-                return trimmed
+        if self.api_key and not self.should_stop_for_quota():
+            for query in queries:
+                try:
+                    videos = await self.search_videos(query, fetch_results)
+                except Exception as exc:
+                    logger.warning("YouTube API search failed for %s - %s: %r", artist, track, exc)
+                    break
+                if not videos:
+                    continue
+                filtered = self._filter_music_videos(videos, artist, track)
+                if filtered:
+                    trimmed = filtered[:max_results]
+                    self._set_cached_search(cache_key, trimmed)
+                    return trimmed
+
+        if settings.YTDLP_FALLBACK_ENABLED:
+            fallback = await self.search_music_videos_ytdlp(artist, track, album, max_results)
+            if fallback:
+                self._set_cached_search(cache_key, fallback)
+                return fallback
 
         self._set_cached_search(cache_key, [])
         return []

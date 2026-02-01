@@ -4,33 +4,32 @@ División específica y manual del archivo SEARCH.PY (1,883 líneas)
 Crea la estructura modular para el archivo más problemático.
 """
 
-import os
 from pathlib import Path
 import sys
-from typing import List, Dict
 
 # Añadir el directorio del proyecto al path de Python
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+
 
 class SearchFileSplitter:
     def __init__(self):
         self.root = Path(".")
         self.app_dir = self.root / "app" / "api"
         self.search_file = self.app_dir / "search.py"
-        
+
     def create_search_module_structure(self) -> bool:
         """Crea la estructura modular para search.py"""
         if not self.search_file.exists():
             print(f"❌ No se encontró el archivo: {self.search_file}")
             return False
-        
+
         print(f"🏗️  Dividiendo SEARCH.PY ({self._count_lines()} líneas)...")
-        
+
         # Crear directorio
         search_module_dir = self.app_dir / "search"
         search_module_dir.mkdir(exist_ok=True)
-        
+
         # 1. Crear __init__.py
         init_content = '''"""
 Search endpoints module.
@@ -39,12 +38,12 @@ This module contains search-related functionality split into
 manageable, focused sub-modules.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter  # noqa: E402
 
 # Import all sub-routers
-from .orchestrated import router as orchestrated_router
-from .artist_profile import router as artist_profile_router
-from .tracks_quick import router as tracks_quick_router
+from .orchestrated import router as orchestrated_router  # noqa: E402
+from .artist_profile import router as artist_profile_router  # noqa: E402
+from .tracks_quick import router as tracks_quick_router  # noqa: E402
 
 # Main router
 router = APIRouter(prefix="/search", tags=["search"])
@@ -57,11 +56,11 @@ router.include_router(tracks_quick_router, prefix="/tracks-quick")
 # Export main router for app/main.py
 __all__ = ["router"]
 '''
-        
+
         with open(search_module_dir / "__init__.py", "w", encoding="utf-8") as f:
             f.write(init_content)
         print("✅ Creado: search/__init__.py")
-        
+
         # 2. Crear orchestrated.py
         orchestrated_content = '''"""
 Orchestrated search endpoints.
@@ -69,15 +68,15 @@ Orchestrated search endpoints.
 Handles the main search functionality that combines multiple sources.
 """
 
-import logging
-from typing import Dict, Any, List
+import logging  # noqa: E402
+from typing import Dict, Any, List  # noqa: E402
 
-from fastapi import APIRouter, Query, Depends, HTTPException
-from sqlmodel.ext.asyncio.session import AsyncSession
+from fastapi import APIRouter, Query, Depends, HTTPException  # noqa: E402
+from sqlmodel.ext.asyncio.session import AsyncSession  # noqa: E402
 
-from ..core.db import get_session, SessionDep
-from ..models.base import Artist, Album, Track
-from ..core.config import settings
+from ..core.db import get_session, SessionDep  # noqa: E402
+from ..models.base import Artist, Album, Track  # noqa: E402
+from ..core.config import settings  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -111,11 +110,11 @@ async def get_search_status(
         }
     }
 '''
-        
+
         with open(search_module_dir / "orchestrated.py", "w", encoding="utf-8") as f:
             f.write(orchestrated_content)
         print("✅ Creado: search/orchestrated.py")
-        
+
         # 3. Crear artist_profile.py
         artist_profile_content = '''"""
 Artist profile search endpoints.
@@ -123,15 +122,15 @@ Artist profile search endpoints.
 Provides detailed artist information and profiles.
 """
 
-import logging
-from typing import Dict, Any, List
+import logging  # noqa: E402
+from typing import Dict, Any, List  # noqa: E402
 
-from fastapi import APIRouter, Query, Depends, HTTPException
-from sqlmodel.ext.asyncio.session import AsyncSession
+from fastapi import APIRouter, Query, Depends, HTTPException  # noqa: E402
+from sqlmodel.ext.asyncio.session import AsyncSession  # noqa: E402
 
-from ..core.db import get_session, SessionDep
-from ..models.base import Artist, Album, Track
-from ..core.config import settings
+from ..core.db import get_session, SessionDep  # noqa: E402
+from ..models.base import Artist, Album, Track  # noqa: E402
+from ..core.config import settings  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -168,11 +167,11 @@ async def get_similar_artists(
     # TODO: Implement similar artists logic
     pass
 '''
-        
+
         with open(search_module_dir / "artist_profile.py", "w", encoding="utf-8") as f:
             f.write(artist_profile_content)
         print("✅ Creado: search/artist_profile.py")
-        
+
         # 4. Crear tracks_quick.py
         tracks_quick_content = '''"""
 Quick track search endpoints.
@@ -180,15 +179,15 @@ Quick track search endpoints.
 Provides fast track searching capabilities.
 """
 
-import logging
-from typing import Dict, Any, List
+import logging  # noqa: E402
+from typing import Dict, Any, List  # noqa: E402
 
-from fastapi import APIRouter, Query, Depends, HTTPException
-from sqlmodel.ext.asyncio.session import AsyncSession
+from fastapi import APIRouter, Query, Depends, HTTPException  # noqa: E402
+from sqlmodel.ext.asyncio.session import AsyncSession  # noqa: E402
 
-from ..core.db import get_session, SessionDep
-from ..models.base import Artist, Album, Track
-from ..core.config import settings
+from ..core.db import get_session, SessionDep  # noqa: E402
+from ..models.base import Artist, Album, Track  # noqa: E402
+from ..core.config import settings  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -216,13 +215,13 @@ async def get_album_tracks_quick(
     # TODO: Implement album tracks quick search
     pass
 '''
-        
+
         with open(search_module_dir / "tracks_quick.py", "w", encoding="utf-8") as f:
             f.write(tracks_quick_content)
         print("✅ Creado: search/tracks_quick.py")
-        
+
         return True
-    
+
     def _count_lines(self) -> int:
         """Cuenta líneas del archivo search.py"""
         try:
@@ -230,7 +229,7 @@ async def get_album_tracks_quick(
                 return sum(1 for _ in f)
         except Exception:
             return 0
-    
+
     def create_migration_plan(self) -> str:
         """Crea un plan detallado para migrar el código."""
         return f"""
@@ -279,12 +278,13 @@ async def get_album_tracks_quick(
        el frontend para que apunte a las nuevas rutas.
 """
 
+
 def main():
     splitter = SearchFileSplitter()
-    
+
     print("🏗️  Creando estructura modular para SEARCH.PY")
     print("=" * 60)
-    
+
     if splitter.create_search_module_structure():
         print("\n🎉 ¡Estructura creada exitosamente!")
         print("\n📋 Directorio creado:")
@@ -293,25 +293,26 @@ def main():
         print("   ├── orchestrated.py")
         print("   ├── artist_profile.py")
         print("   └── tracks_quick.py")
-        
+
         print("\n⚠️  PRÓXIMOS PASOS MANUALES:")
         print("   1. Mover lógica desde search.py a los nuevos módulos")
         print("   2. Actualizar imports en app/main.py")
         print("   3. Probar endpoints en http://localhost:8000/docs")
         print("   4. Renombrar search.py → search.py.backup")
-        
+
         print("\n📄 Plan de migración:")
         plan = splitter.create_migration_plan()
         print(plan)
-        
+
         print("\n📄 Guardando plan en: search_migration_plan.txt")
         with open("search_migration_plan.txt", "w", encoding="utf-8") as f:
             f.write(plan)
     else:
         print("❌ Error creando estructura modular")
         return 1
-    
+
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

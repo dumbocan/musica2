@@ -3,12 +3,14 @@ Modular maintenance API - split from original maintenance.py for better maintain
 This module exports all maintenance-related endpoints through separate router modules.
 """
 
-import logging
-from typing import Dict, Any
-from fastapi import APIRouter, Depends
-from sqlmodel.ext.asyncio.session import AsyncSession
+from typing import Any, Dict
 
-from ...core.db import SessionDep
+from fastapi import APIRouter
+from sqlalchemy import exists, func
+from sqlmodel import select
+
+from ...core.db import get_session
+from ...models.base import Album, Artist, Track, YouTubeDownload
 
 # Import all sub-routers
 try:
@@ -29,8 +31,6 @@ except ImportError as e:
     print(f"⚠️ Warning: Could not import logs router: {e}")
     logs_router = None
 
-logger = logging.getLogger(__name__)
-
 # Create main maintenance router
 maintenance_router = APIRouter(prefix="/maintenance", tags=["maintenance"])
 
@@ -43,52 +43,73 @@ if logs_router:
     maintenance_router.include_router(logs_router)
 
 
-@maintenance_router.get("/action-status")
-async def get_action_status_simple() -> Dict[str, Any]:
-    """Get action status - alias for control/action-status."""
-    from ...core.action_status import get_action_statuses
-    return {
-        "actions": get_action_statuses(),
-    }
-
-
-@maintenance_router.get("/status")
-async def get_maintenance_status_simple() -> Dict[str, Any]:
-    """Get maintenance system status - alias for control/status."""
-    from ...core.maintenance import maintenance_stop_requested
-    from ...core.action_status import get_action_statuses
-    return {
-        "status": "running",
-        "active_processes": [],
-        "stop_requested": maintenance_stop_requested(),
-        "actions": get_action_statuses(),
-    }
-
-
 @maintenance_router.get("/dashboard")
-async def get_dashboard_stats(
-    session: AsyncSession = Depends(SessionDep)
-) -> Dict[str, Any]:
-    """Get dashboard statistics - alias for logs/dashboard."""
-    from sqlalchemy import func
-    from ...models.base import Artist, Album, Track, YouTubeDownload
-    from ...core.db import get_session
-
-    with get_session() as sync_session:
-        artist_count = sync_session.query(func.count(Artist.id)).scalar() or 0
-        album_count = sync_session.query(func.count(Album.id)).scalar() or 0
-        track_count = sync_session.query(func.count(Track.id)).scalar() or 0
-        youtube_downloads = sync_session.query(func.count(YouTubeDownload.id)).scalar() or 0
-
+async def get_dashboard_stats() -> Dict[str, Any]:
+    """Get dashboard statistics."""
+    with get_session() as session:
+        total_artists = session.exec(select(func.count(Artist.id))).one()
+        total_albums = session.exec(select(func.count(Album.id))).one()
+        total_tracks = session.exec(select(func.count(Track.id))).one()
+        artists_missing_images = session.exec(
+            select(func.count(Artist.id)).where(Artist.image_path_id.is_(None))
+        ).one()
+        albums_missing_images = session.exec(
+            select(func.count(Album.id)).where(Album.image_path_id.is_(None))
+        ).one()
+        albums_without_tracks = session.exec(
+            select(func.count(Album.id)).where(
+                ~exists(select(1).where(Track.album_id == Album.id))
+            )
+        ).one()
+        tracks_with_spotify_id = session.exec(
+            select(func.count(Track.id)).where(Track.spotify_id.is_not(None))
+        ).one()
+        tracks_with_local_file = session.exec(
+            select(func.count(Track.id))
+            .where(Track.download_path.is_not(None))
+            .where(Track.download_path != "")
+        ).one()
+        youtube_link_exists = exists(
+            select(1).where(
+                (YouTubeDownload.spotify_track_id == Track.spotify_id)
+                & YouTubeDownload.youtube_video_id.is_not(None)
+            )
+        )
+        tracks_without_youtube = session.exec(
+            select(func.count(Track.id)).where(~youtube_link_exists)
+        ).one()
+        youtube_links_total = session.exec(
+            select(func.count(func.distinct(YouTubeDownload.spotify_track_id)))
+            .where(YouTubeDownload.youtube_video_id.is_not(None))
+        ).one()
+        youtube_downloads_completed = session.exec(
+            select(func.count(YouTubeDownload.id)).where(YouTubeDownload.download_status == "completed")
+        ).one()
+        youtube_links_pending = session.exec(
+            select(func.count(func.distinct(YouTubeDownload.spotify_track_id)))
+            .where(YouTubeDownload.youtube_video_id.is_not(None))
+            .where(YouTubeDownload.youtube_video_id != "")
+            .where(YouTubeDownload.download_status != "completed")
+        ).one()
+        youtube_links_failed = session.exec(
+            select(func.count(func.distinct(YouTubeDownload.spotify_track_id)))
+            .where(YouTubeDownload.youtube_video_id.is_(None) | (YouTubeDownload.youtube_video_id == ""))
+            .where(YouTubeDownload.download_status.in_(("video_not_found", "error", "failed")))
+        ).one()
     return {
-        "artists": artist_count,
-        "albums": album_count,
-        "tracks": track_count,
-        "youtube_downloads": youtube_downloads,
-        "storage": {
-            "images_count": 0,  # Would need additional query
-            "downloads_size_mb": 0,
-        }
+        "artists_total": int(total_artists or 0),
+        "albums_total": int(total_albums or 0),
+        "tracks_total": int(total_tracks or 0),
+        "artists_missing_images": int(artists_missing_images or 0),
+        "albums_missing_images": int(albums_missing_images or 0),
+        "albums_without_tracks": int(albums_without_tracks or 0),
+        "tracks_without_youtube": int(tracks_without_youtube or 0),
+        "tracks_with_spotify_id": int(tracks_with_spotify_id or 0),
+        "tracks_with_local_file": int(tracks_with_local_file or 0),
+        "youtube_links_total": int(youtube_links_total or 0),
+        "youtube_downloads_completed": int(youtube_downloads_completed or 0),
+        "youtube_links_pending": int(youtube_links_pending or 0),
+        "youtube_links_failed": int(youtube_links_failed or 0),
     }
 
 

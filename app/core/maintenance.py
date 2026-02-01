@@ -7,7 +7,7 @@ import json
 import ast
 import random
 import threading
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlmodel import select
 from sqlalchemy import func
@@ -68,6 +68,7 @@ def set_maintenance_enabled(enabled: bool) -> None:
 def _re_raise_cancelled(exc: BaseException) -> None:
     if isinstance(exc, asyncio.CancelledError):
         raise exc
+
 
 _BILLBOARD_CHARTS = (
     ("billboard", "hot-100"),
@@ -542,9 +543,9 @@ async def genre_backfill_loop():
                 artists = session.exec(
                     select(Artist)
                     .where(
-                        (Artist.genres.is_(None)) |
-                        (Artist.genres == "") |
-                        (Artist.genres == "[]")
+                        (Artist.genres.is_(None))
+                        | (Artist.genres == "")
+                        | (Artist.genres == "[]")
                     )
                     .order_by(Artist.popularity.desc(), Artist.id.asc())
                     .limit(100)
@@ -627,12 +628,40 @@ async def genre_backfill_loop():
 
 
 async def full_library_refresh_loop():
-    """Periodic job: refresh artist metadata and detect new albums/tracks."""
+    """Periodic job: refresh a daily fraction of artists and detect new albums/tracks."""
     while True:
         if maintenance_stop_requested():
             return
+        # Sleep until the configured refresh hour (local time).
+        try:
+            now = datetime.now()
+            target = now.replace(
+                hour=int(settings.MAINTENANCE_DAILY_REFRESH_HOUR),
+                minute=0,
+                second=0,
+                microsecond=0,
+            )
+            if now >= target:
+                target = target + timedelta(days=1)
+            delay = max(60.0, (target - now).total_seconds())
+            logger.info("[maintenance] next daily refresh in %.1f seconds", delay)
+            await asyncio.sleep(delay)
+        except Exception as exc:
+            _re_raise_cancelled(exc)
+            logger.warning("[maintenance] daily refresh sleep failed: %s", exc)
+            await asyncio.sleep(300)
         try:
             with get_session() as session:
+                total_artists = session.exec(
+                    select(func.count(Artist.id)).where(Artist.spotify_id.is_not(None))
+                ).one() or 0
+                fraction = max(0.0, float(settings.MAINTENANCE_DAILY_REFRESH_FRACTION))
+                limit = int(total_artists * fraction)
+                if limit <= 0:
+                    limit = min(1, total_artists) if total_artists else 0
+                max_limit = max(1, int(settings.MAINTENANCE_DAILY_REFRESH_MAX_ARTISTS))
+                if limit > max_limit:
+                    limit = max_limit
                 artists = session.exec(
                     select(Artist)
                     .where(Artist.spotify_id.is_not(None))
@@ -641,7 +670,7 @@ async def full_library_refresh_loop():
                         Artist.updated_at.asc().nullsfirst(),
                         Artist.popularity.desc(),
                     )
-                    .limit(settings.MAINTENANCE_LIBRARY_BATCH_SIZE)
+                    .limit(limit)
                 ).all()
                 artist_ids = [artist.id for artist in artists if artist and artist.id]
                 album_counts: dict[int, int] = {}
@@ -652,10 +681,17 @@ async def full_library_refresh_loop():
                         .group_by(Album.artist_id)
                     ).all()
                     album_counts = {row[0]: int(row[1]) for row in rows if row[0]}
+            logger.info(
+                "[maintenance] daily refresh batch: %d artists (total=%d, fraction=%.2f)",
+                len(artists),
+                total_artists,
+                fraction,
+            )
             refreshed = 0
             new_albums = 0
             new_tracks = 0
             backfilled = 0
+            albums_budget = max(0, int(settings.MAINTENANCE_DAILY_REFRESH_MAX_ALBUMS))
             for artist in artists:
                 if maintenance_stop_requested():
                     return
@@ -666,6 +702,7 @@ async def full_library_refresh_loop():
                     continue
                 local_album_count = album_counts.get(artist.id, 0)
                 needs_discography = local_album_count == 0
+                estimated_new_albums = 0
                 if not needs_discography:
                     try:
                         total = await asyncio.wait_for(
@@ -677,6 +714,7 @@ async def full_library_refresh_loop():
                         )
                         if total is not None and total > local_album_count:
                             needs_discography = True
+                            estimated_new_albums = max(0, int(total) - local_album_count)
                     except Exception as exc:
                         _re_raise_cancelled(exc)
                         is_timeout = isinstance(exc, (asyncio.TimeoutError, TimeoutError, asyncio.CancelledError))
@@ -696,8 +734,25 @@ async def full_library_refresh_loop():
                                 exc_info=True,
                             )
                 if needs_discography:
+                    if albums_budget <= 0:
+                        logger.info(
+                            "[maintenance] daily refresh: album budget exhausted, skipping discography for %s",
+                            artist.spotify_id,
+                        )
+                        needs_discography = False
+                    elif estimated_new_albums and estimated_new_albums > albums_budget:
+                        logger.info(
+                            "[maintenance] daily refresh: budget %d too low for %s (%d needed), skipping",
+                            albums_budget,
+                            artist.spotify_id,
+                            estimated_new_albums,
+                        )
+                        needs_discography = False
+                if needs_discography:
                     await save_artist_discography(artist.spotify_id)
                     backfilled += 1
+                    if estimated_new_albums:
+                        albums_budget = max(0, albums_budget - estimated_new_albums)
                 else:
                     if await data_freshness_manager.should_refresh_artist(artist):
                         if await data_freshness_manager.refresh_artist_data(artist.spotify_id):

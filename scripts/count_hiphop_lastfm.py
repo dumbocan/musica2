@@ -17,6 +17,7 @@ if not API_KEY:
     print("Falta LASTFM_API_KEY en el entorno")
     sys.exit(1)
 
+
 def fetch_top_artists(tag: str, page: int = 1, limit: int = 50):
     url = "http://ws.audioscrobbler.com/2.0/"
     params = {
@@ -34,6 +35,7 @@ def fetch_top_artists(tag: str, page: int = 1, limit: int = 50):
     attrs = data.get("topartists", {}).get("@attr", {})
     return artists, attrs
 
+
 def main():
     artists, meta = fetch_top_artists(TAG, page=1, limit=50)
     total = meta.get("total") or "?"
@@ -45,6 +47,7 @@ def main():
         name = a.get("name")
         listeners = a.get("listeners")
         print(f"- {name} ({listeners} listeners)")
+
 
 if __name__ == "__main__":
     main()

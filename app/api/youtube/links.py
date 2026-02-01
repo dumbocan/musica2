@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/links", tags=["youtube"])
 
+
 @router.post("/")
 async def create_youtube_links(
     request: Request,
@@ -24,6 +25,7 @@ async def create_youtube_links(
     # TODO: Implement bulk YouTube link creation
     return {"message": "Links creation started", "limit": limit}
 
+
 @router.get("/track/{spotify_track_id}")
 async def get_track_youtube_link(
     spotify_track_id: str,
@@ -32,6 +34,7 @@ async def get_track_youtube_link(
     """Get YouTube link for a track."""
     # TODO: Implement track link retrieval
     return {"spotify_track_id": spotify_track_id, "youtube_link": None}
+
 
 @router.post("/track/{spotify_track_id}/refresh")
 async def refresh_track_youtube_link(

@@ -33,15 +33,18 @@ api_status_cache = {
 
 RECENT_SUCCESS_SECONDS = 15 * 60
 
+
 def _is_recent(last_checked, max_age_seconds: int = 60) -> bool:
     if not last_checked:
         return False
     return (utc_now() - last_checked).total_seconds() < max_age_seconds
 
+
 def _has_recent_success(last_success) -> bool:
     if not last_success:
         return False
     return (utc_now() - last_success).total_seconds() < RECENT_SUCCESS_SECONDS
+
 
 async def check_spotify_api() -> bool:
     """Check if Spotify API is available; skip if no credentials."""
@@ -97,6 +100,7 @@ async def check_spotify_api() -> bool:
         return False
     finally:
         api_status_cache['spotify']['last_checked'] = utc_now()
+
 
 async def check_lastfm_api() -> bool:
     """Check if Last.fm API is available; skip if no credentials."""
@@ -157,6 +161,7 @@ async def check_lastfm_api() -> bool:
     finally:
         api_status_cache['lastfm']['last_checked'] = utc_now()
 
+
 def check_database() -> bool:
     """Check if database is available."""
     try:
@@ -173,9 +178,11 @@ def check_database() -> bool:
     finally:
         api_status_cache['database']['last_checked'] = utc_now()
 
+
 @router.get("/health", status_code=status.HTTP_200_OK)
 async def health() -> dict:
     return {"status": "ok"}
+
 
 @router.get("/health/detailed", status_code=status.HTTP_200_OK)
 async def detailed_health() -> dict:
@@ -212,6 +219,7 @@ async def detailed_health() -> dict:
         }
     }
 
+
 @router.get("/api-status", status_code=status.HTTP_200_OK)
 async def api_status() -> dict:
     """Get current API status (Spotify, Last.fm)."""
@@ -228,6 +236,7 @@ async def api_status() -> dict:
         }
     }
 
+
 @router.get("/db-status", status_code=status.HTTP_200_OK)
 def db_status() -> dict:
     """Get current database status."""
@@ -237,6 +246,7 @@ def db_status() -> dict:
         "last_checked": api_status_cache['database']['last_checked'].isoformat() if api_status_cache['database']['last_checked'] else None,
         "last_error": api_status_cache['database']['last_error']
     }
+
 
 @router.get("/offline-mode", status_code=status.HTTP_200_OK)
 def offline_mode() -> dict:

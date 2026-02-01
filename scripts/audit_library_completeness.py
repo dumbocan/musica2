@@ -25,11 +25,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from sqlalchemy import func
-from sqlmodel import select
+from sqlalchemy import func  # noqa: E402
+from sqlmodel import select  # noqa: E402
 
-from app.core.db import get_session
-from app.models.base import (
+from app.core.db import get_session  # noqa: E402
+from app.models.base import (  # noqa: E402
     Album,
     Artist,
     ChartScanState,

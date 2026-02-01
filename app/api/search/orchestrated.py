@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["search"])
 
+
 @router.get("/")
 async def search_orchestrated(
     request: Request,
@@ -29,6 +30,7 @@ async def search_orchestrated(
     # This should combine Spotify, Last.fm, and local results
     return {"results": [], "total": 0, "query": query}
 
+
 @router.get("/system/status")
 async def get_search_system_status(
     session: AsyncSession = Depends(SessionDep)
@@ -36,6 +38,7 @@ async def get_search_system_status(
     """Get search system status."""
     # TODO: Implement search status
     return {"status": "operational", "sources": ["local", "spotify", "lastfm"]}
+
 
 @router.get("/status")
 async def get_search_status(

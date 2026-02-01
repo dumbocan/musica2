@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/favorites", tags=["tracks"])
 
+
 @router.post("/{track_id}/favorite")
 async def add_to_favorites(
     track_id: int,
@@ -31,32 +32,32 @@ async def add_to_favorites(
     # Get user ID from request if not provided
     if not user_id:
         user_id = getattr(request.state, "user_id", None)
-    
+
     if user_id is None:
         raise HTTPException(status_code=401, detail="Authentication required")
-    
+
     # Check if track exists
     with get_session() as sync_session:
         track = sync_session.exec(select(Track).where(Track.id == track_id)).first()
         if not track:
             raise HTTPException(status_code=404, detail="Track not found")
-        
+
         # Check if already favorited
         existing = sync_session.exec(
             select(UserFavorite).where(
-                (UserFavorite.user_id == user_id) &
-                (UserFavorite.track_id == track_id) &
-                (UserFavorite.target_type == UserFavorite.FavoriteTargetType.TRACK)
+                (UserFavorite.user_id == user_id)
+                & (UserFavorite.track_id == track_id)
+                & (UserFavorite.target_type == UserFavorite.FavoriteTargetType.TRACK)
             )
         ).first()
-        
+
         if existing:
             return {
                 "message": "Track already in favorites",
                 "track_id": track_id,
                 "already_favorited": True
             }
-        
+
         # Add to favorites
         favorite = UserFavorite(
             user_id=user_id,
@@ -65,12 +66,13 @@ async def add_to_favorites(
         )
         sync_session.add(favorite)
         sync_session.commit()
-        
+
         return {
             "message": "Track added to favorites",
             "track_id": track_id,
             "favorited_at": favorite.created_at.isoformat() if favorite.created_at else None
         }
+
 
 @router.delete("/{track_id}/favorite")
 async def remove_from_favorites(
@@ -85,36 +87,37 @@ async def remove_from_favorites(
     # Get user ID from request if not provided
     if not user_id:
         user_id = getattr(request.state, "user_id", None)
-    
+
     if user_id is None:
         raise HTTPException(status_code=401, detail="Authentication required")
-    
+
     with get_session() as sync_session:
         # Find and delete favorite
         favorite = sync_session.exec(
             select(UserFavorite).where(
-                (UserFavorite.user_id == user_id) &
-                (UserFavorite.track_id == track_id) &
-                (UserFavorite.target_type == UserFavorite.FavoriteTargetType.TRACK)
+                (UserFavorite.user_id == user_id)
+                & (UserFavorite.track_id == track_id)
+                & (UserFavorite.target_type == UserFavorite.FavoriteTargetType.TRACK)
             )
         ).first()
-        
+
         if not favorite:
             return {
                 "message": "Track not in favorites",
                 "track_id": track_id,
                 "was_favorited": False
             }
-        
+
         # Delete the favorite
         sync_session.delete(favorite)
         sync_session.commit()
-        
+
         return {
             "message": "Track removed from favorites",
             "track_id": track_id,
             "removed_at": datetime.utcnow().isoformat()
         }
+
 
 @router.get("/{user_id}")
 async def get_user_favorites(
@@ -143,7 +146,7 @@ async def get_user_favorites(
             .limit(limit)
         )
         rows = sync_session.exec(base_query).all()
-        
+
         # Get YouTube info efficiently
         spotify_ids = [track.spotify_id for track, _, _ in rows if track.spotify_id]
 
@@ -153,7 +156,7 @@ async def get_user_favorites(
                 select(YouTubeDownload).where(YouTubeDownload.spotify_track_id.in_(spotify_ids))
             ).all()
             download_map = _select_best_downloads(downloads)
-        
+
         # Build response items
         items = []
         for track, artist, album in rows:
@@ -162,17 +165,17 @@ async def get_user_favorites(
             youtube_status = download.download_status if download else None
             youtube_url = f"https://www.youtube.com/watch?v={youtube_video_id}" if youtube_video_id else None
             file_path = download.download_path if download else None
-            
+
             if verify_files and file_path:
                 file_exists = FsPath(file_path).exists()
             else:
                 file_exists = False
-            
+
             if file_exists:
                 youtube_status = "completed"
             elif youtube_video_id and not youtube_status:
                 youtube_status = "link_found"
-            
+
             items.append({
                 "track_id": track.id,
                 "track_name": track.name,
@@ -190,15 +193,15 @@ async def get_user_favorites(
                 "local_file_exists": file_exists,
                 "favorited_at": None,  # Would need to join UserFavorite to get created_at
             })
-        
+
         # Get total count
         total = sync_session.exec(
             select(UserFavorite.id).where(
-                (UserFavorite.user_id == user_id) &
-                (UserFavorite.target_type == UserFavorite.FavoriteTargetType.TRACK)
+                (UserFavorite.user_id == user_id)
+                & (UserFavorite.target_type == UserFavorite.FavoriteTargetType.TRACK)
             )
         ).count()
-        
+
         return {
             "items": items,
             "offset": offset,

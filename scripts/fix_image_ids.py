@@ -7,9 +7,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.core.db import get_session
-from app.models.base import Artist, Album, StoredImagePath
-from sqlmodel import select
+from app.core.db import get_session  # noqa: E402
+from app.models.base import Artist, Album, StoredImagePath  # noqa: E402
+from sqlmodel import select  # noqa: E402
 
 
 def sanitize_filename(name):
@@ -36,6 +36,15 @@ def fix_artists():
             stored = session.exec(stmt).first()
 
             if stored and stored.entity_id != artist.id:
+                # Skip if this artist already has a different stored image linked.
+                existing = session.exec(
+                    select(StoredImagePath).where(
+                        StoredImagePath.entity_type == 'artist',
+                        StoredImagePath.entity_id == artist.id,
+                    ).limit(1)
+                ).first()
+                if existing and existing.id != stored.id:
+                    continue
                 print(f'Arreglando artist: {artist.name} (DB id={artist.id}, Stored id={stored.entity_id})')
                 stored.entity_id = artist.id
                 artist.image_path_id = stored.id
@@ -71,6 +80,15 @@ def fix_albums():
             stored = session.exec(stmt).first()
 
             if stored and stored.entity_id != album.id:
+                # Skip if this album already has a different stored image linked.
+                existing = session.exec(
+                    select(StoredImagePath).where(
+                        StoredImagePath.entity_type == 'album',
+                        StoredImagePath.entity_id == album.id,
+                    ).limit(1)
+                ).first()
+                if existing and existing.id != stored.id:
+                    continue
                 print(f'Arreglando album: {album.name} by {artist.name} (DB id={album.id}, Stored id={stored.entity_id})')
                 stored.entity_id = album.id
                 album.image_path_id = stored.id

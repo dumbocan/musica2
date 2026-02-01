@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["search"])
 
+
 @router.get("/")
 async def search_artist_profile(
     request: Request,
@@ -27,6 +28,7 @@ async def search_artist_profile(
     # This should return comprehensive artist information
     return {"artist": None, "profile": {}, "artist_name": artist_name}
 
+
 @router.get("/artist/{artist_id}")
 async def get_artist_profile_by_id(
     artist_id: int,
@@ -36,6 +38,7 @@ async def get_artist_profile_by_id(
     """Get artist profile by local ID."""
     # TODO: Implement get artist profile by ID
     return {"artist": None, "profile": {}, "artist_id": artist_id}
+
 
 @router.get("/artist/{artist_id}/similar")
 async def get_artist_similar(
@@ -48,6 +51,7 @@ async def get_artist_similar(
     # TODO: Implement similar artists
     return {"similar_artists": [], "artist_id": artist_id}
 
+
 @router.get("/{artist_id}")
 async def get_artist_by_id(
     artist_id: int,
@@ -56,6 +60,7 @@ async def get_artist_by_id(
     """Get artist profile by ID."""
     # TODO: Implement get_artist_by_id
     return {"artist": None, "profile": {}, "artist_id": artist_id}
+
 
 @router.get("/{artist_id}/similar")
 async def get_artist_similar_v2(

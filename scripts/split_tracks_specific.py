@@ -4,15 +4,13 @@ División específica del archivo TRACKS.PY (1,705 líneas)
 Crea módulos manejables para la funcionalidad principal de tracks.
 """
 
-import os
-import re
 from pathlib import Path
 import sys
-from typing import List, Dict
 
 # Añadir el directorio del proyecto al path de Python
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+
 
 class TracksFileSplitter:
     def __init__(self):
@@ -20,19 +18,19 @@ class TracksFileSplitter:
         self.app_dir = self.root / "app" / "api"
         self.source_file = self.app_dir / "tracks.py"
         self.target_dir = self.app_dir / "tracks"
-        
+
     def create_tracks_module_structure(self) -> bool:
         """Crea la estructura modular para tracks.py"""
         if not self.source_file.exists():
             print(f"❌ No se encontró el archivo: {self.source_file}")
             return False
-        
+
         print(f"🏗️  Dividiendo TRACKS.PY ({self._count_lines()} líneas)...")
-        
+
         # Crear directorio
         tracks_module_dir = self.app_dir / "tracks"
         tracks_module_dir.mkdir(exist_ok=True)
-        
+
         # 1. Crear __init__.py
         init_content = '''"""
 Tracks endpoints module.
@@ -41,13 +39,13 @@ This module contains track-related functionality split into
 manageable, focused sub-modules.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter  # noqa: E402
 
 # Import all sub-routers
-from .overview import router as overview_router
-from .playback import router as playback_router
-from .downloads import router as downloads_router
-from .favorites import router as favorites_router
+from .overview import router as overview_router  # noqa: E402
+from .playback import router as playback_router  # noqa: E402
+from .downloads import router as downloads_router  # noqa: E402
+from .favorites import router as favorites_router  # noqa: E402
 
 # Main router
 router = APIRouter(prefix="/tracks", tags=["tracks"])
@@ -61,11 +59,11 @@ router.include_router(favorites_router)
 # Export main router for app/main.py
 __all__ = ["router"]
 '''
-        
+
         with open(tracks_module_dir / "__init__.py", "w", encoding="utf-8") as f:
             f.write(init_content)
         print("✅ Creado: tracks/__init__.py")
-        
+
         # 2. Crear overview.py
         overview_content = '''"""
 Track overview and listing endpoints.
@@ -73,15 +71,15 @@ Track overview and listing endpoints.
 Provides track lists with metadata and filtering capabilities.
 """
 
-import logging
-from typing import Dict, Any, List, Optional
+import logging  # noqa: E402
+from typing import Dict, Any, List, Optional  # noqa: E402
 
-from fastapi import APIRouter, Query, Depends, HTTPException, Request
-from sqlmodel.ext.asyncio.session import AsyncSession
+from fastapi import APIRouter, Query, Depends, HTTPException, Request  # noqa: E402
+from sqlmodel.ext.asyncio.session import AsyncSession  # noqa: E402
 
-from ..core.db import get_session, SessionDep
-from ..models.base import Track, Artist, Album, YouTubeDownload
-from ..core.config import settings
+from ..core.db import get_session, SessionDep  # noqa: E402
+from ..models.base import Track, Artist, Album, YouTubeDownload  # noqa: E402
+from ..core.config import settings  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -124,11 +122,11 @@ async def get_user_favorite_tracks(
     # TODO: Get favorite tracks logic
     return {"tracks": [], "total": 0}
 '''
-        
+
         with open(tracks_module_dir / "overview.py", "w", encoding="utf-8") as f:
             f.write(overview_content)
         print("✅ Creado: tracks/overview.py")
-        
+
         # 3. Crear playback.py
         playback_content = '''"""
 Track playback and history endpoints.
@@ -136,16 +134,16 @@ Track playback and history endpoints.
 Handles play tracking, history, and playback-related functionality.
 """
 
-import logging
-from typing import Dict, Any, List
-from datetime import datetime
+import logging  # noqa: E402
+from typing import Dict, Any, List  # noqa: E402
+from datetime import datetime  # noqa: E402
 
-from fastapi import APIRouter, Query, Depends, HTTPException, Path
-from sqlmodel.ext.asyncio.session import AsyncSession
+from fastapi import APIRouter, Query, Depends, HTTPException, Path  # noqa: E402
+from sqlmodel.ext.asyncio.session import AsyncSession  # noqa: E402
 
-from ..core.db import get_session, SessionDep
-from ..models.base import Track, PlayHistory
-from ..core.config import settings
+from ..core.db import get_session, SessionDep  # noqa: E402
+from ..models.base import Track, PlayHistory  # noqa: E402
+from ..core.config import settings  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -194,11 +192,11 @@ async def get_chart_statistics(
         "top_10_hits": 0
     }
 '''
-        
+
         with open(tracks_module_dir / "playback.py", "w", encoding="utf-8") as f:
             f.write(playback_content)
         print("✅ Creado: tracks/playback.py")
-        
+
         # 4. Crear downloads.py
         downloads_content = '''"""
 YouTube download and management endpoints.
@@ -206,17 +204,17 @@ YouTube download and management endpoints.
 Handles YouTube downloads, status tracking, and file management.
 """
 
-import logging
-from typing import Dict, Any, List
-from pathlib import Path
+import logging  # noqa: E402
+from typing import Dict, Any, List  # noqa: E402
+from pathlib import Path  # noqa: E402
 
-from fastapi import APIRouter, Query, Depends, HTTPException, Path
-from sqlmodel.ext.asyncio.session import AsyncSession
+from fastapi import APIRouter, Query, Depends, HTTPException, Path  # noqa: E402
+from sqlmodel.ext.asyncio.session import AsyncSession  # noqa: E402
 
-from ..core.db import get_session, SessionDep
-from ..models.base import Track, YouTubeDownload
-from ..core.config import settings
-from ..core.youtube import youtube_client
+from ..core.db import get_session, SessionDep  # noqa: E402
+from ..models.base import Track, YouTubeDownload  # noqa: E402
+from ..core.config import settings  # noqa: E402
+from ..core.youtube import youtube_client  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -255,11 +253,11 @@ async def get_track_download_file(
     # TODO: Implement file serving
     return {"message": "File not found", "track_id": track_id}
 '''
-        
+
         with open(tracks_module_dir / "downloads.py", "w", encoding="utf-8") as f:
             f.write(downloads_content)
         print("✅ Creado: tracks/downloads.py")
-        
+
         # 5. Crear favorites.py
         favorites_content = '''"""
 Track favorites management endpoints.
@@ -267,16 +265,16 @@ Track favorites management endpoints.
 Handles user favorites, ratings, and preferences.
 """
 
-import logging
-from typing import Dict, Any, List
-from datetime import datetime
+import logging  # noqa: E402
+from typing import Dict, Any, List  # noqa: E402
+from datetime import datetime  # noqa: E402
 
-from fastapi import APIRouter, Query, Depends, HTTPException, Path
-from sqlmodel.ext.asyncio.session import AsyncSession
+from fastapi import APIRouter, Query, Depends, HTTPException, Path  # noqa: E402
+from sqlmodel.ext.asyncio.session import AsyncSession  # noqa: E402
 
-from ..core.db import get_session, SessionDep
-from ..models.base import Track, UserFavorite
-from ..core.config import settings
+from ..core.db import get_session, SessionDep  # noqa: E402
+from ..models.base import Track, UserFavorite  # noqa: E402
+from ..core.config import settings  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -313,13 +311,13 @@ async def get_user_favorites(
     # TODO: Move get_user_favorites logic from original tracks.py
     return {"favorites": [], "total": 0}
 '''
-        
+
         with open(tracks_module_dir / "favorites.py", "w", encoding="utf-8") as f:
             f.write(favorites_content)
         print("✅ Creado: tracks/favorites.py")
-        
+
         return True
-    
+
     def _count_lines(self) -> int:
         """Cuenta líneas del archivo tracks.py"""
         try:
@@ -327,7 +325,7 @@ async def get_user_favorites(
                 return sum(1 for _ in f)
         except Exception:
             return 0
-    
+
     def create_migration_plan(self) -> str:
         """Crea un plan detallado para la migración de tracks.py."""
         return f"""
@@ -362,15 +360,15 @@ async def get_user_favorites(
 
 🔧 ENDPOINTS AFECTADOS:
   • GET /tracks/overview/ → ahora /tracks/overview/overview/
-  • POST /tracks/play/{track_id} → ahora /tracks/playback/play/{track_id}
+  • POST /tracks/play/{{track_id}} → ahora /tracks/playback/play/{{track_id}}
   • GET /tracks/most-played → ahora /tracks/playback/most-played/
   | • GET /tracks/recent-plays → ahora /tracks/playback/recent-plays/
   • GET /tracks/chart-stats → ahora /tracks/playback/chart-stats/
-  • GET /tracks/downloads/{track_id} → ahora /tracks/downloads/{track_id}
-  |    POST /tracks/downloads/{track_id} → ahora /tracks/downloads/{track_id}
-  • GET /tracks/favorites/{track_id} → ahora /tracks/favorites/{track_id}
-  |    DELETE /tracks/favorites/{track_id} → ahora /tracks/favorites/{track_id}/favorite
-  • GET /tracks/favorites/{user_id} → ahora /tracks/favorites/{user_id}
+  • GET /tracks/downloads/{{track_id}} → ahora /tracks/downloads/{{track_id}}
+  |    POST /tracks/downloads/{{track_id}} → ahora /tracks/downloads/{{track_id}}
+  • GET /tracks/favorites/{{track_id}} → ahora /tracks/favorites/{{track_id}}
+  |    DELETE /tracks/favorites/{{track_id}} → ahora /tracks/favorites/{{track_id}}/favorite
+  • GET /tracks/favorites/{{user_id}} → ahora /tracks/favorites/{{user_id}}
 
 ⚠️ ACCIONES REQUERIDAS MANUALMENTE:
   1. Extraer funciones específicas de tracks.py.backup
@@ -387,12 +385,13 @@ async def get_user_favorites(
   • Probar gradualmente para no romper la funcionalidad
 """
 
+
 def main():
     splitter = TracksFileSplitter()
-    
+
     print("🏗️ Creando estructura modular para TRACKS.PY")
     print("=" * 60)
-    
+
     if splitter.create_tracks_module_structure():
         print("\n🎉 ¡Estructura creada exitosamente!")
         print("\n📋 Directorio creado:")
@@ -402,28 +401,29 @@ def main():
         print("   ├── playback.py")
         print("   ├── downloads.py")
         print("   └── favorites.py")
-        
+
         print("\n🎯 PLAN DE ACCIÓN INMEDIATA:")
         print("1. 🔍 Identificar funciones clave en tracks.py.backup")
         print("2. 📋 Mover lógica a los nuevos módulos")
         print("3. 🔄 Actualizar app/main.py imports")
         print("4. 🧪 Probar endpoints en http://localhost:8000/docs")
-        
+
         print("\n📦 MÉTODO PRINCIPAL:")
         print("   📍 Los TODOS los 'pass' deben ser reemplazados con la lógica real")
         print("   📊 Los archivos deben tener las funciones exactas del original")
         print("   🧪 Probar cada endpoint individualmente")
-        
+
         print("\n📄 Plan de migración guardado en: tracks_migration_plan.txt")
-        
+
         with open("tracks_migration_plan.txt", "w", encoding="utf-8") as f:
             f.write(splitter.create_migration_plan())
-        
+
     else:
         print("❌ Error creando estructura modular")
         return 1
-    
+
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

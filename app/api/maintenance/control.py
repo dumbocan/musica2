@@ -2,61 +2,79 @@
 Maintenance control endpoints.
 """
 
-import logging
-from typing import Dict, Any
+from typing import Any, Dict
 
-from fastapi import APIRouter, Query, Depends
-from sqlmodel.ext.asyncio.session import AsyncSession
+from fastapi import APIRouter, Query
 
-from ...core.db import SessionDep
-
-logger = logging.getLogger(__name__)
+from ...core.action_status import AVAILABLE_ACTIONS, get_action_statuses, set_action_status
+from ...core.config import settings
+from ...core.maintenance import (
+    is_maintenance_enabled,
+    maintenance_status,
+    request_maintenance_stop,
+    set_maintenance_enabled,
+    start_maintenance_background,
+)
 
 router = APIRouter(prefix="", tags=["maintenance"])
 
 
 @router.get("/status")
 async def get_maintenance_status(
-    session: AsyncSession = Depends(SessionDep)
+    start: bool = Query(False, description="Start maintenance if not running"),
 ) -> Dict[str, Any]:
-    """Get maintenance system status."""
-    # TODO: Implement maintenance status
-    return {"status": "idle", "active_processes": []}
+    if start and is_maintenance_enabled():
+        start_maintenance_background(
+            delay_seconds=settings.MAINTENANCE_STARTUP_DELAY_SECONDS,
+            stagger_seconds=settings.MAINTENANCE_STAGGER_SECONDS,
+        )
+    return {
+        "enabled": is_maintenance_enabled(),
+        "running": maintenance_status(),
+    }
 
 
 @router.post("/toggle")
 async def toggle_maintenance(
-    session: AsyncSession = Depends(SessionDep)
+    enabled: bool = Query(..., description="Enable or disable maintenance"),
 ) -> Dict[str, Any]:
-    """Toggle maintenance mode."""
-    # TODO: Implement maintenance toggle
-    return {"message": "Maintenance toggled"}
+    """Toggle maintenance on/off at runtime."""
+    set_maintenance_enabled(enabled)
+    return {
+        "enabled": is_maintenance_enabled(),
+        "message": "Maintenance enabled" if enabled else "Maintenance disabled",
+    }
 
 
 @router.post("/start")
-async def start_maintenance_process(
-    process_type: str = Query(..., description="Process type to start"),
-    session: AsyncSession = Depends(SessionDep)
-) -> Dict[str, Any]:
-    """Start a maintenance process."""
-    # TODO: Implement process start
-    return {"message": "Process started", "type": process_type}
+async def start_maintenance_process() -> Dict[str, Any]:
+    """Start the maintenance background loops."""
+    if not is_maintenance_enabled():
+        return {
+            "enabled": False,
+            "running": False,
+            "message": "Maintenance disabled",
+        }
+    start_maintenance_background(
+        delay_seconds=settings.MAINTENANCE_STARTUP_DELAY_SECONDS,
+        stagger_seconds=settings.MAINTENANCE_STAGGER_SECONDS,
+    )
+    return {
+        "enabled": True,
+        "running": maintenance_status(),
+    }
 
 
 @router.post("/stop")
-async def stop_maintenance_process(
-    session: AsyncSession = Depends(SessionDep)
-) -> Dict[str, Any]:
+async def stop_maintenance_process() -> Dict[str, Any]:
     """Stop all maintenance processes."""
-    # TODO: Implement process stop
-    return {"message": "All processes stopped"}
+    request_maintenance_stop()
+    for action in AVAILABLE_ACTIONS:
+        set_action_status(action, False)
+    return {"stopped": True}
 
 
 @router.get("/action-status")
-async def get_action_status(
-    action: str = Query(None, description="Specific action to check"),
-    session: AsyncSession = Depends(SessionDep)
-) -> Dict[str, Any]:
+async def get_action_status() -> Dict[str, Any]:
     """Get status of maintenance actions."""
-    # TODO: Implement action status
-    return {"actions": {}, "query_action": action}
+    return {"actions": get_action_statuses()}

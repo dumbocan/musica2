@@ -29,7 +29,7 @@ class UserResponse(UserBase):
     """Schema for user API responses (excluding sensitive data)."""
     id: int
     created_at: datetime
-    
+
     class Config:
         from_attributes = True
 

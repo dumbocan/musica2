@@ -8,7 +8,7 @@ import logging
 from datetime import timedelta
 from typing import Any, Dict
 
-from fastapi import APIRouter, Query, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select
 from sqlalchemy.orm import selectinload
@@ -21,6 +21,7 @@ from ...core.config import settings
 from ...core.image_proxy import proxy_image_list, has_valid_images
 from ...core.time_utils import utc_now
 from ...services.library_expansion import schedule_artist_expansion
+from ...crud import save_artist, update_artist_bio
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ async def get_artist_info(
     spotify_id: str = Path(..., description="Spotify artist ID"),
     session: AsyncSession = Depends(SessionDep),
 ) -> Dict[str, Any]:
-    """Get artist info from Spotify + Last.fm bio/tags/listeners (no DB write)."""
+    """Get artist info DB-first; fetch external data only when missing."""
     local_artist = (await session.exec(
         select(Artist).where(Artist.spotify_id == spotify_id)
     )).first()
@@ -52,9 +53,14 @@ async def get_artist_info(
             "genres": _parse_genres_field(local_artist.genres),
             "image_path_id": local_artist.image_path_id,
         }
-        if local_images_ok:
-            spotify_data = local_payload
-    else:
+        spotify_data = local_payload
+    needs_external = not spotify_data
+    if local_artist and not local_images_ok:
+        needs_external = True
+    if local_artist and not _parse_genres_field(local_artist.genres):
+        needs_external = True
+
+    if needs_external:
         try:
             spotify_data = await asyncio.wait_for(
                 spotify_client.get_artist(spotify_id),
@@ -70,12 +76,16 @@ async def get_artist_info(
             spotify_data["images"] = proxy_image_list(spotify_data.get("images", []), size=384)
         except Exception:
             pass
-    if not spotify_data and local_payload:
-        spotify_data = local_payload
+        try:
+            saved = await asyncio.to_thread(save_artist, spotify_data)
+            if saved:
+                local_artist = saved
+        except Exception as exc:
+            logger.warning("[artist_info] failed to persist spotify artist %s: %s", spotify_id, exc)
 
     lastfm_data = {}
     try:
-        name = spotify_data.get("name")
+        name = spotify_data.get("name") if spotify_data else None
         if name:
             if local_artist and (local_artist.bio_summary or local_artist.bio_content):
                 lastfm_data = {
@@ -87,6 +97,11 @@ async def get_artist_info(
                 }
             else:
                 lastfm_data = await lastfm_client.get_artist_info(name)
+                if local_artist and lastfm_data:
+                    summary = (lastfm_data.get("summary") or "").strip()
+                    content = (lastfm_data.get("content") or "").strip()
+                    if summary or content:
+                        await asyncio.to_thread(update_artist_bio, local_artist.id, summary, content)
     except Exception as exc:
         logger.warning("[artist_info] lastfm fetch failed for %s: %s", spotify_id, exc)
         lastfm_data = {}
@@ -243,7 +258,24 @@ async def get_local_artist_by_spotify_id(
 ) -> Artist | None:
     """Get the locally stored artist by Spotify ID."""
     artist = (await session.exec(select(Artist).where(Artist.spotify_id == spotify_id))).first()
-    return artist
+    if artist:
+        return artist
+    try:
+        spotify_data = await asyncio.wait_for(
+            spotify_client.get_artist(spotify_id),
+            timeout=6.0,
+        )
+    except Exception as exc:
+        logger.warning("Spotify artist fetch failed for %s: %r", spotify_id, exc, exc_info=True)
+        return None
+    if not spotify_data:
+        return None
+    try:
+        saved = await asyncio.to_thread(save_artist, spotify_data)
+        return saved
+    except Exception as exc:
+        logger.warning("[artist_info] failed to persist spotify artist %s: %s", spotify_id, exc)
+        return None
 
 
 @router.get("/id/{artist_id}/discography")

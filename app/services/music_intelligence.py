@@ -338,8 +338,8 @@ class MusicIntelligenceService:
             tracks = session.exec(
                 select(Track)
                 .where(
-                    (Track.name.ilike(search)) |
-                    (Track.id.in_(
+                    (Track.name.ilike(search))
+                    | (Track.id.in_(
                         select(Track.id)
                         .join(Artist, Track.artist_id == Artist.id)
                         .where(Artist.name.ilike(search))

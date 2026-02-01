@@ -27,17 +27,17 @@ from urllib.parse import parse_qs, urlparse, unquote
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import httpx
-from PIL import Image
-from sqlmodel import select
+import httpx  # noqa: E402
+from PIL import Image  # noqa: E402
+from sqlmodel import select  # noqa: E402
 
-from app.core.db import get_session
-from app.core.image_db_store import (
+from app.core.db import get_session  # noqa: E402
+from app.core.image_db_store import (  # noqa: E402
     IMAGE_STORAGE, IMAGE_SIZES, DEFAULT_QUALITY, MAX_ORIGINAL_SIZE,
     _get_entity_name, find_by_hash, _ensure_storage_dirs
 )
-from app.core.time_utils import utc_now
-from app.models.base import Artist, Album, StoredImagePath
+from app.core.time_utils import utc_now  # noqa: E402
+from app.models.base import Artist, Album, StoredImagePath  # noqa: E402
 
 
 def extract_real_url(url: str) -> str:

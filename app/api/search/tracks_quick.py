@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["search"])
 
+
 @router.get("/")
 async def search_tracks_quick(
     request: Request,
@@ -28,6 +29,7 @@ async def search_tracks_quick(
     # TODO: Move search_tracks_quick logic from original search.py
     # This should be optimized for speed
     return {"tracks": [], "total": 0, "query": query}
+
 
 @router.get("/album/{album_id}")
 async def get_album_tracks_quick(

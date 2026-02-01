@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/search", tags=["artists"])
 
+
 @router.get("/")
 async def search_artists(
     q: str = Query(..., description="Search query"),
@@ -23,6 +24,7 @@ async def search_artists(
     """Search artists by name."""
     # TODO: Implement artist search
     return {"artists": [], "total": 0}
+
 
 @router.get("/auto-download")
 async def search_artists_auto_download(
