@@ -353,7 +353,8 @@ async def get_tracks_overview(
             if verify_files and file_path:
                 file_exists = FsPath(file_path).exists()
             else:
-                file_exists = False
+                # DB-first: when not verifying disk, trust persisted download_path.
+                file_exists = bool(file_path)
 
             if file_exists:
                 youtube_status = "completed"
