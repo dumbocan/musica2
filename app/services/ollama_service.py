@@ -30,8 +30,8 @@ logger = logging.getLogger(__name__)
 class OllamaConfig:
     """Configuración del cliente Ollama."""
     base_url: str = "http://localhost:11434"
-    model: str = "llama3.2:3b"
-    timeout: int = 120  # segundos para generación
+    model: str = "tinyllama:1.1b"
+    timeout: int = 300  # segundos para generación
     max_retries: int = 3
     retry_delay: float = 1.0  # segundos entre reintentos
 
@@ -280,6 +280,7 @@ class OllamaClient:
         system_prompt: str,
         response_schema: Dict[str, Any],
         temperature: float = 0.3,
+        max_tokens: Optional[int] = None,
     ) -> OllamaResponse:
         """
         Generar respuesta y parsear como JSON estructurado.
@@ -294,19 +295,25 @@ class OllamaClient:
             OllamaResponse con la respuesta parseada
         """
         # Modificar el system prompt para solicitar JSON
+        schema_json = json.dumps(response_schema, ensure_ascii=False, separators=(",", ":"))
         enhanced_system = f"""{system_prompt}
 
 IMPORTANTE: Debes responder exclusivamente con JSON válido.
 No incluyas texto adicional, markdown, ni explicaciones.
 Tu respuesta debe ser un objeto JSON que siga este esquema:
-{json.dumps(response_schema, indent=2)}
+{schema_json}
 """
+
+        # Modelos muy pequeños suelen quedarse largos en modo JSON; limitamos salida.
+        if max_tokens is None and ("0.5b" in self.config.model or "1.5b" in self.config.model):
+            max_tokens = 256
 
         response = self.generate(
             prompt=prompt,
             system_prompt=enhanced_system,
             temperature=temperature,
-            format="json"
+            format="json",
+            max_tokens=max_tokens,
         )
 
         return response

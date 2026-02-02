@@ -209,6 +209,7 @@ export interface CuratedTrackItem {
   is_favorite: boolean;
   download_status: string | null;
   download_path: string | null;
+  image_url?: string | null;
   album: {
     id: number;
     spotify_id: string | null;

@@ -203,8 +203,8 @@ export const audio2Api = {
 
   // Playlists
   getAllPlaylists: () => api.get('/playlists/'),
-  getListsOverview: (params?: { limit_per_list?: number; artist_spotify_id?: string }) =>
-    api.get('/lists/overview', { params }),
+  getListsOverview: (params?: { limit_per_list?: number; artist_spotify_id?: string; artist_name?: string }) =>
+    api.get('/lists/overview', { params, timeout: 60000 }),
 
   // Favorites
   addFavorite: (targetType: 'artist' | 'album' | 'track', targetId: number, userId: number) =>

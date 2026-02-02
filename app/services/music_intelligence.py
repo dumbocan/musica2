@@ -352,6 +352,120 @@ class MusicIntelligenceService:
         finally:
             session.close()
 
+    def _build_db_first_playlist(
+        self,
+        user_id: int,
+        mood: str,
+        num_tracks: int,
+        top_tracks: List[TrackInfo],
+        recent_plays: List[TrackInfo],
+    ) -> Dict[str, Any]:
+        """Construir playlist sin LLM usando solo datos de BD."""
+        mood_key = (mood or "").lower()
+        mood_genres = {
+            "fiesta": {"dance", "electronic", "pop", "latin", "reggaeton", "disco", "house"},
+            "entrenar": {"electronic", "hip-hop", "rap", "metal", "rock"},
+            "relajar": {"ambient", "jazz", "acoustic", "classical", "chill"},
+            "triste": {"blues", "soul", "indie", "alternative"},
+            "trabajar": {"ambient", "instrumental", "classical", "jazz"},
+        }.get(mood_key, set())
+
+        candidates: List[tuple[float, TrackInfo, str]] = []
+        seen_ids: set[int] = set()
+
+        for track in recent_plays + top_tracks:
+            if track.id in seen_ids:
+                continue
+            seen_ids.add(track.id)
+
+            genre_bonus = 0.0
+            if mood_genres and any(g.lower() in mood_genres for g in track.genres):
+                genre_bonus = 15.0
+
+            score_bonus = float(track.user_score or 0) * 8.0
+            favorite_bonus = 10.0 if track.is_favorite else 0.0
+            popularity_bonus = float(track.popularity or 0) * 0.1
+            total_score = genre_bonus + score_bonus + favorite_bonus + popularity_bonus
+
+            if genre_bonus > 0:
+                reason = f"Encaja con el mood '{mood}' por género/energía"
+            elif track.is_favorite:
+                reason = "Es una favorita del usuario"
+            elif track.user_score:
+                reason = "Tiene buena valoración del usuario"
+            else:
+                reason = "Basada en historial reciente"
+
+            candidates.append((total_score, track, reason))
+
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        if not candidates:
+            fallback_tracks = self._get_fallback_tracks(user_id=user_id, limit=max(1, num_tracks))
+            candidates = [
+                (float(t.popularity or 0), t, "Selección desde biblioteca local")
+                for t in fallback_tracks
+            ]
+
+        selected = candidates[: max(1, num_tracks)]
+
+        return {
+            "name": f"Mix {mood.title()} (DB-first)",
+            "description": f"Selección local basada en tu biblioteca para mood '{mood}'.",
+            "mood": mood,
+            "tracks": [
+                {
+                    "id": track.id,
+                    "title": track.name,
+                    "artist": track.artist,
+                    "reason": reason,
+                }
+                for _, track, reason in selected
+            ],
+            "notes": "Generada en modo DB-first (sin dependencia fuerte del LLM).",
+        }
+
+    def _get_fallback_tracks(self, user_id: int, limit: int = 10) -> List[TrackInfo]:
+        """Fallback local cuando no hay historial/top tracks suficientes."""
+        session = get_session()
+        try:
+            favorites = session.exec(
+                select(Track)
+                .join(UserFavorite, UserFavorite.track_id == Track.id)
+                .where(UserFavorite.user_id == user_id)
+                .where(UserFavorite.target_type == "track")
+                .order_by(Track.popularity.desc())
+                .limit(limit)
+            ).all()
+            if favorites:
+                return [self._track_to_info(t, session) for t in favorites]
+
+            tracks = session.exec(
+                select(Track)
+                .order_by(Track.popularity.desc())
+                .limit(limit)
+            ).all()
+            return [self._track_to_info(t, session) for t in tracks]
+        finally:
+            session.close()
+
+    def _is_valid_playlist_result(self, result: Dict[str, Any]) -> bool:
+        """Validar salida de playlist del LLM para evitar plantillas/invenciones."""
+        if not isinstance(result, dict):
+            return False
+        tracks = result.get("tracks")
+        if not isinstance(tracks, list) or not tracks:
+            return False
+        for track in tracks:
+            if not isinstance(track, dict):
+                return False
+            if not isinstance(track.get("id"), int):
+                return False
+            if not isinstance(track.get("title"), str) or not track.get("title"):
+                return False
+            if not isinstance(track.get("artist"), str) or not track.get("artist"):
+                return False
+        return True
+
     # =========================================================================
     # MAIN METHODS - Generación de contenido
     # =========================================================================
@@ -393,6 +507,16 @@ class MusicIntelligenceService:
             raise InsufficientDataError(
                 "No hay suficientes datos para generar una playlist. "
                 "Añade favoritos, valoraciones o reproduce algunas canciones."
+            )
+
+        model_name = (self.ollama.config.model or "").lower()
+        if "0.5b" in model_name or "1.5b" in model_name or "tinyllama" in model_name:
+            return self._build_db_first_playlist(
+                user_id=user_id,
+                mood=mood,
+                num_tracks=num_tracks,
+                top_tracks=top_tracks,
+                recent_plays=recent_plays,
             )
 
         # Build context strings
@@ -437,23 +561,45 @@ class MusicIntelligenceService:
                     "notes": {"type": "string"}
                 }
             },
-            temperature=0.7
+            temperature=0.2,
+            max_tokens=256,
         )
 
         if not response.success:
-            raise MusicIntelligenceError(
-                f"Error generando playlist: {response.error}"
+            logger.warning(
+                "LLM playlist generation failed (%s). Falling back to DB-first playlist.",
+                response.error,
+            )
+            return self._build_db_first_playlist(
+                user_id=user_id,
+                mood=mood,
+                num_tracks=num_tracks,
+                top_tracks=top_tracks,
+                recent_plays=recent_plays,
             )
 
         # Parse and return
         try:
             result = json.loads(response.text)
+            if not self._is_valid_playlist_result(result):
+                logger.warning("Invalid LLM playlist schema/content. Falling back to DB-first playlist.")
+                return self._build_db_first_playlist(
+                    user_id=user_id,
+                    mood=mood,
+                    num_tracks=num_tracks,
+                    top_tracks=top_tracks,
+                    recent_plays=recent_plays,
+                )
             logger.info(f"Generated playlist: {result.get('name', 'Unknown')}")
             return result
         except json.JSONDecodeError:
-            logger.error(f"Failed to parse playlist response: {response.text}")
-            raise MusicIntelligenceError(
-                "Error parseando la respuesta del LLM"
+            logger.warning("Failed to parse LLM playlist response. Falling back to DB-first playlist.")
+            return self._build_db_first_playlist(
+                user_id=user_id,
+                mood=mood,
+                num_tracks=num_tracks,
+                top_tracks=top_tracks,
+                recent_plays=recent_plays,
             )
 
     def generate_artist_bio(

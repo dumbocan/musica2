@@ -202,12 +202,20 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
     audio.pause();
     audio.currentTime = 0;
     const { fileFormat, streamFormat } = getFormats(audio);
-    const status = await audio2Api
-      .getYoutubeDownloadStatus(payload.videoId, { format: fileFormat })
-      .catch(() => null);
-    if (status?.data?.exists) {
+    const candidateFormats = Array.from(new Set([fileFormat, 'm4a', 'mp3', 'webm']));
+    let localFormat: string | null = null;
+    for (const fmt of candidateFormats) {
+      const status = await audio2Api
+        .getYoutubeDownloadStatus(payload.videoId, { format: fmt })
+        .catch(() => null);
+      if (status?.data?.exists) {
+        localFormat = fmt;
+        break;
+      }
+    }
+    if (localFormat) {
       set({ audioSourceMode: 'file', statusMessage: '', audioDownloadStatus: 'downloaded' });
-      audio.src = `${API_BASE_URL}/youtube/download/${payload.videoId}/file?format=${fileFormat}${tokenParam}`;
+      audio.src = `${API_BASE_URL}/youtube/download/${payload.videoId}/file?format=${localFormat}${tokenParam}`;
     } else {
       set({ audioSourceMode: 'stream', statusMessage: 'Streaming...', audioDownloadStatus: 'downloading' });
       audio.src = `${API_BASE_URL}/youtube/stream/${payload.videoId}?format=${streamFormat}&cache=true${tokenParam}`;

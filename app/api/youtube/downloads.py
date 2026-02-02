@@ -54,13 +54,46 @@ async def _mark_youtube_download_status(
     await session.commit()
 
 
+async def _status_from_db_path(
+    session: AsyncSession,
+    video_id: str,
+    requested_format: str,
+) -> Dict[str, Any] | None:
+    stmt = (
+        select(YouTubeDownload)
+        .where(YouTubeDownload.youtube_video_id == video_id)
+        .where(YouTubeDownload.download_path.is_not(None))
+        .order_by(YouTubeDownload.updated_at.desc())
+    )
+    row = (await session.exec(stmt)).first()
+    if not row or not row.download_path:
+        return None
+    path = Path(row.download_path)
+    if not path.exists():
+        return None
+    actual_format = path.suffix.lstrip(".").lower() or (row.format_type or requested_format)
+    return {
+        "video_id": video_id,
+        "format": actual_format,
+        "exists": True,
+        "file_path": str(path),
+        "file_size": path.stat().st_size,
+        "source": "db_path",
+    }
+
+
 @router.get("/{video_id}")
 async def get_download_status(
     video_id: str,
     format: str = Query("mp3", pattern="^(mp3|m4a|webm)$"),
+    session: AsyncSession = Depends(SessionDep),
 ) -> Dict[str, Any]:
     """Get download status for a YouTube video."""
-    return await youtube_client.get_download_status(video_id, format)
+    status = await youtube_client.get_download_status(video_id, format)
+    if status.get("exists"):
+        return status
+    db_status = await _status_from_db_path(session, video_id, format)
+    return db_status or status
 
 
 @router.post("/{video_id}")
@@ -102,23 +135,34 @@ async def start_download(
 async def get_download_progress(
     video_id: str,
     format: str = Query("mp3", pattern="^(mp3|m4a|webm)$"),
+    session: AsyncSession = Depends(SessionDep),
 ) -> Dict[str, Any]:
     """Get download file presence status."""
-    return await youtube_client.get_download_status(video_id, format)
+    status = await youtube_client.get_download_status(video_id, format)
+    if status.get("exists"):
+        return status
+    db_status = await _status_from_db_path(session, video_id, format)
+    return db_status or status
 
 
 @router.get("/{video_id}/file")
 async def get_download_file(
     video_id: str,
     format: str = Query("mp3", pattern="^(mp3|m4a|webm)$"),
+    session: AsyncSession = Depends(SessionDep),
 ):
     """Serve downloaded file if present."""
     status = await youtube_client.get_download_status(video_id, format)
     if not status.get("exists"):
-        raise HTTPException(status_code=404, detail="Downloaded file not found")
+        db_status = await _status_from_db_path(session, video_id, format)
+        if db_status:
+            status = db_status
+        else:
+            raise HTTPException(status_code=404, detail="Downloaded file not found")
     file_path = Path(status["file_path"])
-    media_type = "audio/mpeg" if format == "mp3" else "audio/mp4" if format == "m4a" else "audio/webm"
-    return FileResponse(path=file_path, media_type=media_type, filename=f"{video_id}.{format}")
+    ext = file_path.suffix.lstrip(".").lower() or format
+    media_type = "audio/mpeg" if ext == "mp3" else "audio/mp4" if ext == "m4a" else "audio/webm"
+    return FileResponse(path=file_path, media_type=media_type, filename=f"{video_id}.{ext}")
 
 
 @router.delete("/{video_id}")
