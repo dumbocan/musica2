@@ -442,21 +442,128 @@ LOG_RETENTION_DAYS=30
 
 ## 🛠️ Troubleshooting YouTube (casos reales)
 
-Si falla una canción con `502` en `/youtube/stream/...`, revisa en este orden:
+Si falla una canción con `502` en `/youtube/stream/...`, sigue este runbook completo.
 
-1. **Comprobar error exacto**  
-   `curl -i "http://localhost:8000/youtube/stream/<VIDEO_ID>?format=m4a&cache=true&token=<TOKEN>"`
-2. **Validar cookies de YouTube** (`yt-dlp`):  
-   `python -m yt_dlp -v --cookies storage/cookies/youtube_cookies.txt "https://www.youtube.com/watch?v=<VIDEO_ID>" -f bestaudio -g`
-3. **Si aparece** `Sign in to confirm you’re not a bot` o cookies inválidas:  
-   re-inicia sesión en YouTube y re-exporta cookies (formato Netscape).
-4. **Si aparece** `JS runtimes: none` / `node unavailable`:  
-   instala/verifica Node y reinicia backend.
-5. **VPN**: puede causar bloqueos anti-bot/LOGIN_REQUIRED; prueba sin VPN para confirmar.
+### 1) Confirmar que backend y DB están arriba
+
+```bash
+pg_isready -h 127.0.0.1 -p 5432
+curl -s http://localhost:8000/health
+```
+
+Si backend no levanta, revisa `.env` (`DATABASE_URL`) y reinicia:
+
+```bash
+cd /home/micasa/audio2
+mkdir -p logs
+/home/micasa/audio2/venv/bin/uvicorn app.main:app --reload > logs/uvicorn.log 2>&1
+```
+
+### 2) Ver error exacto del video problemático
+
+```bash
+curl -i --max-time 30 \
+  "http://localhost:8000/youtube/stream/<VIDEO_ID>?format=m4a&cache=true&token=<TOKEN_REAL>"
+```
+
+Errores típicos:
+- `Sign in to confirm you're not a bot`
+- `Unable to cache/stream audio file`
+- `403 Forbidden` (googlevideo)
+
+### 3) Probar yt-dlp fuera de la app (diagnóstico real)
+
+Usa siempre el `yt-dlp` del venv:
+
+```bash
+/home/micasa/audio2/venv/bin/python -m yt_dlp --version
+/home/micasa/audio2/venv/bin/python -m yt_dlp -v \
+  --cookies /home/micasa/audio2/storage/cookies/youtube_cookies.txt \
+  "https://www.youtube.com/watch?v=<VIDEO_ID>" -f bestaudio -g
+```
+
+Si aquí falla, el backend también fallará.
+
+### 4) Si falla por bot/login: renovar cookies
+
+1. Inicia sesión en YouTube desde tu navegador principal.
+2. Exporta cookies en formato Netscape (`youtube_cookies.txt`).
+3. Guarda en:
+   `/home/micasa/audio2/storage/cookies/youtube_cookies.txt`
+4. Verifica que incluya `.youtube.com`:
+
+```bash
+grep -E "youtube\\.com|google\\.com" /home/micasa/audio2/storage/cookies/youtube_cookies.txt | head
+```
+
+### 5) Si falla por JS challenge/SABR
+
+Síntomas en `yt-dlp -v`:
+- `JS runtimes: none`
+- `Signature solving failed`
+- `n challenge solving failed`
+- `Only images are available for download`
+
+Solución:
+
+```bash
+node -v
+/home/micasa/audio2/venv/bin/python -m yt_dlp -v \
+  --js-runtimes "node:/home/micasa/.nvm/versions/node/v22.21.1/bin/node" \
+  --remote-components ejs:github \
+  --cookies /home/micasa/audio2/storage/cookies/youtube_cookies.txt \
+  "https://www.youtube.com/watch?v=<VIDEO_ID>" -f bestaudio -g
+```
+
+Si este comando devuelve URL `googlevideo...`, la extracción está bien.
+
+### 6) Variables recomendadas en `.env`
+
+```env
+YTDLP_COOKIES_FILE=/home/micasa/audio2/storage/cookies/youtube_cookies.txt
+YTDLP_JS_RUNTIMES=node:/home/micasa/.nvm/versions/node/v22.21.1/bin/node
+YTDLP_REMOTE_COMPONENTS=ejs:github
+```
 
 Notas:
-- `android` client en yt-dlp no soporta cookies en algunos flujos; para cuentas logueadas conviene cliente web + cookies válidas.
-- Si el iframe de YouTube pide “inicia sesión”, suele ser restricción de embed/cuenta/región del video, no un fallo de la app.
+- El backend ahora autodetecta `node` y `storage/cookies/youtube_cookies.txt`, pero estas variables lo dejan explícito y estable.
+- `--extractor-args youtube:player_client=android` puede no servir con cookies (normal en yt-dlp reciente).
+
+### 7) Reiniciar backend y validar desde app
+
+```bash
+pkill -f "uvicorn app.main:app" || true
+cd /home/micasa/audio2
+/home/micasa/audio2/venv/bin/uvicorn app.main:app --reload > logs/uvicorn.log 2>&1
+```
+
+Reproducir una pista:
+- si ya está local (DB-first) => reproduce sin tocar YouTube.
+- si no está local y hay `videoId` => stream inmediato + cache en paralelo.
+- si no hay `videoId` => busca link y luego reproduce.
+
+### 8) Revisar logs cuando vuelva a fallar
+
+```bash
+tail -n 200 /home/micasa/audio2/logs/uvicorn.log | \
+  grep -E "youtube|yt-dlp|403|Sign in|bot|stream|download"
+```
+
+### 9) VPN y bloqueos regionales
+
+Con VPN pueden aumentar:
+- `LOGIN_REQUIRED`
+- `403` en `googlevideo`
+- “Inicia sesión” en iframe
+
+Si hay dudas, prueba sin VPN para confirmar.
+
+### 10) Política de reproducción (no romper)
+
+1. Si hay archivo local (`download_path`) -> reproducir local, no YouTube.
+2. Si no hay local pero hay `videoId` -> stream + cache en paralelo.
+3. Si no hay ninguno -> buscar link y reproducir.
+4. Si YouTube bloquea descarga, no bloquear UI ni romper audio si el stream sigue disponible.
 
 ## 🚀 **Usage Examples**
 
