@@ -111,7 +111,7 @@ async def get_tracks_overview(
     Return tracks with artist, album, cached YouTube link/status and local file info.
 
     Enhanced version with:
-    - After-ID pagination (more efficient than offset)
+    - Cursor pagination compatible with sorted results
     - Summary statistics toggle
     - Multiple filter types
     - Improved search patterns
@@ -197,7 +197,11 @@ async def get_tracks_overview(
             select(Track, Artist, Album)
             .join(Artist, Artist.id == Track.artist_id)
             .outerjoin(Album, Album.id == Track.album_id)
-            .order_by(Track.id.asc())
+            .order_by(
+                func.lower(Artist.name).asc(),
+                func.lower(Track.name).asc(),
+                Track.id.asc(),
+            )
         )
 
         if hidden_exists is not None:
@@ -251,11 +255,10 @@ async def get_tracks_overview(
             elif filter == "missingFile":
                 base_query = base_query.where(~file_exists)
 
-        # After-ID pagination (more efficient than offset)
-        if after_id is not None:
-            base_query = base_query.where(Track.id > after_id)
-        else:
-            base_query = base_query.offset(offset)
+        # NOTE: For stable alphabetic ordering, use offset-based cursor.
+        # `after_id` is treated as next offset cursor value.
+        effective_offset = after_id if after_id is not None else offset
+        base_query = base_query.offset(effective_offset)
 
         rows = sync_session.exec(base_query.limit(limit + 1)).all()
 
@@ -399,16 +402,13 @@ async def get_tracks_overview(
                 "chart_weeks_top10": chart_stats.weeks_top10 if chart_stats else 0,
             })
 
-        # Determine next_after for pagination
-        next_after = track_rows[-1][0].id if track_rows and has_more else after_id
-
         # Build response
         response = {
             "items": items,
-            "offset": offset,
+            "offset": effective_offset,
             "limit": limit,
             "has_more": has_more,
-            "next_after": next_after if has_more else None,
+            "next_after": (effective_offset + limit) if has_more else None,
         }
 
         if summary:
