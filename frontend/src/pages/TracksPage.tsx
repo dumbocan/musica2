@@ -318,7 +318,9 @@ export function TracksPage() {
       filteredTracks
         .map((track) => {
           const trackKey = resolveTrackKey(track);
+          const localVideoId = track.local_file_exists && track.track_id ? `local:${track.track_id}` : undefined;
           const videoId =
+            localVideoId ||
             track.youtube_video_id ||
             (override && override.trackKey === trackKey ? override.videoId : undefined);
           if (!videoId) return null;
@@ -565,8 +567,12 @@ export function TracksPage() {
   const handlePlayTrack = useCallback(
     async (track: TrackOverview) => {
       const trackKey = resolveTrackKey(track);
-      const linkInfo = await ensureYoutubeLink(track);
-      const videoId = linkInfo?.videoId || track.youtube_video_id;
+      const localVideoId = track.local_file_exists && track.track_id ? `local:${track.track_id}` : null;
+      let videoId = localVideoId;
+      if (!videoId) {
+        const linkInfo = await ensureYoutubeLink(track);
+        videoId = linkInfo?.videoId || track.youtube_video_id || null;
+      }
       if (!videoId) {
         setStatusMessage('Sin enlace de YouTube');
         return;
@@ -591,7 +597,7 @@ export function TracksPage() {
           videoId: item.videoId,
           durationSec: nextDurationSec,
         });
-        if (state.playbackMode === 'video') {
+        if (state.playbackMode === 'video' && !item.videoId.startsWith('local:')) {
           state.setVideoEmbedId(item.videoId);
         }
       });
@@ -605,7 +611,11 @@ export function TracksPage() {
         durationSec,
       });
       if (playbackMode === 'video') {
-        setVideoEmbedId(videoId);
+        if (videoId.startsWith('local:')) {
+          setVideoEmbedId(null);
+        } else {
+          setVideoEmbedId(videoId);
+        }
       }
     },
     [
@@ -777,7 +787,7 @@ export function TracksPage() {
                 (() => {
                   const trackKey = resolveTrackKey(track);
                   const linkLoading = linkState[trackKey]?.status === 'loading';
-                  const canPlay = !linkLoading && (!!track.youtube_video_id || !!track.spotify_track_id);
+                  const canPlay = !linkLoading && (track.local_file_exists || !!track.youtube_video_id || !!track.spotify_track_id);
                   const isFavorite = favoriteTrackIds.has(track.track_id);
                   const chartBadge = track.chart_best_position
                     ? `#${track.chart_best_position}`

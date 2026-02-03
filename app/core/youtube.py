@@ -15,6 +15,7 @@ import logging
 from collections import OrderedDict
 from pathlib import Path
 from typing import List, Optional, Dict, Any
+import shutil
 import httpx
 import yt_dlp
 from fastapi import HTTPException
@@ -55,6 +56,7 @@ class YouTubeClient:
         self._ytdlp_daily_limit = settings.YTDLP_DAILY_LIMIT
         self._ytdlp_min_interval_seconds = settings.YTDLP_MIN_INTERVAL_SECONDS
         self._ytdlp_enabled_override: bool | None = None
+        self._ytdlp_runtime_opts = self._build_ytdlp_runtime_opts()
         now = datetime.now()
         last_reset = self._get_last_reset_anchor(now)
         self._request_count_started_at = last_reset.timestamp()
@@ -183,14 +185,75 @@ class YouTubeClient:
             return (browser, profile.strip())
         return (browser,)
 
+    def _auto_detect_node_path(self) -> Optional[str]:
+        node_path = shutil.which("node")
+        if node_path:
+            return node_path
+
+        nvm_nodes = sorted(Path.home().glob(".nvm/versions/node/*/bin/node"))
+        if nvm_nodes:
+            return str(nvm_nodes[-1])
+
+        for candidate in ("/usr/bin/node", "/usr/local/bin/node"):
+            if Path(candidate).exists():
+                return candidate
+        return None
+
+    def _build_ytdlp_runtime_opts(self) -> Dict[str, Any]:
+        runtime_opts: Dict[str, Any] = {}
+
+        js_runtime_raw = (settings.YTDLP_JS_RUNTIMES or "").strip()
+        if js_runtime_raw:
+            runtimes: Dict[str, Dict[str, Any]] = {}
+            for token in [part.strip() for part in js_runtime_raw.split(",") if part.strip()]:
+                name, sep, value = token.partition(":")
+                runtime_name = name.strip().lower()
+                if not runtime_name:
+                    continue
+                config: Dict[str, Any] = {}
+                if sep and value.strip():
+                    config["path"] = value.strip()
+                runtimes[runtime_name] = config
+            if runtimes:
+                runtime_opts["js_runtimes"] = runtimes
+        else:
+            node_path = self._auto_detect_node_path()
+            if node_path:
+                runtime_opts["js_runtimes"] = {"node": {"path": node_path}}
+
+        remote_components_raw = (settings.YTDLP_REMOTE_COMPONENTS or "").strip()
+        if remote_components_raw:
+            runtime_opts["remote_components"] = [
+                part.strip() for part in remote_components_raw.split(",") if part.strip()
+            ]
+
+        if runtime_opts:
+            logger.info("yt-dlp runtime options enabled: %s", list(runtime_opts.keys()))
+        return runtime_opts
+
+    def _merge_ytdlp_opts(self, base_opts: Dict[str, Any], auth_opts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        merged: Dict[str, Any] = {**base_opts, **self._ytdlp_runtime_opts}
+        if auth_opts:
+            merged.update(auth_opts)
+        return merged
+
     def _build_ytdlp_auth_candidates(self) -> List[Dict[str, Any]]:
         candidates: List[Dict[str, Any]] = [{}]
         cookie_file = (settings.YTDLP_COOKIES_FILE or "").strip()
+        cookie_paths: List[Path] = []
         if cookie_file:
-            path = Path(cookie_file).expanduser()
+            cookie_paths.append(Path(cookie_file).expanduser())
+        default_cookie_path = Path(settings.STORAGE_ROOT) / "cookies" / "youtube_cookies.txt"
+        cookie_paths.append(default_cookie_path)
+        seen_cookie_paths: set[str] = set()
+        for path in cookie_paths:
+            path_str = str(path.resolve()) if path.exists() else str(path)
+            if path_str in seen_cookie_paths:
+                continue
+            seen_cookie_paths.add(path_str)
             if path.exists():
                 candidates.append({"cookiefile": str(path)})
-            else:
+            elif cookie_file and path == Path(cookie_file).expanduser():
                 logger.warning("YTDLP_COOKIES_FILE does not exist: %s", path)
 
         browser_spec = (settings.YTDLP_COOKIES_FROM_BROWSER or "").strip()
@@ -323,7 +386,7 @@ class YouTubeClient:
         info = None
         last_exc: Exception | None = None
         for auth_opts in self._build_ytdlp_auth_candidates():
-            ydl_opts = {**base_opts, **auth_opts}
+            ydl_opts = self._merge_ytdlp_opts(base_opts, auth_opts)
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(query, download=False)
@@ -850,7 +913,7 @@ class YouTubeClient:
             def download_sync():
                 last_exc: Exception | None = None
                 for auth_opts in self._build_ytdlp_auth_candidates():
-                    run_opts = {**ydl_opts, **auth_opts}
+                    run_opts = self._merge_ytdlp_opts(ydl_opts, auth_opts)
                     try:
                         with yt_dlp.YoutubeDL(run_opts) as ydl:
                             ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
@@ -937,11 +1000,17 @@ class YouTubeClient:
             loop = asyncio.get_event_loop()
 
             def download_sync():
-                try:
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
-                except Exception as e:
-                    raise e
+                last_exc: Exception | None = None
+                for auth_opts in self._build_ytdlp_auth_candidates():
+                    run_opts = self._merge_ytdlp_opts(ydl_opts, auth_opts)
+                    try:
+                        with yt_dlp.YoutubeDL(run_opts) as ydl:
+                            ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+                        return
+                    except Exception as exc:
+                        last_exc = exc
+                        continue
+                raise last_exc or RuntimeError("yt-dlp download failed")
 
             await loop.run_in_executor(None, download_sync)
 
@@ -1012,11 +1081,17 @@ class YouTubeClient:
             loop = asyncio.get_event_loop()
 
             def download_sync():
-                try:
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
-                except Exception as e:
-                    raise e
+                last_exc: Exception | None = None
+                for auth_opts in self._build_ytdlp_auth_candidates():
+                    run_opts = self._merge_ytdlp_opts(ydl_opts, auth_opts)
+                    try:
+                        with yt_dlp.YoutubeDL(run_opts) as ydl:
+                            ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+                        return
+                    except Exception as exc:
+                        last_exc = exc
+                        continue
+                raise last_exc or RuntimeError("yt-dlp download failed")
 
             await loop.run_in_executor(None, download_sync)
 
@@ -1083,11 +1158,17 @@ class YouTubeClient:
             loop = asyncio.get_event_loop()
 
             def download_sync():
-                try:
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
-                except Exception as e:
-                    raise e
+                last_exc: Exception | None = None
+                for auth_opts in self._build_ytdlp_auth_candidates():
+                    run_opts = self._merge_ytdlp_opts(ydl_opts, auth_opts)
+                    try:
+                        with yt_dlp.YoutubeDL(run_opts) as ydl:
+                            ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+                        return
+                    except Exception as exc:
+                        last_exc = exc
+                        continue
+                raise last_exc or RuntimeError("yt-dlp download failed")
 
             await loop.run_in_executor(None, download_sync)
 
@@ -1230,7 +1311,7 @@ class YouTubeClient:
                 }
                 last_exc: Exception | None = None
                 for auth_opts in self._build_ytdlp_auth_candidates():
-                    ydl_opts = {**base_opts, **auth_opts}
+                    ydl_opts = self._merge_ytdlp_opts(base_opts, auth_opts)
                     try:
                         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                             return ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)

@@ -6,6 +6,7 @@ Handles play tracking, history, and playback-related functionality.
 
 import logging
 from typing import Dict, Any
+from pathlib import Path as FsPath
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy import func
@@ -16,6 +17,8 @@ from ...core.db import get_session, SessionDep
 from ...models.base import Track, Artist, Album, YouTubeDownload, PlayHistory
 
 logger = logging.getLogger(__name__)
+REPO_ROOT = FsPath(__file__).resolve().parents[3]
+DOWNLOADS_ROOT = REPO_ROOT / "downloads"
 
 
 def _select_best_downloads(
@@ -48,6 +51,22 @@ def _select_best_downloads(
     return download_map
 
 
+def _resolve_download_path(raw_path: str | None) -> FsPath | None:
+    if not raw_path:
+        return None
+    candidate = FsPath(raw_path.strip())
+    if candidate.is_absolute():
+        return candidate if candidate.exists() else None
+    options = [
+        REPO_ROOT / candidate,
+        DOWNLOADS_ROOT / candidate,
+    ]
+    for path in options:
+        if path.exists():
+            return path
+    return None
+
+
 router = APIRouter(tags=["tracks"])
 
 
@@ -70,6 +89,51 @@ def record_track_play(
         "message": "Play recorded",
         "play_history": play_history.dict(),
     }
+
+
+@router.get("/id/{track_id}/download-info")
+def get_track_download_info(
+    track_id: int = Path(..., description="Local track ID"),
+) -> Dict[str, Any]:
+    """Get DB-first download info for a track (local file first, then YouTube metadata)."""
+    with get_session() as sync_session:
+        track_row = sync_session.exec(
+            select(Track, Artist)
+            .join(Artist, Artist.id == Track.artist_id)
+            .where(Track.id == track_id)
+        ).first()
+        if not track_row:
+            raise HTTPException(status_code=404, detail="Track not found")
+
+        track, artist = track_row
+        download = None
+        if track.spotify_id:
+            downloads = sync_session.exec(
+                select(YouTubeDownload).where(YouTubeDownload.spotify_track_id == track.spotify_id)
+            ).all()
+            best = _select_best_downloads(downloads)
+            download = best.get(track.spotify_id) if best else None
+
+        local_path = track.download_path or (download.download_path if download else None)
+        local_exists = _resolve_download_path(local_path) is not None
+        youtube_video_id = (download.youtube_video_id if download else None)
+        youtube_status = (download.download_status if download else None)
+
+        if local_exists:
+            youtube_status = "completed"
+        elif youtube_video_id and not youtube_status:
+            youtube_status = "link_found"
+
+        return {
+            "track_id": track.id,
+            "track_name": track.name,
+            "spotify_track_id": track.spotify_id,
+            "artist_name": artist.name if artist else None,
+            "youtube_video_id": youtube_video_id,
+            "youtube_status": youtube_status,
+            "local_file_path": local_path,
+            "local_file_exists": local_exists,
+        }
 
 
 @router.get("/most-played")

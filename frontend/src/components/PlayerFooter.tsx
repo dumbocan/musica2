@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Shuffle } from 'lucide-react';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import type { PlayerQueueItem } from '@/store/usePlayerStore';
-import { audio2Api } from '@/lib/api';
 
 export function PlayerFooter() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -21,8 +20,6 @@ export function PlayerFooter() {
   const audioDownloadStatus = usePlayerStore((s) => s.audioDownloadStatus);
   const audioDownloadVideoId = usePlayerStore((s) => s.audioDownloadVideoId);
   const onPlayTrack = usePlayerStore((s) => s.onPlayTrack);
-  const setVideoDownloadState = usePlayerStore((s) => s.setVideoDownloadState);
-  const setLastDownloadedVideo = usePlayerStore((s) => s.setLastDownloadedVideo);
   const setAudioEl = usePlayerStore((s) => s.setAudioEl);
   const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
   const setDuration = usePlayerStore((s) => s.setDuration);
@@ -43,7 +40,6 @@ export function PlayerFooter() {
   const setShuffleMode = usePlayerStore((s) => s.setShuffleMode);
   const upgradeInFlightRef = useRef(false);
   const lastVolumeRef = useRef(volume);
-  const downloadRequestedRef = useRef(new Set<string>());
   const endGuardRef = useRef(false);
   const getPreferredFormats = () => {
     const audio = audioRef.current;
@@ -207,44 +203,6 @@ export function PlayerFooter() {
       videoController.pause();
     }
   }, [isPlaying, playbackMode, videoController]);
-
-  const requestVideoDownload = useCallback(async (videoId: string) => {
-    if (!videoId) return;
-    if (downloadRequestedRef.current.has(videoId)) return;
-    downloadRequestedRef.current.add(videoId);
-    setVideoDownloadState(videoId, 'checking');
-    try {
-      const { fileFormat, streamFormat } = getPreferredFormats();
-      const preferredFormat = streamFormat || fileFormat;
-      const primaryStatus = await audio2Api.getYoutubeDownloadStatus(videoId, { format: fileFormat });
-      if (primaryStatus.data?.exists) {
-        setVideoDownloadState(videoId, 'downloaded');
-        setLastDownloadedVideo(videoId);
-        return;
-      }
-      if (streamFormat && streamFormat !== fileFormat) {
-        const streamStatus = await audio2Api.getYoutubeDownloadStatus(videoId, { format: streamFormat });
-        if (streamStatus.data?.exists) {
-          setVideoDownloadState(videoId, 'downloaded');
-          setLastDownloadedVideo(videoId);
-          return;
-        }
-      }
-      setVideoDownloadState(videoId, 'downloading');
-      await audio2Api.downloadYoutubeAudio(videoId, { format: preferredFormat, quality: 'bestaudio' });
-      setVideoDownloadState(videoId, 'downloaded');
-      setLastDownloadedVideo(videoId);
-    } catch (err) {
-      console.warn('No se pudo descargar el audio del video', err);
-      setVideoDownloadState(videoId, 'error');
-      downloadRequestedRef.current.delete(videoId);
-    }
-  }, [setLastDownloadedVideo, setVideoDownloadState]);
-
-  useEffect(() => {
-    if (!videoEmbedId) return;
-    void requestVideoDownload(videoEmbedId);
-  }, [requestVideoDownload, videoEmbedId]);
 
   useEffect(() => {
     if (!nowPlaying || audioSourceMode !== 'stream') return;

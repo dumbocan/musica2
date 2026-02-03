@@ -83,6 +83,8 @@ Se ha realizado una revisión exhaustiva del código del frontend para mejorar l
 - **Importante**: después de cambiar claves en `.env`, reinicia backend (`uvicorn`) para que cargue los nuevos valores.
 - **Fallback yt-dlp (opt-in)**: cuando la cuota de YouTube se agota, el backend puede buscar links con yt-dlp si activas `YTDLP_FALLBACK_ENABLED=true`. Ajusta `YTDLP_DAILY_LIMIT` y `YTDLP_MIN_INTERVAL_SECONDS` para controlar el coste diario.
 - **Cookies para yt-dlp (recomendado)**: para reducir bloqueos `Sign in to confirm you're not a bot`, configura `YTDLP_COOKIES_FROM_BROWSER=firefox` (o `chrome/brave` según tu sesión) en `.env`. También puedes usar `YTDLP_COOKIES_FILE=/ruta/cookies.txt`.
+- **Runtime JS automático para yt-dlp**: el backend ahora autodetecta `node` y habilita componentes remotos EJS para resolver challenges de YouTube (`SABR/signature`). Si existe `storage/cookies/youtube_cookies.txt`, se usa automáticamente como `cookiefile`.
+- **Playback restaurado en paralelo**: `/youtube/stream` volvió al flujo “reproducir mientras descarga/cachea”. Si el audio ya existe en disco, sirve local (DB-first). Si no existe, hace stream inmediato y guarda en paralelo.
 - **Streaming robusto ante 403 de googlevideo**: el backend usa cabeceras del extractor y descarga por rangos cerrados (`bytes=start-end`) para evitar errores de reproducción donde el navegador veía `200` pero el stream real fallaba.
 - **Toggle + métricas en Settings**: la pantalla de ajustes permite activar/desactivar el fallback, ver el contador de links guardados y el uso diario del fallback.
 - **Log de fallback (30 días)**: los videos guardados vía yt-dlp se registran en `storage/logs/ytdlp_fallback.log` (respeta `STORAGE_ROOT`). El archivo se recorta según `LOG_RETENTION_DAYS`.
@@ -429,10 +431,32 @@ YOUTUBE_API_KEY=your_youtube_api_key
 YTDLP_FALLBACK_ENABLED=false
 YTDLP_DAILY_LIMIT=120
 YTDLP_MIN_INTERVAL_SECONDS=2.0
+YTDLP_COOKIES_FILE=/home/micasa/audio2/storage/cookies/youtube_cookies.txt
+# Opcional (normalmente no hace falta si autodetección funciona):
+YTDLP_JS_RUNTIMES=node:/home/micasa/.nvm/versions/node/v22.21.1/bin/node
+YTDLP_REMOTE_COMPONENTS=ejs:github
 
 # Logs
 LOG_RETENTION_DAYS=30
 ```
+
+## 🛠️ Troubleshooting YouTube (casos reales)
+
+Si falla una canción con `502` en `/youtube/stream/...`, revisa en este orden:
+
+1. **Comprobar error exacto**  
+   `curl -i "http://localhost:8000/youtube/stream/<VIDEO_ID>?format=m4a&cache=true&token=<TOKEN>"`
+2. **Validar cookies de YouTube** (`yt-dlp`):  
+   `python -m yt_dlp -v --cookies storage/cookies/youtube_cookies.txt "https://www.youtube.com/watch?v=<VIDEO_ID>" -f bestaudio -g`
+3. **Si aparece** `Sign in to confirm you’re not a bot` o cookies inválidas:  
+   re-inicia sesión en YouTube y re-exporta cookies (formato Netscape).
+4. **Si aparece** `JS runtimes: none` / `node unavailable`:  
+   instala/verifica Node y reinicia backend.
+5. **VPN**: puede causar bloqueos anti-bot/LOGIN_REQUIRED; prueba sin VPN para confirmar.
+
+Notas:
+- `android` client en yt-dlp no soporta cookies en algunos flujos; para cuentas logueadas conviene cliente web + cookies válidas.
+- Si el iframe de YouTube pide “inicia sesión”, suele ser restricción de embed/cuenta/región del video, no un fallo de la app.
 
 ## 🚀 **Usage Examples**
 

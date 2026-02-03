@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     YTDLP_MIN_INTERVAL_SECONDS: float = 2.0
     YTDLP_COOKIES_FROM_BROWSER: Optional[str] = None
     YTDLP_COOKIES_FILE: Optional[str] = None
+    YTDLP_JS_RUNTIMES: Optional[str] = None
+    YTDLP_REMOTE_COMPONENTS: Optional[str] = "ejs:github"
     GITHUB_TOKEN: Optional[str] = None
 
     # Chart scraping (Billboard)

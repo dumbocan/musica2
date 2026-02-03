@@ -190,6 +190,8 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
     if (!audio) return { ok: false };
     const token = useApiStore.getState().token;
     const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+    const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
+    const isLocalSynthetic = payload.videoId.startsWith('local:');
     set({
       nowPlaying: payload,
       currentTime: 0,
@@ -224,10 +226,20 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
     // Use local file if found in DB
     if (localFilePath) {
       set({ audioSourceMode: 'file', statusMessage: '', audioDownloadStatus: 'downloaded' });
-      // Use the file path directly - backend serves from download folder
-      const videoIdForDownload = dbYoutubeVideoId || payload.videoId;
-      audio.src = `${API_BASE_URL}/youtube/download/${videoIdForDownload}/file?format=${fileFormat}${tokenParam}`;
+      if (payload.localTrackId) {
+        audio.src = `${API_BASE_URL}/youtube/download/by-local-track/${payload.localTrackId}/file${tokenQuery}`;
+      } else if (payload.spotifyTrackId && /^[A-Za-z0-9]{22}$/.test(payload.spotifyTrackId)) {
+        audio.src = `${API_BASE_URL}/youtube/download/by-track/${encodeURIComponent(payload.spotifyTrackId)}/file${tokenQuery}`;
+      } else {
+        const videoIdForDownload = dbYoutubeVideoId || payload.videoId;
+        audio.src = `${API_BASE_URL}/youtube/download/${videoIdForDownload}/file?format=${fileFormat}${tokenParam}`;
+      }
     } else {
+      if (isLocalSynthetic) {
+        set({ audioSourceMode: 'stream', statusMessage: 'Archivo local no encontrado en BD', audioDownloadStatus: 'error' });
+        audio.src = '';
+        return { ok: false };
+      }
       // Fall back to checking YouTube downloads folder
       const candidateFormats = Array.from(new Set([fileFormat, 'm4a', 'mp3', 'webm']));
       let localFormat: string | null = null;

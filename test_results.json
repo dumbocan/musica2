@@ -1,0 +1,110 @@
+[
+  {
+    "timestamp": "2026-02-02T12:56:59.904664",
+    "endpoint": "GET /health",
+    "status": "OK",
+    "details": "Status: ok"
+  },
+  {
+    "timestamp": "2026-02-02T12:56:59.925758",
+    "endpoint": "GET /health/detailed",
+    "status": "OK",
+    "details": "Spotify: online, Last.fm: online, DB: online"
+  },
+  {
+    "timestamp": "2026-02-02T12:57:00.276334",
+    "endpoint": "GET /artists/",
+    "status": "OK",
+    "details": "4210 artistas en BD"
+  },
+  {
+    "timestamp": "2026-02-02T12:57:01.672456",
+    "endpoint": "GET /artists/info/{id}/info",
+    "status": "OK",
+    "details": "Artista: Drake"
+  },
+  {
+    "timestamp": "2026-02-02T12:57:02.089575",
+    "endpoint": "GET /artists/{id}/albums",
+    "status": "OK",
+    "details": "59 albums"
+  },
+  {
+    "timestamp": "2026-02-02T12:57:13.270301",
+    "endpoint": "GET /albums/",
+    "status": "OK",
+    "details": "26046 albums en BD"
+  },
+  {
+    "timestamp": "2026-02-02T12:57:13.419345",
+    "endpoint": "GET /albums/spotify/{id}",
+    "status": "OK",
+    "details": "The Death of Slim Shady (Coup De Gr\u00e2ce): 19 tracks"
+  },
+  {
+    "timestamp": "2026-02-02T12:57:13.578473",
+    "endpoint": "GET /tracks/most-played",
+    "status": "OK",
+    "details": "5 tracks"
+  },
+  {
+    "timestamp": "2026-02-02T12:57:13.713301",
+    "endpoint": "GET /tracks/recent-plays",
+    "status": "OK",
+    "details": "5 plays recientes"
+  },
+  {
+    "timestamp": "2026-02-02T12:57:13.941277",
+    "endpoint": "GET /charts/top-tracks",
+    "status": "OK",
+    "details": "10 en charts"
+  },
+  {
+    "timestamp": "2026-02-02T12:57:13.993736",
+    "endpoint": "GET /tags/",
+    "status": "OK",
+    "details": "15 tags"
+  },
+  {
+    "timestamp": "2026-02-02T12:57:18.140374",
+    "endpoint": "GET /lists/overview",
+    "status": "OK",
+    "details": "9 listas curadas"
+  },
+  {
+    "timestamp": "2026-02-02T12:57:18.173025",
+    "endpoint": "GET /youtube/usage/",
+    "status": "OK",
+    "details": "955 videos, 107 completados"
+  },
+  {
+    "timestamp": "2026-02-02T12:57:18.200083",
+    "endpoint": "GET /youtube/track/{id}/link",
+    "status": "OK",
+    "details": "Video: p5XtvhR4oUY, Status: link_found"
+  },
+  {
+    "timestamp": "2026-02-02T12:57:18.214487",
+    "endpoint": "GET /youtube/fallback/status",
+    "status": "OK",
+    "details": "Fallback: OFF"
+  },
+  {
+    "timestamp": "2026-02-02T12:57:25.974708",
+    "endpoint": "GET /images/stats",
+    "status": "OK",
+    "details": "21942 im\u00e1genes (2557.1 MB)"
+  },
+  {
+    "timestamp": "2026-02-02T12:57:26.043612",
+    "endpoint": "GET /ai/health",
+    "status": "OK",
+    "details": "IA: \u2705 (tinyllama:1.1b)"
+  },
+  {
+    "timestamp": "2026-02-02T12:57:26.073274",
+    "endpoint": "GET /maintenance/status",
+    "status": "OK",
+    "details": "Enabled: False, Running: False"
+  }
+]
