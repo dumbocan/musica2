@@ -68,10 +68,21 @@ def list_user_favorites_full(
 ):
     """List favorites with hydrated target data."""
     with get_session() as session:
-        stmt = select(UserFavorite).where(UserFavorite.user_id == user_id)
-        if target_type:
-            stmt = stmt.where(UserFavorite.target_type == target_type)
-        favs = session.exec(stmt).all()
+        if target_type == FavoriteTargetType.ALBUM:
+            # Albums are global favorites.
+            favs = session.exec(
+                select(UserFavorite).where(UserFavorite.target_type == FavoriteTargetType.ALBUM)
+            ).all()
+            dedup: dict[int, UserFavorite] = {}
+            for fav in favs:
+                if fav.album_id is not None and fav.album_id not in dedup:
+                    dedup[fav.album_id] = fav
+            favs = list(dedup.values())
+        else:
+            stmt = select(UserFavorite).where(UserFavorite.user_id == user_id)
+            if target_type:
+                stmt = stmt.where(UserFavorite.target_type == target_type)
+            favs = session.exec(stmt).all()
         results = []
         for fav in favs:
             data = fav.dict()

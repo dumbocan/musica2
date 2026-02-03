@@ -386,9 +386,9 @@ def add_favorite(user_id: int, target_type: FavoriteTargetType, target_id: int) 
             if not fav:
                 fav = UserFavorite(user_id=user_id, target_type=target_type, artist_id=target_id)
         elif target_type == FavoriteTargetType.ALBUM:
+            # Global album favorite: one row per album regardless of user.
             fav = session.exec(
                 select(UserFavorite).where(
-                    UserFavorite.user_id == user_id,
                     UserFavorite.target_type == target_type,
                     UserFavorite.album_id == target_id
                 )
@@ -428,13 +428,19 @@ def remove_favorite(user_id: int, target_type: FavoriteTargetType, target_id: in
                 )
             ).first()
         elif target_type == FavoriteTargetType.ALBUM:
-            fav = session.exec(
+            # Global album favorite: deleting should remove all rows for that album.
+            favs = session.exec(
                 select(UserFavorite).where(
-                    UserFavorite.user_id == user_id,
                     UserFavorite.target_type == target_type,
                     UserFavorite.album_id == target_id
                 )
-            ).first()
+            ).all()
+            if favs:
+                for item in favs:
+                    session.delete(item)
+                session.commit()
+                return True
+            return False
         elif target_type == FavoriteTargetType.TRACK:
             fav = session.exec(
                 select(UserFavorite).where(
@@ -455,6 +461,16 @@ def remove_favorite(user_id: int, target_type: FavoriteTargetType, target_id: in
 def list_favorites(user_id: int, target_type: Optional[FavoriteTargetType] = None):
     session = get_session()
     try:
+        # Global album favorites are shared; artists/tracks remain per-user.
+        if target_type == FavoriteTargetType.ALBUM:
+            stmt = select(UserFavorite).where(UserFavorite.target_type == FavoriteTargetType.ALBUM)
+            rows = session.exec(stmt).all()
+            dedup: dict[int, UserFavorite] = {}
+            for row in rows:
+                if row.album_id is not None and row.album_id not in dedup:
+                    dedup[row.album_id] = row
+            return list(dedup.values())
+
         stmt = select(UserFavorite).where(UserFavorite.user_id == user_id)
         if target_type:
             stmt = stmt.where(UserFavorite.target_type == target_type)

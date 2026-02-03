@@ -12,7 +12,7 @@ type FavoriteItem = {
 export const getUserIdFromToken = (): number | null => {
   const token = localStorage.getItem('token');
   if (!token) return null;
-  const payloadB64 = token.split('.')[0];
+  const payloadB64 = token.split('.')[1];
   if (!payloadB64) return null;
   try {
     const padded = payloadB64.padEnd(payloadB64.length + (4 - (payloadB64.length % 4 || 4)) % 4, '=');
