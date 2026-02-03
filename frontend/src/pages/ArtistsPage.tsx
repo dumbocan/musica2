@@ -6,6 +6,7 @@ import { useApiStore } from '@/store/useApiStore';
 import type { Artist } from '@/types/api';
 import { Loader2, Heart, Trash2 } from 'lucide-react';
 import { usePaginatedArtists } from '@/hooks/usePaginatedArtists';
+import { useFavorites } from '@/hooks/useFavorites';
 
 type ParsedJsonEntry = string | { url: string };
 
@@ -17,7 +18,7 @@ const parseStoredJsonArray = (raw?: string | null): ParsedJsonEntry[] => {
   const tryParse = (value: string) => {
     try {
       const parsed = JSON.parse(value);
-          if (Array.isArray(parsed)) {
+      if (Array.isArray(parsed)) {
         return parsed
           .map((item) => {
             if (typeof item === 'string') return item;
@@ -47,7 +48,18 @@ const parseStoredJsonArray = (raw?: string | null): ParsedJsonEntry[] => {
 
   const normalized = trimmed
     .replace(/'/g, '"')
-    .replace(/None/g, 'null');
+    .replace(/None/g, 'null')
+    .replace(/True/g, 'true')
+    .replace(/False/g, 'false');
+
+  // Handle curly braces format (non-standard JSON arrays)
+  if (normalized.startsWith('{') && normalized.endsWith('}')) {
+    const inner = normalized.slice(1, -1);
+    // Try to parse as comma-separated values
+    const items = inner.split(',').map(s => s.trim().replace(/"/g, ''));
+    return items.filter(s => s.length > 0 && !s.includes(':'));
+  }
+
   return tryParse(normalized);
 };
 const getArtistAssets = (artist: Artist, token: string | null) => {
@@ -95,13 +107,12 @@ export function ArtistsPage() {
     hasMore,
     loadMore,
     removeArtist,
-    reload,
     updateArtistFavorite,
   } = usePaginatedArtists({ limit: 50, sortOption: apiSortOption, userId, searchTerm, genreFilter });
+  // Load favorites from DB for persistent favorites
+  const { favoriteIds, toggleFavorite: toggleFavoriteDb } = useFavorites('artist', userId);
   const navigate = useNavigate();
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
-  const prefetchKeyRef = useRef('');
-  const prefetchCountRef = useRef(0);
   const [visibleCount, setVisibleCount] = useState(20);
 
   useEffect(() => {
@@ -147,19 +158,11 @@ export function ArtistsPage() {
     event.preventDefault();
     event.stopPropagation();
     if (!userId) return;
-    const artist = artists.find((entry) => entry.id === artistId);
-    const currentlyFavorite = !!artist?.is_favorite;
-    try {
-      if (currentlyFavorite) {
-        await audio2Api.removeFavorite('artist', artistId, userId);
-        updateArtistFavorite(artistId, false);
-      } else {
-        await audio2Api.addFavorite('artist', artistId, userId);
-        updateArtistFavorite(artistId, true);
-      }
-    } catch (err) {
-      console.error('Failed to toggle favorite', err);
-    }
+    // Use the hook's toggleFavorite which updates DB and local state
+    await toggleFavoriteDb(artistId);
+    // Also update the local paginated artists state
+    const currentlyFavorite = favoriteIds.has(artistId);
+    updateArtistFavorite(artistId, !currentlyFavorite);
   };
 
   const hideArtist = async (event: React.MouseEvent, artistId: number) => {
@@ -277,7 +280,8 @@ export function ArtistsPage() {
               const { imageUrl, genres } = getArtistAssets(artist, token);
               const disabled = !artist.spotify_id;
 
-              const isFavorite = !!artist.is_favorite;
+              // Use DB-loaded favorites from hook
+              const isFavorite = favoriteIds.has(artist.id);
               return (
                 <div
                   key={artist.spotify_id || `local-${artist.id}`}

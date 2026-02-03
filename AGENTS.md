@@ -100,7 +100,16 @@ Secrets stay in `.env`; never hard-code tokens or client secrets. Honor the auth
  - Tracks totals can be wrong if `youtube_video_id` is empty; treat empty strings as missing and prefer the row with a valid video ID when multiple `YouTubeDownload` rows exist for one track.
  - For performance, filter in `/tracks/overview` (`filter`, `search`) and use `filtered_total` rather than loading the entire library in the frontend.
  - Track pagination should use `after_id` keyset with `limit` and prefetch when ~100 rows remain to minimize network churn.
- - Spotify/Last.fm “offline” with timeouts can be DNS (systemd-resolved) issues after network/VPN changes. Fix by setting DNS on the active interface (e.g. `enp2s0`) with `sudo resolvectl dns enp2s0 1.1.1.1 8.8.8.8`, then `sudo resolvectl domain enp2s0 ~.` and `sudo resolvectl flush-caches`, then restart the backend.
+- Spotify/Last.fm “offline” with timeouts can be DNS (systemd-resolved) issues after network/VPN changes. Fix by setting DNS on the active interface (e.g. `enp2s0`) with `sudo resolvectl dns enp2s0 1.1.1.1 8.8.8.8`, then `sudo resolvectl domain enp2s0 ~.` and `sudo resolvectl flush-caches`, then restart the backend.
+
+## Playback Policy (Do Not Regress)
+- Canonical order is DB-first: `local file in DB/disk` → `existing YouTube videoId` → `search YouTube link`.
+- If a track has local file (`Track.download_path` or valid local path in `YouTubeDownload.download_path`), play local immediately and do not search YouTube.
+- If no local file but has valid `videoId`, start playback by stream immediately and trigger download-to-disk/DB in parallel.
+- If no local file and no `videoId`, call `/youtube/track/{spotify_track_id}/refresh`, persist result, then play and download.
+- Never store or trust invalid `youtube_video_id` values (must be 11-char `[A-Za-z0-9_-]`).
+- Keep this policy aligned across `frontend/src/store/usePlayerStore.ts`, `frontend/src/pages/TracksPage.tsx`, `frontend/src/pages/PlaylistsPage.tsx`, and backend `/youtube/*` endpoints.
+- Parallel download is best-effort; provider-side 403 must not break active playback/queue.
 
 ## Historial reciente y aprendizajes
 - ✅ El nuevo reproductor mezcla audio local (descargas guardadas) con streaming ligero; el footer se mantiene activo, marca favoritos y escucha las pistas desde `downloads/`.

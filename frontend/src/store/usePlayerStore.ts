@@ -202,23 +202,51 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
     audio.pause();
     audio.currentTime = 0;
     const { fileFormat, streamFormat } = getFormats(audio);
-    const candidateFormats = Array.from(new Set([fileFormat, 'm4a', 'mp3', 'webm']));
-    let localFormat: string | null = null;
-    for (const fmt of candidateFormats) {
-      const status = await audio2Api
-        .getYoutubeDownloadStatus(payload.videoId, { format: fmt })
-        .catch(() => null);
-      if (status?.data?.exists) {
-        localFormat = fmt;
-        break;
+
+    // DB-FIRST: Check if track has local file in DB
+    let localFilePath: string | null = null;
+    let dbYoutubeVideoId: string | null = null;
+
+    if (payload.localTrackId) {
+      try {
+        const downloadInfo = await audio2Api.getTrackDownloadInfo(payload.localTrackId);
+        if (downloadInfo.data?.local_file_exists && downloadInfo.data?.local_file_path) {
+          localFilePath = downloadInfo.data.local_file_path;
+        }
+        if (downloadInfo.data?.youtube_video_id) {
+          dbYoutubeVideoId = downloadInfo.data.youtube_video_id;
+        }
+      } catch {
+        // Ignore errors, fall back to YouTube check
       }
     }
-    if (localFormat) {
+
+    // Use local file if found in DB
+    if (localFilePath) {
       set({ audioSourceMode: 'file', statusMessage: '', audioDownloadStatus: 'downloaded' });
-      audio.src = `${API_BASE_URL}/youtube/download/${payload.videoId}/file?format=${localFormat}${tokenParam}`;
+      // Use the file path directly - backend serves from download folder
+      const videoIdForDownload = dbYoutubeVideoId || payload.videoId;
+      audio.src = `${API_BASE_URL}/youtube/download/${videoIdForDownload}/file?format=${fileFormat}${tokenParam}`;
     } else {
-      set({ audioSourceMode: 'stream', statusMessage: 'Streaming...', audioDownloadStatus: 'downloading' });
-      audio.src = `${API_BASE_URL}/youtube/stream/${payload.videoId}?format=${streamFormat}&cache=true${tokenParam}`;
+      // Fall back to checking YouTube downloads folder
+      const candidateFormats = Array.from(new Set([fileFormat, 'm4a', 'mp3', 'webm']));
+      let localFormat: string | null = null;
+      for (const fmt of candidateFormats) {
+        const status = await audio2Api
+          .getYoutubeDownloadStatus(payload.videoId, { format: fmt })
+          .catch(() => null);
+        if (status?.data?.exists) {
+          localFormat = fmt;
+          break;
+        }
+      }
+      if (localFormat) {
+        set({ audioSourceMode: 'file', statusMessage: '', audioDownloadStatus: 'downloaded' });
+        audio.src = `${API_BASE_URL}/youtube/download/${payload.videoId}/file?format=${localFormat}${tokenParam}`;
+      } else {
+        set({ audioSourceMode: 'stream', statusMessage: 'Streaming...', audioDownloadStatus: 'downloading' });
+        audio.src = `${API_BASE_URL}/youtube/stream/${payload.videoId}?format=${streamFormat}&cache=true${tokenParam}`;
+      }
     }
     audio.load();
     try {

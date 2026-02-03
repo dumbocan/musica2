@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { audio2Api } from '@/lib/api';
 
 type ChartRawEntry = {

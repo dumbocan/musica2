@@ -14,7 +14,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from ...core.db import SessionDep
 from ...core.youtube import youtube_client
-from ...models.base import YouTubeDownload
+from ...models.base import YouTubeDownload, Track
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +80,54 @@ async def _status_from_db_path(
         "file_size": path.stat().st_size,
         "source": "db_path",
     }
+
+
+def _media_type_from_path(path: Path) -> str:
+    ext = path.suffix.lstrip(".").lower()
+    if ext == "mp3":
+        return "audio/mpeg"
+    if ext in {"m4a", "mp4"}:
+        return "audio/mp4"
+    if ext == "webm":
+        return "audio/webm"
+    return "application/octet-stream"
+
+
+async def _resolve_local_track_file(
+    session: AsyncSession,
+    *,
+    track_id: int | None = None,
+    spotify_track_id: str | None = None,
+) -> Path | None:
+    track: Track | None = None
+    if track_id is not None:
+        track = (await session.exec(select(Track).where(Track.id == track_id))).first()
+    elif spotify_track_id:
+        track = (await session.exec(select(Track).where(Track.spotify_id == spotify_track_id))).first()
+
+    # First source of truth: Track.download_path (DB-first local index).
+    if track and track.download_path:
+        path = Path(track.download_path)
+        if path.exists():
+            return path
+
+    resolved_spotify_id = spotify_track_id or (track.spotify_id if track else None)
+    if not resolved_spotify_id:
+        return None
+
+    # Fallback to YouTubeDownload rows (handles migrated/legacy entries).
+    rows = (await session.exec(
+        select(YouTubeDownload)
+        .where(YouTubeDownload.spotify_track_id == resolved_spotify_id)
+        .where(YouTubeDownload.download_path.is_not(None))
+        .where(YouTubeDownload.download_path != "")
+        .order_by(YouTubeDownload.updated_at.desc())
+    )).all()
+    for row in rows:
+        path = Path(row.download_path)
+        if path.exists():
+            return path
+    return None
 
 
 @router.get("/{video_id}")
@@ -165,6 +213,30 @@ async def get_download_file(
     return FileResponse(path=file_path, media_type=media_type, filename=f"{video_id}.{ext}")
 
 
+@router.get("/by-track/{spotify_track_id}/file")
+async def get_local_file_by_spotify_track(
+    spotify_track_id: str,
+    session: AsyncSession = Depends(SessionDep),
+):
+    """Serve local file by Spotify track ID without requiring a YouTube video ID."""
+    path = await _resolve_local_track_file(session, spotify_track_id=spotify_track_id)
+    if not path:
+        raise HTTPException(status_code=404, detail="Local file not found for track")
+    return FileResponse(path=path, media_type=_media_type_from_path(path), filename=path.name)
+
+
+@router.get("/by-local-track/{track_id}/file")
+async def get_local_file_by_local_track(
+    track_id: int,
+    session: AsyncSession = Depends(SessionDep),
+):
+    """Serve local file by local track ID without requiring a YouTube video ID."""
+    path = await _resolve_local_track_file(session, track_id=track_id)
+    if not path:
+        raise HTTPException(status_code=404, detail="Local file not found for track")
+    return FileResponse(path=path, media_type=_media_type_from_path(path), filename=path.name)
+
+
 @router.delete("/{video_id}")
 async def delete_download(
     video_id: str,
@@ -212,7 +284,60 @@ async def stream_audio(
                 error_message=str(exc.detail),
                 format_type=format,
             )
-            # In cache mode we require full file; avoid partial/fragile stream responses.
+            # Fallback: if direct download is blocked (403/429), keep playback alive via stream.
+            try:
+                data = await youtube_client.stream_audio_to_device(
+                    video_id=video_id,
+                    output_format=format,
+                    cache=False,
+                )
+            except Exception:
+                raise HTTPException(status_code=502, detail=f"Unable to cache audio file: {exc.detail}")
+
+            if data.get("type") == "file":
+                file_path = data.get("file_path")
+                file_size = None
+                if file_path and Path(file_path).exists():
+                    file_size = Path(file_path).stat().st_size
+                await _mark_youtube_download_status(
+                    session,
+                    video_id,
+                    "completed",
+                    error_message=None,
+                    download_path=file_path,
+                    format_type=(Path(file_path).suffix.lstrip(".") if file_path else format),
+                    file_size=file_size,
+                )
+                return FileResponse(path=data["file_path"], media_type=data.get("media_type", "audio/mp4"))
+
+            if data.get("type") == "stream":
+                async def fallback_stream():
+                    bytes_sent = 0
+                    try:
+                        async for chunk in data["stream"]:
+                            bytes_sent += len(chunk)
+                            yield chunk
+                        if bytes_sent > 0:
+                            await _mark_youtube_download_status(
+                                session,
+                                video_id,
+                                "link_found",
+                                error_message=None,
+                                format_type=format,
+                            )
+                    except Exception as stream_exc:
+                        await _mark_youtube_download_status(
+                            session,
+                            video_id,
+                            "error",
+                            error_message=str(stream_exc),
+                            format_type=format,
+                        )
+                        logger.warning("Fallback stream failed for %s: %s", video_id, stream_exc)
+                        return
+
+                return StreamingResponse(fallback_stream(), media_type=data.get("media_type", "audio/mp4"))
+
             raise HTTPException(status_code=502, detail=f"Unable to cache audio file: {exc.detail}")
 
         file_path = result.get("file_path")
@@ -294,7 +419,8 @@ async def stream_audio(
                     error_message=str(exc),
                     format_type=format,
                 )
-                raise
+                logger.warning("Tracked stream failed for %s: %s", video_id, exc)
+                return
 
         return StreamingResponse(tracked_stream(), media_type=data.get("media_type", "audio/mp4"))
     raise HTTPException(status_code=500, detail="Invalid stream response")

@@ -54,10 +54,6 @@ export function SettingsPage() {
   const [metadataStatus, setMetadataStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [chartBackfillStatus, setChartBackfillStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [albumImageRepairStatus, setAlbumImageRepairStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
-  const [ytdlpRevalidateStatus, setYtdlpRevalidateStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
-  const [youtubeDedupeStatus, setYoutubeDedupeStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
-  const [purgeId, setPurgeId] = useState('');
-  const [purgeStatus, setPurgeStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [actionStatuses, setActionStatuses] = useState<Record<string, boolean>>({});
   const [logLines, setLogLines] = useState<string[]>([]);
   const [logsEnabled, setLogsEnabled] = useState(true);
@@ -524,36 +520,6 @@ export function SettingsPage() {
     }
   };
 
-  const handleRevalidateYtdlpLinks = async () => {
-    if (ytdlpRevalidateStatus === 'running') return;
-    setYtdlpRevalidateStatus('running');
-    try {
-      await audio2Api.revalidateYtdlpLinks({ limit: 500 });
-      setYtdlpRevalidateStatus('done');
-    } catch {
-      setYtdlpRevalidateStatus('error');
-    } finally {
-      void refreshDashboardStats();
-      void refreshActionStatuses();
-      void refreshYtdlpStatus();
-      void refreshYtdlpLogs();
-    }
-  };
-
-  const handleDedupeYoutubeLinks = async () => {
-    if (youtubeDedupeStatus === 'running') return;
-    setYoutubeDedupeStatus('running');
-    try {
-      await audio2Api.dedupeYoutubeLinks({ limit: 20000 });
-      setYoutubeDedupeStatus('done');
-    } catch {
-      setYoutubeDedupeStatus('error');
-    } finally {
-      void refreshDashboardStats();
-      void refreshActionStatuses();
-    }
-  };
-
   const handleBackfillImages = async () => {
     if (imagesBackfillStatus === 'running') return;
     setImagesBackfillStatus('running');
@@ -606,21 +572,6 @@ export function SettingsPage() {
     } finally {
       void refreshDashboardStats();
       void refreshActionStatuses();
-    }
-  };
-
-  const handlePurgeArtist = async () => {
-    const trimmed = purgeId.trim();
-    if (!trimmed) return;
-    setPurgeStatus('running');
-    try {
-      const isSpotifyId = /^[A-Za-z0-9]{22}$/.test(trimmed);
-      await audio2Api.purgeArtist(isSpotifyId ? { spotify_id: trimmed } : { name: trimmed });
-      setPurgeStatus('done');
-    } catch {
-      setPurgeStatus('error');
-    } finally {
-      void refreshDashboardStats();
     }
   };
 
@@ -935,32 +886,6 @@ export function SettingsPage() {
               <button
                 type="button"
                 className="btn-ghost"
-                style={actionButtonStyle('ytdlp_revalidate')}
-                onClick={handleRevalidateYtdlpLinks}
-                disabled={ytdlpRevalidateStatus === 'running'}
-              >
-                {actionLabel('Revalidar links fallback', ytdlpRevalidateStatus, 'ytdlp_revalidate')}
-              </button>
-              <div style={{ fontSize: 11, opacity: 0.7 }}>
-                Estado: {ytdlpRevalidateStatus === 'done' ? 'enviado' : ytdlpRevalidateStatus === 'error' ? 'error' : 'en espera'}
-              </div>
-
-              <button
-                type="button"
-                className="btn-ghost"
-                style={actionButtonStyle('youtube_dedupe')}
-                onClick={handleDedupeYoutubeLinks}
-                disabled={youtubeDedupeStatus === 'running'}
-              >
-                {actionLabel('Deduplicar links YouTube', youtubeDedupeStatus, 'youtube_dedupe')}
-              </button>
-              <div style={{ fontSize: 11, opacity: 0.7 }}>
-                Estado: {youtubeDedupeStatus === 'done' ? 'enviado' : youtubeDedupeStatus === 'error' ? 'error' : 'en espera'}
-              </div>
-
-              <button
-                type="button"
-                className="btn-ghost"
                 style={actionButtonStyle('images_backfill')}
                 onClick={handleBackfillImages}
                 disabled={imagesBackfillStatus === 'running'}
@@ -998,27 +923,6 @@ export function SettingsPage() {
               </div>
             </div>
 
-            <div style={{ marginTop: 16 }}>
-              <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>Purgar artista</div>
-              <input
-                value={purgeId}
-                onChange={(event) => setPurgeId(event.target.value)}
-                placeholder="Spotify ID o nombre"
-                className="input"
-              />
-              <button
-                type="button"
-                className="btn-ghost"
-                style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}
-                onClick={handlePurgeArtist}
-                disabled={purgeStatus === 'running'}
-              >
-                {purgeStatus === 'running' ? 'Borrando...' : 'Purgar artista'}
-              </button>
-              <div style={{ marginTop: 6, fontSize: 11, opacity: 0.7 }}>
-                Purga: {purgeStatus === 'done' ? 'listo' : purgeStatus === 'error' ? 'error' : 'en espera'}
-              </div>
-            </div>
           </div>
         </aside>
 

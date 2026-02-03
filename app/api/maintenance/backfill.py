@@ -8,16 +8,15 @@ import asyncio
 import logging
 import os
 import random
-import re
 import subprocess
 import sys
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
-from sqlalchemy import and_, func, or_
-from sqlmodel import delete, select
+from fastapi import APIRouter, BackgroundTasks, Query
+from sqlalchemy import func
+from sqlmodel import select
 
 from ...core.action_status import run_with_action_status, set_action_status
 from ...core.config import settings
@@ -33,22 +32,14 @@ from ...core.maintenance import (
 )
 from ...core.time_utils import utc_now
 from ...core.spotify import spotify_client
-from ...crud import normalize_name, save_track, save_youtube_download
+from ...crud import save_track, save_youtube_download
 from ...models.base import (
     Album,
     Artist,
     ChartScanState,
     FavoriteTargetType,
-    PlayHistory,
-    PlaylistTrack,
-    SearchAlias,
-    SearchEntityType,
     Track,
-    TrackChartEntry,
-    TrackChartStats,
-    TrackTag,
     UserFavorite,
-    UserHiddenArtist,
     YouTubeDownload,
 )
 from ...services.billboard import fetch_chart_entries, normalize_artist_name
@@ -322,128 +313,6 @@ async def _run_youtube_backfill(limit: int, retry_failed: bool) -> None:
     logger.info("[maintenance] youtube backfill complete")
 
 
-async def _run_ytdlp_revalidate(limit: int) -> None:
-    if maintenance_stop_requested():
-        return
-    try:
-        from ...core.youtube import youtube_client
-    except Exception as exc:
-        logger.warning("[maintenance] ytdlp revalidate skipped: %s", exc)
-        return
-
-    logger.info("[maintenance] ytdlp revalidate start (limit=%d)", limit)
-    with get_session() as session:
-        stmt = (
-            select(YouTubeDownload)
-            .where(YouTubeDownload.link_source == "ytdlp")
-            .where(YouTubeDownload.youtube_video_id.is_not(None))
-            .where(YouTubeDownload.youtube_video_id != "")
-            .limit(limit)
-        )
-        rows = session.exec(stmt).all()
-
-        checked = 0
-        invalidated = 0
-        for record in rows:
-            if maintenance_stop_requested():
-                break
-            video_id = record.youtube_video_id or ""
-            if not video_id:
-                continue
-            is_valid = await youtube_client._validate_video_id(video_id)
-            checked += 1
-            if not is_valid:
-                record.youtube_video_id = ""
-                record.download_status = "video_not_found"
-                record.error_message = "Fallback link invalid or unavailable"
-                record.updated_at = utc_now()
-                invalidated += 1
-            elif record.download_status in ("video_not_found", "error", "missing"):
-                record.download_status = "link_found"
-                record.error_message = None
-                record.updated_at = utc_now()
-            if checked % 50 == 0:
-                session.commit()
-        session.commit()
-
-    logger.info(
-        "[maintenance] ytdlp revalidate done: checked=%d invalidated=%d",
-        checked,
-        invalidated,
-    )
-
-
-def _normalize_track_title(name: str) -> str:
-    cleaned = re.sub(r"\s*[\[(].*?[\])]\s*", " ", name or "")
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return normalize_name(cleaned)
-
-
-async def _run_youtube_dedupe(limit: int) -> None:
-    if maintenance_stop_requested():
-        return
-    logger.info("[maintenance] youtube dedupe start (limit=%d)", limit)
-    with get_session() as session:
-        stmt = (
-            select(Track, Artist, YouTubeDownload)
-            .join(Artist, Artist.id == Track.artist_id)
-            .outerjoin(YouTubeDownload, YouTubeDownload.spotify_track_id == Track.spotify_id)
-            .where(Track.spotify_id.is_not(None))
-            .where(Artist.name.is_not(None))
-            .limit(limit)
-        )
-        rows = session.exec(stmt).all()
-
-        groups: dict[str, list[tuple[Track, Artist, YouTubeDownload | None]]] = {}
-        for track, artist, download in rows:
-            key = f"{normalize_name(artist.name)}|{_normalize_track_title(track.name)}"
-            groups.setdefault(key, []).append((track, artist, download))
-
-        deduped = 0
-        checked = 0
-        for key, items in groups.items():
-            if maintenance_stop_requested():
-                break
-            # pick best: local file > youtube_api > ytdlp > any link
-            best: YouTubeDownload | None = None
-            for _, _, download in items:
-                if not download or not download.youtube_video_id:
-                    continue
-                if download.download_path:
-                    best = download
-                    break
-                if download.link_source == "youtube_api":
-                    best = download
-            if best is None:
-                for _, _, download in items:
-                    if download and download.youtube_video_id:
-                        best = download
-                        break
-            if best is None:
-                continue
-
-            for _, _, download in items:
-                if not download or download is best:
-                    continue
-                if not download.youtube_video_id:
-                    continue
-                download.youtube_video_id = ""
-                download.download_status = "missing"
-                download.error_message = "Deduplicated link (grouped by artist+track)"
-                download.updated_at = utc_now()
-                deduped += 1
-            checked += 1
-            if checked % 100 == 0:
-                session.commit()
-        session.commit()
-
-    logger.info(
-        "[maintenance] youtube dedupe done: groups=%d deduped=%d",
-        checked,
-        deduped,
-    )
-
-
 async def _run_images_backfill(limit_artists: int | None, limit_albums: int | None) -> None:
     if maintenance_stop_requested():
         return
@@ -665,22 +534,6 @@ async def backfill_youtube_links(
     return {"scheduled": True, "limit": limit, "retry_failed": retry_failed}
 
 
-@router.post("/revalidate-ytdlp-links")
-async def revalidate_ytdlp_links(
-    limit: int = Query(500, ge=1, le=5000),
-) -> dict:
-    _schedule_action_task("ytdlp_revalidate", _run_ytdlp_revalidate, limit)
-    return {"scheduled": True, "limit": limit}
-
-
-@router.post("/dedupe-youtube-links")
-async def dedupe_youtube_links(
-    limit: int = Query(20000, ge=1, le=200000),
-) -> dict:
-    _schedule_action_task("youtube_dedupe", _run_youtube_dedupe, limit)
-    return {"scheduled": True, "limit": limit}
-
-
 @router.post("/backfill-images")
 async def backfill_images_endpoint(
     limit_artists: int | None = Query(None, ge=1, le=10000),
@@ -730,126 +583,30 @@ def repair_album_images(
         set_action_status("repair_album_images", False)
 
 
-@router.post("/purge-artist")
-def purge_artist(
-    spotify_id: str | None = Query(None),
-    name: str | None = Query(None),
-    confirm: bool = Query(False, description="Set true to confirm destructive delete"),
+@router.post("/repair-downloads")
+def repair_downloads(
+    background_tasks: BackgroundTasks,
+    limit: int = Query(5000, ge=1, le=50000),
+    background: bool = Query(True, description="Run repair in background"),
 ) -> dict:
-    if not confirm:
-        raise HTTPException(status_code=400, detail="confirm=true required")
-    if not spotify_id and not name:
-        raise HTTPException(status_code=400, detail="spotify_id or name required")
+    """
+    Repair YouTube download paths and statuses.
+    - Updates status from 'error' to 'completed' if file exists
+    - Reports missing files
+    """
+    from app.core.maintenance import repair_download_paths
 
-    name_filter = (name or "").strip()
-    normalized = normalize_name(name_filter) if name_filter else ""
-
-    with get_session() as session:
-        filters = []
-        if spotify_id:
-            filters.append(Artist.spotify_id == spotify_id)
-        if name_filter:
-            filters.append(Artist.name.ilike(f"%{name_filter}%"))
-        if normalized:
-            filters.append(Artist.normalized_name == normalized)
-        if not filters:
-            raise HTTPException(status_code=400, detail="No valid filters")
-
-        artists = session.exec(select(Artist).where(or_(*filters))).all()
-        if not artists:
-            return {"deleted": False, "artists": [], "albums": 0, "tracks": 0}
-
-        artist_ids = [a.id for a in artists if a.id]
-        spotify_artist_ids = [a.spotify_id for a in artists if a.spotify_id]
-
-        album_rows = session.exec(
-            select(Album.id).where(Album.artist_id.in_(artist_ids))
-        ).all() if artist_ids else []
-        album_ids = [row if isinstance(row, int) else row[0] for row in album_rows]
-
-        track_rows = session.exec(
-            select(Track.id, Track.spotify_id).where(Track.artist_id.in_(artist_ids))
-        ).all() if artist_ids else []
-        track_ids = []
-        track_spotify_ids = []
-        for row in track_rows:
-            if isinstance(row, tuple):
-                track_id, track_spotify_id = row
-            else:
-                track_id = row
-                track_spotify_id = None
-            if track_id:
-                track_ids.append(track_id)
-            if track_spotify_id:
-                track_spotify_ids.append(track_spotify_id)
-
-        if track_ids:
-            session.exec(delete(PlaylistTrack).where(PlaylistTrack.track_id.in_(track_ids)))
-            session.exec(delete(TrackTag).where(TrackTag.track_id.in_(track_ids)))
-            session.exec(delete(PlayHistory).where(PlayHistory.track_id.in_(track_ids)))
-            session.exec(delete(TrackChartEntry).where(TrackChartEntry.track_id.in_(track_ids)))
-            session.exec(delete(TrackChartStats).where(TrackChartStats.track_id.in_(track_ids)))
-
-        if artist_ids or album_ids or track_ids:
-            fav_conditions = []
-            if artist_ids:
-                fav_conditions.append(UserFavorite.artist_id.in_(artist_ids))
-            if album_ids:
-                fav_conditions.append(UserFavorite.album_id.in_(album_ids))
-            if track_ids:
-                fav_conditions.append(UserFavorite.track_id.in_(track_ids))
-            if fav_conditions:
-                session.exec(delete(UserFavorite).where(or_(*fav_conditions)))
-
-        if artist_ids:
-            session.exec(delete(UserHiddenArtist).where(UserHiddenArtist.artist_id.in_(artist_ids)))
-
-        if spotify_artist_ids or track_spotify_ids:
-            dl_conditions = []
-            if spotify_artist_ids:
-                dl_conditions.append(YouTubeDownload.spotify_artist_id.in_(spotify_artist_ids))
-            if track_spotify_ids:
-                dl_conditions.append(YouTubeDownload.spotify_track_id.in_(track_spotify_ids))
-            if dl_conditions:
-                session.exec(delete(YouTubeDownload).where(or_(*dl_conditions)))
-
-        alias_conditions = []
-        if artist_ids:
-            alias_conditions.append(
-                and_(
-                    SearchAlias.entity_type == SearchEntityType.ARTIST,
-                    SearchAlias.entity_id.in_(artist_ids),
-                )
-            )
-        if album_ids:
-            alias_conditions.append(
-                and_(
-                    SearchAlias.entity_type == SearchEntityType.ALBUM,
-                    SearchAlias.entity_id.in_(album_ids),
-                )
-            )
-        if track_ids:
-            alias_conditions.append(
-                and_(
-                    SearchAlias.entity_type == SearchEntityType.TRACK,
-                    SearchAlias.entity_id.in_(track_ids),
-                )
-            )
-        if alias_conditions:
-            session.exec(delete(SearchAlias).where(or_(*alias_conditions)))
-
-        if track_ids:
-            session.exec(delete(Track).where(Track.id.in_(track_ids)))
-        if album_ids:
-            session.exec(delete(Album).where(Album.id.in_(album_ids)))
-        if artist_ids:
-            session.exec(delete(Artist).where(Artist.id.in_(artist_ids)))
-
-        session.commit()
-
-    return {
-        "deleted": True,
-        "artists": len(artist_ids),
-        "albums": len(album_ids),
-        "tracks": len(track_ids),
-    }
+    if background:
+        def _run():
+            set_action_status("repair_downloads", True)
+            try:
+                repair_download_paths(limit)
+            finally:
+                set_action_status("repair_downloads", False)
+        background_tasks.add_task(_run)
+        return {"status": "queued", "limit": limit}
+    set_action_status("repair_downloads", True)
+    try:
+        return {"status": "done", **repair_download_paths(limit)}
+    finally:
+        set_action_status("repair_downloads", False)

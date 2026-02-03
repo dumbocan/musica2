@@ -351,19 +351,6 @@ function parseStoredImages(raw?: string | null): string[] {
   return tryParse(normalized);
 }
 
-function resolveImageUrl(url?: string, localId?: number, imagePathId?: number | null) {
-  const { token } = useApiStore();
-  const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
-
-  // Use local cached image if we have a local album ID with image_path_id
-  if (localId && imagePathId) {
-    return `${API_BASE_URL}/images/entity/album/${localId}?size=256${tokenParam}`;
-  }
-
-  if (!url) return '';
-  return normalizeImageUrl({ candidate: url, size: 256, token, apiBaseUrl: API_BASE_URL });
-}
-
 function ArtistPhoto({ name, artistId, imagePathId, remoteUrl, localImage }: {
   name: string;
   artistId?: number;

@@ -7,6 +7,7 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Iterable
 
@@ -29,6 +30,12 @@ from ..models.base import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/lists", tags=["lists"])
+
+
+def _is_valid_youtube_video_id(value: str | None) -> bool:
+    if not value:
+        return False
+    return bool(re.fullmatch(r"[A-Za-z0-9_-]{11}", value))
 
 
 def _parse_genres(raw: str | None) -> list[str]:
@@ -88,6 +95,11 @@ def _track_payload(track: Track, artist: Artist | None, album: Album | None, dow
     image_url = _extract_primary_image_url(album.images if album else None) or _extract_primary_image_url(
         artist.images if artist else None
     )
+    valid_video_id = download.youtube_video_id if download and _is_valid_youtube_video_id(download.youtube_video_id) else None
+    merged_download_path = track.download_path or (download.download_path if download and download.download_path else None)
+    merged_download_status = track.download_status or (download.download_status if download else None)
+    if merged_download_path and not merged_download_status:
+        merged_download_status = "completed"
     payload = {
         "id": track.id,
         "spotify_id": track.spotify_id,
@@ -95,12 +107,12 @@ def _track_payload(track: Track, artist: Artist | None, album: Album | None, dow
         "duration_ms": track.duration_ms,
         "popularity": track.popularity,
         "is_favorite": bool(track.is_favorite),
-        "download_status": track.download_status,
-        "download_path": track.download_path,
+        "download_status": merged_download_status,
+        "download_path": merged_download_path,
         "artists": [],
         "album": None,
         "image_url": image_url,
-        "videoId": download.youtube_video_id if download else None,
+        "videoId": valid_video_id,
     }
     if artist:
         payload["artists"].append({
@@ -127,7 +139,27 @@ async def _fetch_tracks(
     # Guardrail: never scan the full library for curated cards.
     capped_stmt = stmt.limit(max(limit * 8, limit))
     rows = (await session.exec(capped_stmt)).all()
-    results: list[dict] = []
+    ordered_ids: list[int] = []
+    payload_by_track_id: dict[int, dict] = {}
+    download_by_track_id: dict[int, YouTubeDownload | None] = {}
+
+    def _pick_download(current: YouTubeDownload | None, candidate: YouTubeDownload | None) -> YouTubeDownload | None:
+        if current is None:
+            return candidate
+        if candidate is None:
+            return current
+        current_has_path = bool(current.download_path)
+        candidate_has_path = bool(candidate.download_path)
+        if candidate_has_path != current_has_path:
+            return candidate if candidate_has_path else current
+        current_valid_video = _is_valid_youtube_video_id(current.youtube_video_id)
+        candidate_valid_video = _is_valid_youtube_video_id(candidate.youtube_video_id)
+        if candidate_valid_video != current_valid_video:
+            return candidate if candidate_valid_video else current
+        if candidate.updated_at and current.updated_at:
+            return candidate if candidate.updated_at > current.updated_at else current
+        return current
+
     for row in rows:
         if not row:
             continue
@@ -140,8 +172,36 @@ async def _fetch_tracks(
             continue
         if track.id in seen:
             continue
-        seen.add(track.id)
-        results.append(_track_payload(track, artist, album, download))
+        if track.id not in payload_by_track_id:
+            ordered_ids.append(track.id)
+            payload_by_track_id[track.id] = {
+                "track": track,
+                "artist": artist,
+                "album": album,
+            }
+            download_by_track_id[track.id] = download
+        else:
+            download_by_track_id[track.id] = _pick_download(download_by_track_id.get(track.id), download)
+
+        if len(ordered_ids) >= limit * 2:
+            break
+
+    results: list[dict] = []
+    for track_id in ordered_ids:
+        if track_id in seen:
+            continue
+        row_data = payload_by_track_id.get(track_id)
+        if not row_data:
+            continue
+        seen.add(track_id)
+        results.append(
+            _track_payload(
+                row_data["track"],
+                row_data["artist"],
+                row_data["album"],
+                download_by_track_id.get(track_id),
+            )
+        )
         if len(results) >= limit:
             break
     return results
@@ -154,7 +214,7 @@ async def _get_favorite_tracks(session: AsyncSession, user_id: int, limit: int, 
         .outerjoin(Album, Track.album_id == Album.id)
         .outerjoin(
             YouTubeDownload,
-            (YouTubeDownload.spotify_track_id == Track.spotify_id) & YouTubeDownload.youtube_video_id.is_not(None)
+            YouTubeDownload.spotify_track_id == Track.spotify_id,
         )
         .where(Track.is_favorite.is_(True))
         .where(Track.artist_id.is_not(None))
@@ -179,12 +239,14 @@ async def _get_user_favorite_tracks_with_link(
             and_(
                 YouTubeDownload.spotify_track_id == Track.spotify_id,
                 YouTubeDownload.youtube_video_id.is_not(None),
+                YouTubeDownload.youtube_video_id != "",
             ),
         )
         .where(UserFavorite.target_type == "track")
         .order_by(desc(YouTubeDownload.updated_at), desc(Track.popularity))
     )
-    return await _fetch_tracks(session, stmt, seen, limit)
+    rows = await _fetch_tracks(session, stmt, seen, limit * 2)
+    return [row for row in rows if row.get("videoId")][:limit]
 
 
 async def _get_user_favorite_artist_ids(session: AsyncSession, user_id: int) -> set[int]:
@@ -230,7 +292,7 @@ async def _genre_suggestions(
         .outerjoin(Album, Track.album_id == Album.id)
         .outerjoin(
             YouTubeDownload,
-            (YouTubeDownload.spotify_track_id == Track.spotify_id) & YouTubeDownload.youtube_video_id.is_not(None)
+            YouTubeDownload.spotify_track_id == Track.spotify_id,
         )
         .where(or_(*genre_filters))
         .order_by(desc(Track.popularity), desc(YouTubeDownload.updated_at))
@@ -250,7 +312,7 @@ async def _artist_discography_tracks(
         .outerjoin(Album, Track.album_id == Album.id)
         .outerjoin(
             YouTubeDownload,
-            (YouTubeDownload.spotify_track_id == Track.spotify_id) & YouTubeDownload.youtube_video_id.is_not(None)
+            YouTubeDownload.spotify_track_id == Track.spotify_id,
         )
         .where(Track.artist_id == artist_id)
         .order_by(desc(Track.popularity), desc(YouTubeDownload.updated_at))
@@ -275,7 +337,7 @@ async def _collaboration_tracks(
         .outerjoin(Album, Track.album_id == Album.id)
         .outerjoin(
             YouTubeDownload,
-            (YouTubeDownload.spotify_track_id == Track.spotify_id) & YouTubeDownload.youtube_video_id.is_not(None)
+            YouTubeDownload.spotify_track_id == Track.spotify_id,
         )
         .where(or_(*feat_conditions))
         .order_by(desc(Track.popularity), desc(YouTubeDownload.updated_at))
@@ -300,7 +362,7 @@ async def _related_artist_tracks(
         .outerjoin(Album, Track.album_id == Album.id)
         .outerjoin(
             YouTubeDownload,
-            (YouTubeDownload.spotify_track_id == Track.spotify_id) & YouTubeDownload.youtube_video_id.is_not(None)
+            YouTubeDownload.spotify_track_id == Track.spotify_id,
         )
         .where(or_(*[Artist.genres.ilike(f"%{genre}%") for genre in genres]))
         .order_by(desc(Track.popularity), desc(YouTubeDownload.updated_at))
@@ -322,7 +384,7 @@ async def _library_tracks(
         .outerjoin(Album, Track.album_id == Album.id)
         .outerjoin(
             YouTubeDownload,
-            (YouTubeDownload.spotify_track_id == Track.spotify_id) & YouTubeDownload.youtube_video_id.is_not(None)
+            YouTubeDownload.spotify_track_id == Track.spotify_id,
         )
         .order_by(desc(Track.user_score), desc(Track.popularity), desc(Track.updated_at))
     )
@@ -341,7 +403,7 @@ async def _downloaded_tracks(
         .outerjoin(Album, Track.album_id == Album.id)
         .outerjoin(
             YouTubeDownload,
-            (YouTubeDownload.spotify_track_id == Track.spotify_id) & YouTubeDownload.youtube_video_id.is_not(None)
+            YouTubeDownload.spotify_track_id == Track.spotify_id,
         )
         .where(
             or_(
@@ -399,7 +461,7 @@ async def _payload_map_for_tracks(session: AsyncSession, track_ids: list[int]) -
         .outerjoin(Album, Track.album_id == Album.id)
         .outerjoin(
             YouTubeDownload,
-            (YouTubeDownload.spotify_track_id == Track.spotify_id) & YouTubeDownload.youtube_video_id.is_not(None)
+            YouTubeDownload.spotify_track_id == Track.spotify_id,
         )
         .where(Track.id.in_(track_ids))
         .order_by(desc(YouTubeDownload.updated_at))

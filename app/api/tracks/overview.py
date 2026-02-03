@@ -48,6 +48,12 @@ def _select_best_downloads(downloads: list) -> dict:
     return download_map
 
 
+def _is_valid_youtube_video_id(value: str | None) -> bool:
+    if not value:
+        return False
+    return bool(re.fullmatch(r"[A-Za-z0-9_-]{11}", value))
+
+
 def _load_best_position_dates(session, track_ids: list) -> dict:
     """Load best position dates for chart statistics."""
     if not track_ids:
@@ -345,7 +351,8 @@ async def get_tracks_overview(
         items = []
         for track, artist, album in track_rows:
             download = download_map.get(track.spotify_id) if track.spotify_id else None
-            youtube_video_id = (download.youtube_video_id or None) if download else None
+            raw_video_id = (download.youtube_video_id or None) if download else None
+            youtube_video_id = raw_video_id if _is_valid_youtube_video_id(raw_video_id) else None
             youtube_status = download.download_status if download else None
             youtube_url = f"https://www.youtube.com/watch?v={youtube_video_id}" if youtube_video_id else None
             file_path = download.download_path if download else None

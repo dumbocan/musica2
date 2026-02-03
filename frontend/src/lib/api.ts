@@ -170,8 +170,6 @@ export const audio2Api = {
     api.post('/maintenance/backfill-images', null, { params }),
   backfillChart: (params?: { chart_source?: string; chart_name?: string; weeks?: number; force_reset?: boolean }) =>
     api.post('/maintenance/chart-backfill', null, { params }),
-  purgeArtist: (params: { spotify_id?: string; name?: string }) =>
-    api.post('/maintenance/purge-artist', null, { params: { ...params, confirm: true } }),
   refreshMissingArtists: (params?: { limit?: number; use_spotify?: boolean; use_lastfm?: boolean }) =>
     api.post('/artists/refresh-missing', null, { params }),
   getMaintenanceActionStatus: () => api.get('/maintenance/action-status'),
@@ -180,15 +178,12 @@ export const audio2Api = {
   clearMaintenanceLogs: () => api.post('/maintenance/logs/clear'),
   repairAlbumImages: (params?: { limit?: number; background?: boolean }) =>
     api.post('/maintenance/repair-album-images', null, { params }),
-  revalidateYtdlpLinks: (params?: { limit?: number }) =>
-    api.post('/maintenance/revalidate-ytdlp-links', null, { params }),
-  dedupeYoutubeLinks: (params?: { limit?: number }) =>
-    api.post('/maintenance/dedupe-youtube-links', null, { params }),
   getTrackChartStats: (spotifyTrackIds: string[]) =>
     api.get('/tracks/chart-stats', {
       params: { spotify_ids: spotifyTrackIds.join(',') },
     }),
   recordTrackPlay: (trackId: number) => api.post(`/tracks/play/${trackId}`),
+  getTrackDownloadInfo: (trackId: number) => api.get(`/tracks/id/${trackId}/download-info`),
 
   // Charts
   getChartRaw: (params?: {

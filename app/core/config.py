@@ -84,6 +84,7 @@ class Settings(BaseSettings):
 
     # Storage roots
     STORAGE_ROOT: str = "storage"
+    DOWNLOAD_ROOT: str = "downloads"
 
     # Security
     ENVIRONMENT: str = "development"

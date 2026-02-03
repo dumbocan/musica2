@@ -31,7 +31,7 @@ class YouTubeClient:
         self._api_key_index = 0
         self.api_key = self.api_keys[0] if self.api_keys else None
         self.base_url = "https://www.googleapis.com/youtube/v3"
-        self.download_dir = Path("downloads")
+        self.download_dir = Path(settings.DOWNLOAD_ROOT)
         self.download_dir.mkdir(exist_ok=True)
         self._rate_lock = asyncio.Lock()
         self._api_key_lock = asyncio.Lock()
@@ -1342,7 +1342,8 @@ class YouTubeClient:
                         with contextlib.suppress(FileNotFoundError):
                             temp_path.unlink()
                     logger.warning("Streaming audio failed for %s: %s", video_id, exc)
-                    raise
+                    # Do not crash ASGI response after headers are sent.
+                    return
 
             return {
                 "type": "stream",

@@ -38,7 +38,6 @@ function ServiceDot({ label, color, status, lastError }: { label: string; color:
 
 function AppShell() {
   const { setSidebarOpen, searchQuery, setSearchQuery, setSearchTrigger } = useApiStore();
-  const logout = useApiStore((s) => s.logout);
   const playbackMode = usePlayerStore((s) => s.playbackMode);
   const nowPlaying = usePlayerStore((s) => s.nowPlaying);
   const videoEmbedId = usePlayerStore((s) => s.videoEmbedId);

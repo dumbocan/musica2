@@ -79,14 +79,14 @@ Se ha realizado una revisión exhaustiva del código del frontend para mejorar l
 - **Contadores híbridos en álbumes**: `GET /artists/{spotify_id}/albums` ahora suma tanto los links guardados en la BD como los MP3 descargados que coincidan con los track IDs de Spotify. Eso evita mostrar `0` aunque todavía no se haya guardado el álbum localmente.
 - **Logs y depuración**: los prefetches registran líneas `[youtube_prefetch] Cached ARTIST - TRACK` en la consola. Si ves `Stopping YouTube prefetch ... 403`, espera 15 min o baja la cadencia de peticiones antes de reintentar.
 - **Credenciales obligatorias**: sin `YOUTUBE_API_KEY` en `.env` los endpoints `/youtube/...` devuelven `401/500` y la UI marca error. Asegúrate de tener la clave incluida antes de visitar las páginas de álbumes o la vista global de tracks.
+- **Dos claves de YouTube (sin fallback)**: también puedes definir `YOUTUBE_API_KEY_2`. El backend usa ambas en orden (`YOUTUBE_API_KEY`, luego `YOUTUBE_API_KEY_2`) y rota cuando una falla por cuota.
+- **Importante**: después de cambiar claves en `.env`, reinicia backend (`uvicorn`) para que cargue los nuevos valores.
 - **Fallback yt-dlp (opt-in)**: cuando la cuota de YouTube se agota, el backend puede buscar links con yt-dlp si activas `YTDLP_FALLBACK_ENABLED=true`. Ajusta `YTDLP_DAILY_LIMIT` y `YTDLP_MIN_INTERVAL_SECONDS` para controlar el coste diario.
 - **Cookies para yt-dlp (recomendado)**: para reducir bloqueos `Sign in to confirm you're not a bot`, configura `YTDLP_COOKIES_FROM_BROWSER=firefox` (o `chrome/brave` según tu sesión) en `.env`. También puedes usar `YTDLP_COOKIES_FILE=/ruta/cookies.txt`.
 - **Streaming robusto ante 403 de googlevideo**: el backend usa cabeceras del extractor y descarga por rangos cerrados (`bytes=start-end`) para evitar errores de reproducción donde el navegador veía `200` pero el stream real fallaba.
 - **Toggle + métricas en Settings**: la pantalla de ajustes permite activar/desactivar el fallback, ver el contador de links guardados y el uso diario del fallback.
 - **Log de fallback (30 días)**: los videos guardados vía yt-dlp se registran en `storage/logs/ytdlp_fallback.log` (respeta `STORAGE_ROOT`). El archivo se recorta según `LOG_RETENTION_DAYS`.
 - **Validación anti “Not Found”**: los links del fallback pasan por un chequeo ligero (oEmbed) antes de guardarse.
-- **Revalidar y limpiar**: botón/endpoint `/maintenance/revalidate-ytdlp-links` revisa links ya guardados y limpia los inválidos.
-- **Deduplicar por artista+canción**: `/maintenance/dedupe-youtube-links` deja un solo link “ganador” por grupo (prioriza local > API > fallback) para evitar errores de reproducción.
 
 ## 🧭 Fallback YouTube (explicado fácil + por qué existe)
 
@@ -156,6 +156,7 @@ UI → Backend
 ## ⚠️ Troubleshooting reciente (YouTube + reproducción)
 
 - **Cuota YouTube 403/429**: los prefetches se paran 15 min tras un 403/429. Evita loops extra y llama a YouTube solo cuando entras a un álbum o cuando el usuario pulsa play. Mantén `YOUTUBE_API_KEY` (y opcionalmente `YOUTUBE_API_KEY_2`) en `.env`.
+- Si ambas claves están agotadas/bloqueadas, verás `403 Forbidden` en `/youtube/stream` o `/youtube/download` aunque la app esté bien.
 - **“Sin enlace de YouTube” con link real**: puede pasar si `download_status` quedó en `missing/error` aunque exista `youtube_video_id`. El backend normaliza a `link_found`, pero si hay datos antiguos conviene revisar/normalizar la tabla `YouTubeDownload`.
 - **IDs de track inconsistentes**: algunas respuestas traen `track.spotify_id` en vez de `track.id`. El frontend debe resolver el ID con `track.id || track.spotify_id` antes de llamar a `/youtube/track/...`.
 - **Streaming vs descarga**:
@@ -165,6 +166,19 @@ UI → Backend
 - **Descargas locales “fake”**: no uses `youtube_video_id` inventados (no son 11 chars). Si hay audio local sin link real, no muestres “Abrir en YouTube” en el UI.
 - **Organización de descargas**: los archivos deben quedar en `downloads/<Artist>/<Album>/<Track>.<ext>`. Para migrar descargas antiguas usa `scripts/organize_downloads_by_album.py --resolve-unknown --resolve-spotify --spotify-create` (requiere credenciales Spotify).
 - **Contador de uso**: `frontend/src/components/YoutubeRequestCounter.tsx` consulta `/youtube/usage` periódicamente; si el backend está apagado verás errores de red en consola.
+
+## ▶️ Playback policy (DB-first, fijo)
+
+Para evitar regresiones, la política de reproducción queda definida así:
+
+1. **Si existe archivo local en BD/disco** (`download_path`) → reproducir local y **no** buscar YouTube.
+2. **Si no hay local pero sí `videoId` válido** → reproducir por `/youtube/stream` y descargar a BD/disco en paralelo.
+3. **Si no hay local ni `videoId`** → buscar link con `/youtube/track/{spotify_track_id}/refresh`, guardar en BD y luego reproducir.
+
+Notas:
+- `youtube_video_id` solo se considera válido si tiene 11 caracteres (`[A-Za-z0-9_-]`).
+- Esta regla aplica tanto a Tracks como Playlists y debe mantenerse consistente entre frontend y backend.
+- La descarga en paralelo es **best-effort**: si YouTube bloquea con `403`, la reproducción por stream debe seguir sin romperse.
 
 ## ⚠️ Troubleshooting DNS (Spotify/Last.fm “offline” sin motivo)
 
@@ -457,7 +471,6 @@ most_played = api.get_most_played(user_id)
 - `/artists/profile/{spotify_id}` y `/search/artist-profile`: al consultarlos, guardan en background la discografía del artista + hasta 5 similares.
 - `/albums/spotify/{id}`: devuelve wiki de Last.fm y URLs de imagen ya proxied.
 - `DELETE /albums/id/{id}` / `delete_track` (CRUD) bloquean la operación si el recurso está en favoritos.
-- `/maintenance/revalidate-ytdlp-links`: revalida y limpia links obtenidos por fallback yt‑dlp.
 
 ## 📂 Rutas de almacenamiento y caché
 - `storage/images/artists` → retratos finales (ya optimizados).

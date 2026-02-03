@@ -10,13 +10,11 @@ AVAILABLE_ACTIONS = {
     "albums_missing",
     "albums_incomplete",
     "youtube_links",
-    "youtube_dedupe",
     "metadata_refresh",
     "chart_backfill",
     "audit",
     "images_backfill",
     "repair_album_images",
-    "ytdlp_revalidate",
 }
 
 _lock = Lock()

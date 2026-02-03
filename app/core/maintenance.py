@@ -137,6 +137,79 @@ def repair_album_image_paths(limit: int) -> dict:
     return {"scanned": scanned, "repaired": repaired}
 
 
+def repair_download_paths(limit: int = 1000) -> dict:
+    """
+    Verify and repair YouTube download paths in the database.
+    - Check if files exist on disk
+    - Update status from 'error' to 'completed' if file exists
+    - Report missing files
+    """
+    from pathlib import Path
+    from ..models.base import YouTubeDownload
+
+    app_dir = Path(__file__).parent.parent.parent
+    repaired = 0
+    missing = 0
+    scanned = 0
+
+    with get_session() as session:
+        downloads = session.exec(
+            select(YouTubeDownload)
+            .where(
+                (YouTubeDownload.download_path.is_not(None))
+                & (YouTubeDownload.download_path != "")
+            )
+            .order_by(YouTubeDownload.id.asc())
+            .limit(limit)
+        ).all()
+
+        for download in downloads:
+            scanned += 1
+            if not download.download_path:
+                continue
+
+            # Resolve path relative to app directory
+            full_path = app_dir / download.download_path
+            file_exists = full_path.exists()
+
+            # Update status if file exists but status is wrong
+            if file_exists and download.download_status == "error":
+                download.download_status = "completed"
+                download.updated_at = utc_now()
+                session.add(download)
+                repaired += 1
+            elif not file_exists and download.download_status == "completed":
+                # File was deleted, mark as missing
+                download.download_status = "missing"
+                download.updated_at = utc_now()
+                session.add(download)
+                missing += 1
+
+        if repaired or missing:
+            session.commit()
+
+    return {"scanned": scanned, "repaired": repaired, "missing": missing}
+
+
+async def download_repair_loop():
+    """Periodic job: repair download paths and statuses."""
+    while True:
+        if maintenance_stop_requested():
+            return
+        try:
+            result = repair_download_paths(settings.MAINTENANCE_IMAGE_REPAIR_BATCH_SIZE)
+            logger.info(
+                "[maintenance] download repair scanned=%d repaired=%d missing=%d",
+                result.get("scanned", 0),
+                result.get("repaired", 0),
+                result.get("missing", 0),
+            )
+        except Exception as exc:
+            _re_raise_cancelled(exc)
+            logger.error("[maintenance] download repair failed: %s", exc, exc_info=True)
+        await asyncio.sleep(max(300, 4 * 60 * 60))  # Every 4 hours
+
+
 async def album_image_repair_loop():
     """Periodic job: repair album image_path_id using DB-first lookups."""
     while True:

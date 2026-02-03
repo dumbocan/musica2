@@ -48,7 +48,7 @@ def _select_best_downloads(
     return download_map
 
 
-router = APIRouter(prefix="/playback", tags=["tracks"])
+router = APIRouter(tags=["tracks"])
 
 
 @router.post("/play/{track_id}")

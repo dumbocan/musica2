@@ -1545,6 +1545,69 @@ def get_track(
     return track
 
 
+@router.get("/id/{track_id}/download-info")
+def get_track_download_info(
+    request: Request,
+    track_id: int = Path(..., description="Local track ID"),
+) -> dict:
+    """Get download info (YouTube link and local file path) for a track."""
+    from pathlib import Path as FsPath
+
+    user_id = getattr(request.state, "user_id", None) if request else None
+    hidden_exists = _hidden_artist_exists(user_id)
+
+    # Get the app directory for resolving relative paths
+    app_dir = FsPath(__file__).parent.parent.parent
+
+    with get_session() as session:
+        # Get track with artist info
+        track_query = (
+            select(Track, Artist)
+            .join(Artist, Artist.id == Track.artist_id)
+            .where(Track.id == track_id)
+        )
+        if hidden_exists is not None:
+            track_query = track_query.where(~hidden_exists)
+        row = session.exec(track_query).first()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Track not found")
+
+        track, artist = row
+
+        # Get download info
+        download = None
+        if track.spotify_id:
+            download = session.exec(
+                select(YouTubeDownload).where(YouTubeDownload.spotify_track_id == track.spotify_id)
+            ).first()
+
+        youtube_video_id = download.youtube_video_id if download else None
+        youtube_status = download.download_status if download else None
+        file_path = download.download_path if download else None
+        file_exists = False
+
+        if file_path:
+            # Resolve path relative to app directory
+            full_path = app_dir / file_path
+            file_exists = full_path.exists()
+            if file_exists:
+                youtube_status = "completed"
+        elif youtube_video_id and not youtube_status:
+            youtube_status = "link_found"
+
+        return {
+            "track_id": track.id,
+            "track_name": track.name,
+            "spotify_track_id": track.spotify_id,
+            "artist_name": artist.name if artist else None,
+            "youtube_video_id": youtube_video_id,
+            "youtube_status": youtube_status,
+            "local_file_path": file_path,
+            "local_file_exists": file_exists,
+        }
+
+
 @router.post("/enrich/{track_id}")
 async def enrich_track_with_lastfm(
     track_id: int = Path(..., description="Local track ID"),
