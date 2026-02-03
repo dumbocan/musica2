@@ -22,7 +22,6 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from sqlmodel import select
-from sqlalchemy import func
 
 from app.core.config import settings
 from app.core.db import get_session
@@ -67,28 +66,42 @@ def find_artist_by_folder(session, folder_name: str) -> Optional[Artist]:
 
 def find_track_by_name(session, track_name: str) -> Optional[Track]:
     """Buscar canción por nombre en toda la BD (sin importar artista)."""
-    cleaned = clean_name(track_name)
+    # Nombre simple sin extensión
+    name_simple = Path(track_name).stem.replace('-', ' ').replace('_', ' ')
+    # Quitar video ID suffix
+    name_simple = re.sub(r'\s+[a-zA-Z0-9_-]{11}$', '', name_simple)
+    # Quitar sufijos comunes
+    name_simple = re.sub(r'\s*-\s*(Remix|Extended|Mix|Edit|Slowride|Live|Session|Instrumental|Explicit)$', '', name_simple, flags=re.IGNORECASE)
+    name_simple = name_simple.strip()
 
-    # Buscar por nombre similar (case insensitive partial match)
+    # Extraer palabras clave principales (primeros 3-4 words)
+    words = name_simple.split()[:4]
+    keywords = ' '.join(words)
+
+    # Buscar por palabras clave (más flexible)
     tracks = session.exec(
         select(Track).where(
-            (func.lower(Track.name).ilike(f'%{cleaned}%')) |
-            (Track.name.ilike(f'%{track_name}%'))
+            Track.name.ilike(f'%{keywords}%')
         ).limit(20)
     ).all()
 
     if not tracks:
         return None
 
-    # Devolver mejor match
+    # Devolver mejor match (priorizar coincidencia más larga)
+    best_match = None
+    best_score = 0
     for track in tracks:
-        track_cleaned = clean_name(track.name)
-        if cleaned == track_cleaned:
-            return track
-        if cleaned in track_cleaned or track_cleaned in cleaned:
-            return track
+        # Score por cuántas palabras coinciden
+        track_words = set(track.name.lower().split())
+        file_words = set(name_simple.lower().split())
+        common = track_words & file_words
+        score = len(common)
+        if score > best_score:
+            best_score = score
+            best_match = track
 
-    return tracks[0]
+    return best_match
 
 
 def create_artist_if_not_exists(session, folder_name: str) -> Artist:
