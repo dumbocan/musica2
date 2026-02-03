@@ -169,20 +169,56 @@ UI → Backend
 - **Organización de descargas**: los archivos deben quedar en `downloads/<Artist>/<Album>/<Track>.<ext>`. Para migrar descargas antiguas usa `scripts/organize_downloads_by_album.py --resolve-unknown --resolve-spotify --spotify-create` (requiere credenciales Spotify).
 - **Contador de uso**: `frontend/src/components/YoutubeRequestCounter.tsx` consulta `/youtube/usage` periódicamente; si el backend está apagado verás errores de red en consola.
 
-## ▶️ Playback policy (DB-first, fijo)
+## ▶️ Playback & Download Policy (BIBLIA - No Regresar)
 
-Para evitar regresiones, la política de reproducción queda definida así:
+Para evitar regressions y garantizar reproduccion correcta, la politica de reproduccion y descarga queda DEFINIDA ASI:
 
-1. **Si existe archivo local en BD/disco** (`download_path`) → reproducir local y **no** buscar YouTube.
-2. **Si no hay local pero sí `videoId` válido** → reproducir por `/youtube/stream` y descargar a BD/disco en paralelo.
-3. **Si no hay local ni `videoId`** → buscar link con `/youtube/track/{spotify_track_id}/refresh`, guardar en BD y luego reproducir.
+### 1. **DB-First (Base de datos primero)**
+- Buscar si ya existe `YouTubeDownload` con `youtube_video_id` para ese track
+- Si existe archivo en disco → usar directamente
+- Solo marcar `completed` cuando archivo existe verificadamente
 
-Notas:
-- `youtube_video_id` solo se considera válido si tiene 11 caracteres (`[A-Za-z0-9_-]`).
-- Esta regla aplica tanto a Tracks como Playlists y debe mantenerse consistente entre frontend y backend.
-- La descarga en paralelo es **best-effort**: si YouTube bloquea con `403`, la reproducción por stream debe seguir sin romperse.
+### 2. **Playback - Streaming + Cache en Paralelo**
+- **Stream inmediato**: reproducir mientras descarga
+- **Cache en paralelo**: guardar archivo mientras suena
+- Si hay `youtube_video_id` → sincronizar con video de YouTube
+- NO marcar como `completed` hasta que archivo exista fisicamente
 
-## ⚠️ Troubleshooting DNS (Spotify/Last.fm “offline” sin motivo)
+### 3. **Video Sincronizado**
+- Si el track tiene `youtube_video_id` → mostrar video de YouTube
+- Video se reproduce **sincronizado** con el audio
+- Controles (play/pause/skip) afectan tanto video como audio
+
+### 4. **YouTube API (si no hay link)**
+- Buscar video en YouTube Data API v3
+- Si encuentra → guardar en BD con `link_source="youtube_api"`, status `link_found`
+- Si no encuentra → status `video_not_found`
+
+### 5. **yt-dlp Fallback (si API falla)**
+- Si YouTube API quota agotada (403/429) → usar yt-dlp
+- Usar cookies del navegador (`--cookies-from-browser chrome`)
+- Guardar en BD con `link_source="ytdlp"`
+- Registrar en `storage/logs/ytdlp_fallback.log`
+
+### 6. **Descarga Real (cuando se completa)**
+- Path correcto: `downloads/Artista/Album/Track.mp3`
+- Formato: **MP3** (no webm, no m4a)
+- Verificar que el archivo existe antes de marcar como `completed`
+
+### 7. **Logs y Debug**
+- yt-dlp fallback → `storage/logs/ytdlp_fallback.log`
+- Prefetch → `logs/uvicorn.log` (grep "youtube_prefetch")
+- Errores → `logs/app.log`
+
+### Reglas de Oro
+- `youtube_video_id` solo valido si tiene 11 caracteres (`[A-Za-z0-9_-]{11}`)
+- Descarga en paralelo es **best-effort**: 403 no debe romper playback
+- Esta politica aplica a Tracks, Playlists y Albumes
+- Mantener consistente entre frontend y backend
+
+---
+
+## ⚠️ Troubleshooting DNS (Spotify/Last.fm "offline" sin motivo)
 
 - **Síntoma**: `/health/detailed` marca `spotify/lastfm = offline` con `timeout`, pero los tokens están bien y el backend está levantado.
 - **Causa típica**: DNS local roto (systemd-resolved), a menudo tras reiniciar, cambiar de red o activar/desactivar VPN.

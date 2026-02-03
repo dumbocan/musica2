@@ -31,6 +31,51 @@
 - Fix any lint errors (F401 unused imports, E302 blank lines, W293 whitespace, etc.)
 - Pre-commit hooks will block commits with flake8 errors - do not bypass with --no-verify
 
+## Playback & Download Policy (BIBLIA - Never Regress)
+
+### 1. **DB-First**
+- Check `YouTubeDownload` table for existing `youtube_video_id`
+- If file exists on disk → use directly
+- Only mark `completed` after file exists on disk
+
+### 2. **Playback - Streaming + Parallel Cache**
+- **Immediate stream**: play while downloading
+- **Parallel cache**: save file while playing
+- If `youtube_video_id` exists → sync with YouTube video
+- Do NOT mark as `completed` until file physically exists
+
+### 3. **Synchronized Video**
+- If track has `youtube_video_id` → show YouTube video
+- Video plays **synchronized** with audio
+- Controls (play/pause/skip) affect both video and audio
+
+### 4. **YouTube API (if no link)**
+- Search video on YouTube Data API v3
+- If found → save to BD with `link_source="youtube_api"`, status `link_found`
+- If not found → status `video_not_found`
+
+### 5. **yt-dlp Fallback (if API fails)**
+- If YouTube API quota exhausted (403/429) → use yt-dlp
+- Use browser cookies (`--cookies-from-browser chrome`)
+- Save to BD with `link_source="ytdlp"`
+- Log to `storage/logs/ytdlp_fallback.log`
+
+### 6. **Actual Download (when completing)**
+- Correct path: `downloads/Artist/Album/Track.mp3`
+- Format: **MP3** (not webm, not m4a)
+- Verify file exists before marking as `completed`
+
+### 7. **Logs & Debug**
+- yt-dlp fallback → `storage/logs/ytdlp_fallback.log`
+- Prefetch → `logs/uvicorn.log` (grep "youtube_prefetch")
+- Errors → `logs/app.log`
+
+### Golden Rules
+- `youtube_video_id` only valid if 11 characters (`[A-Za-z0-9_-]{11}`)
+- Parallel download is **best-effort**: 403 must not break playback
+- This policy applies to Tracks, Playlists, and Albums
+- Keep frontend and backend consistent
+
 ## Do not
 - Skip frontmatter on any documentation files
 - Use absolute URLs for internal links
