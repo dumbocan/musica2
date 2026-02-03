@@ -15,7 +15,9 @@ export const getUserIdFromToken = (): number | null => {
   const payloadB64 = token.split('.')[1];
   if (!payloadB64) return null;
   try {
-    const padded = payloadB64.padEnd(payloadB64.length + (4 - (payloadB64.length % 4 || 4)) % 4, '=');
+    // JWT payload uses URL-safe base64.
+    const normalized = payloadB64.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(normalized.length + (4 - (normalized.length % 4 || 4)) % 4, '=');
     const payloadJson = atob(padded);
     const payload = JSON.parse(payloadJson);
     return typeof payload?.user_id === 'number' ? payload.user_id : null;
@@ -26,7 +28,8 @@ export const getUserIdFromToken = (): number | null => {
 
 export const useFavorites = (targetType: FavoriteTarget, userId?: number | null) => {
   const [favoriteIds, setFavoriteIds] = useState<Set<number>>(new Set());
-  const effectiveUserId = userId ?? getUserIdFromToken();
+  // Prefer token user_id to avoid writing favorites to a stale store user id.
+  const effectiveUserId = getUserIdFromToken() ?? userId ?? null;
   const inFlightKeyRef = useRef<string | null>(null);
 
   useEffect(() => {

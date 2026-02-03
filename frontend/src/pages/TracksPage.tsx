@@ -3,6 +3,7 @@ import { audio2Api } from '@/lib/api';
 import { useApiStore } from '@/store/useApiStore';
 import { useFavorites } from '@/hooks/useFavorites';
 import { usePlayerStore } from '@/store/usePlayerStore';
+import { AddToPlaylistModal } from '@/components/AddToPlaylistModal';
 import type { TrackOverview } from '@/types/api';
 
 type FilterTab = 'all' | 'favorites' | 'withLink' | 'noLink' | 'hasFile' | 'missingFile';
@@ -45,6 +46,7 @@ export function TracksPage() {
   const [nextAfter, setNextAfter] = useState<number | null>(null);
   const [hasMore, setHasMore] = useState<boolean>(false);
   const [linkState, setLinkState] = useState<Record<string, LinkUiState>>({});
+  const [playlistTrack, setPlaylistTrack] = useState<TrackOverview | null>(null);
   const limit = 200;
   const { userId } = useApiStore();
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -94,7 +96,7 @@ export function TracksPage() {
   const toggleTrackFavorite = useCallback(
     async (track: TrackOverview) => {
       if (!effectiveTrackUserId) return;
-      const isFavorite = favoriteTrackIds.has(track.track_id);
+      const isFavorite = filter === 'favorites' || favoriteTrackIds.has(track.track_id);
       try {
         if (isFavorite) {
           await audio2Api.removeFavorite('track', track.track_id, effectiveTrackUserId);
@@ -103,6 +105,12 @@ export function TracksPage() {
             next.delete(track.track_id);
             return next;
           });
+          if (filter === 'favorites') {
+            setTracks((prev) => prev.filter((item) => item.track_id !== track.track_id));
+            setFilteredTotal((prev) =>
+              prev === null ? prev : Math.max(prev - 1, 0)
+            );
+          }
           setFavoriteTotal((prev) =>
             prev === null ? prev : Math.max(prev - 1, 0)
           );
@@ -121,7 +129,7 @@ export function TracksPage() {
         console.error('Failed to toggle track favorite', err);
       }
     },
-    [effectiveTrackUserId, favoriteTrackIds, setFavoriteTrackIds]
+    [effectiveTrackUserId, favoriteTrackIds, filter, setFavoriteTrackIds]
   );
 
   useEffect(() => {
@@ -139,6 +147,7 @@ export function TracksPage() {
           offset: 0,
           limit,
           include_summary: false,
+          user_id: effectiveTrackUserId ?? undefined,
           filter: isFiltered && filter !== 'all' ? filter : undefined,
           search: isFiltered ? activeSearch : undefined,
         });
@@ -163,7 +172,7 @@ export function TracksPage() {
     };
     const timeout = setTimeout(load, activeSearch.length > 0 ? 250 : 0);
     return () => clearTimeout(timeout);
-  }, [filter, limit, search]);
+  }, [effectiveTrackUserId, filter, limit, search]);
 
   useEffect(() => {
     if (!hasLoadedOnce) return;
@@ -175,6 +184,7 @@ export function TracksPage() {
           offset: 0,
           limit: 1,
           include_summary: true,
+          user_id: effectiveTrackUserId ?? undefined,
         });
         if (cancelled) return;
         setSummary(response.data.summary || null);
@@ -187,7 +197,7 @@ export function TracksPage() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [hasLoadedOnce]);
+  }, [effectiveTrackUserId, hasLoadedOnce]);
 
   useEffect(() => {
     if (!hasLoadedOnce) return;
@@ -199,6 +209,7 @@ export function TracksPage() {
           verify_files: false,
           limit: 1,
           include_summary: false,
+          user_id: effectiveTrackUserId,
           filter: 'favorites',
         });
         if (cancelled) return;
@@ -246,6 +257,7 @@ export function TracksPage() {
         verify_files: false,
         limit,
         include_summary: false,
+        user_id: effectiveTrackUserId ?? undefined,
         after_id: afterId,
         filter: isFiltered && filter !== 'all' ? filter : undefined,
         search: isFiltered ? activeSearch : undefined,
@@ -286,7 +298,7 @@ export function TracksPage() {
       loadingMoreRef.current = false;
       setLoadingMore(false);
     }
-  }, [loadingMore, hasMore, search, filter, limit, nextAfter, tracks]);
+  }, [effectiveTrackUserId, loadingMore, hasMore, search, filter, limit, nextAfter, tracks]);
 
   const stats = useMemo(() => {
     if (!summary) return null;
@@ -788,7 +800,7 @@ export function TracksPage() {
                   const trackKey = resolveTrackKey(track);
                   const linkLoading = linkState[trackKey]?.status === 'loading';
                   const canPlay = !linkLoading && (track.local_file_exists || !!track.youtube_video_id || !!track.spotify_track_id);
-                  const isFavorite = favoriteTrackIds.has(track.track_id);
+                  const isFavorite = filter === 'favorites' || favoriteTrackIds.has(track.track_id);
                   const chartBadge = track.chart_best_position
                     ? `#${track.chart_best_position}`
                     : null;
@@ -938,9 +950,9 @@ export function TracksPage() {
                       <button
                         type="button"
                         className="badge"
-                        style={{ textDecoration: 'none', cursor: 'not-allowed', border: 'none', opacity: 0.6 }}
-                        disabled
-                        title="Próximamente: añadir a lista"
+                        style={{ textDecoration: 'none', border: 'none', cursor: 'pointer' }}
+                        onClick={() => setPlaylistTrack(track)}
+                        title="Añadir a lista"
                       >
                         ＋ Lista
                       </button>
@@ -971,6 +983,17 @@ export function TracksPage() {
           </div>
         )}
       </div>
+      <AddToPlaylistModal
+        open={!!playlistTrack}
+        title="Añadir canción a lista"
+        subtitle={
+          playlistTrack
+            ? `${playlistTrack.track_name} · ${playlistTrack.artist_name || 'Artista desconocido'}`
+            : undefined
+        }
+        onClose={() => setPlaylistTrack(null)}
+        resolveTrackIds={async () => (playlistTrack?.track_id ? [playlistTrack.track_id] : [])}
+      />
     </div>
   );
 }

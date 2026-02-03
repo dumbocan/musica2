@@ -5,6 +5,7 @@ import { normalizeImageUrl } from '@/lib/images';
 import { useApiStore } from '@/store/useApiStore';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import { useFavorites } from '@/hooks/useFavorites';
+import { AddToPlaylistModal } from '@/components/AddToPlaylistModal';
 
 type Track = {
   id: string;
@@ -92,6 +93,8 @@ export function AlbumDetailPage() {
   const [localAlbumId, setLocalAlbumId] = useState<number | null>(null);
   const [trackLocalIds, setTrackLocalIds] = useState<Record<string, number>>({});
   const [trackFavoriteLoading, setTrackFavoriteLoading] = useState<Record<string, boolean>>({});
+  const [playlistTrack, setPlaylistTrack] = useState<Track | null>(null);
+  const [playlistAlbumOpen, setPlaylistAlbumOpen] = useState(false);
   const [youtubeAvailability, setYoutubeAvailability] = useState<Record<string, YoutubeAvailability>>({});
   const [streamState, setStreamState] = useState<Record<string, StreamUiState>>({});
   const [chartStatsBySpotifyId, setChartStatsBySpotifyId] = useState<Record<string, TrackChartStat>>({});
@@ -596,8 +599,8 @@ export function AlbumDetailPage() {
   }, [wikiHtml]);
   const wikiToShow = wikiParagraphs.slice(0, 2);
   const isAlbumFavorite = !!(localAlbumId && favoriteAlbumIds.has(localAlbumId));
-  const hasToken = typeof window !== 'undefined' && !!localStorage.getItem('token');
-  const canFavorite = !!(effectiveTrackUserId || effectiveAlbumUserId || hasToken);
+  const canFavoriteAlbum = !!effectiveAlbumUserId;
+  const canFavoriteTrack = !!effectiveTrackUserId;
 
   if (!spotifyId) return <div className="card">Álbum no especificado.</div>;
   if (loading) return <div className="card">Cargando álbum...</div>;
@@ -682,27 +685,41 @@ export function AlbumDetailPage() {
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
           <div style={{ fontWeight: 700 }}>Canciones</div>
-          <button
-            className="btn-ghost"
-            style={{ borderRadius: 8, fontSize: 18, opacity: favoriteLoading ? 0.6 : 1 }}
-            disabled={favoriteLoading || !canFavorite || !localAlbumId}
-            onClick={async () => {
-              if (!canFavorite || !localAlbumId) return;
-              setFavoriteLoading(true);
-              try {
-                await toggleAlbumFavorite(localAlbumId);
-              } catch {
-                // ignore error for now
-              } finally {
-                setFavoriteLoading(false);
-              }
-            }}
-            aria-pressed={isAlbumFavorite}
-            aria-label={isAlbumFavorite ? 'Quitar de favoritos' : 'Agregar a favoritos'}
-            title={isAlbumFavorite ? 'Quitar de favoritos' : 'Agregar a favoritos'}
-          >
-            {isAlbumFavorite ? '❤️' : '🤍'}
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button
+              className="badge"
+              style={{ borderRadius: 8 }}
+              onClick={() => setPlaylistAlbumOpen(true)}
+              title="Añadir álbum entero a una lista"
+            >
+              ＋ Álbum entero
+            </button>
+            <button
+              className="btn-ghost"
+              style={{ borderRadius: 8, fontSize: 18, opacity: favoriteLoading ? 0.6 : 1 }}
+              disabled={favoriteLoading || !canFavoriteAlbum || !localAlbumId}
+              onClick={async () => {
+                if (!canFavoriteAlbum || !localAlbumId) {
+                  setError('No se pudo guardar favorito del álbum: inicia sesión de nuevo.');
+                  return;
+                }
+                setFavoriteLoading(true);
+                try {
+                  await toggleAlbumFavorite(localAlbumId);
+                } catch (err) {
+                  console.error('Album favorite toggle failed', err);
+                  setError('Error guardando favorito del álbum.');
+                } finally {
+                  setFavoriteLoading(false);
+                }
+              }}
+              aria-pressed={isAlbumFavorite}
+              aria-label={isAlbumFavorite ? 'Quitar de favoritos' : 'Agregar a favoritos'}
+              title={isAlbumFavorite ? 'Quitar de favoritos' : 'Agregar a favoritos'}
+            >
+              {isAlbumFavorite ? '❤️' : '🤍'}
+            </button>
+          </div>
         </div>
         <div className="space-y-2">
           {tracks.map((t, idx) => {
@@ -831,14 +848,20 @@ export function AlbumDetailPage() {
                   <button
                     className="btn-ghost"
                     style={{ borderRadius: 8, fontSize: 18, opacity: !userId ? 0.4 : 1 }}
-                    disabled={!canFavorite || isTrackFavoriteLoading}
+                    disabled={!canFavoriteTrack || isTrackFavoriteLoading}
                     onClick={async () => {
-                      if (!canFavorite || !spotifyTrackId) return;
-                      setTrackFavoriteLoading((prev) => ({ ...prev, [spotifyTrackId]: true }));
+                        if (!canFavoriteTrack || !spotifyTrackId) {
+                          setError('No se pudo guardar favorito de la canción: inicia sesión de nuevo.');
+                          return;
+                        }
+                        setTrackFavoriteLoading((prev) => ({ ...prev, [spotifyTrackId]: true }));
                       try {
                         const resolvedId = trackLocalId || (await ensureTrackLocalId(spotifyTrackId));
                         if (!resolvedId) return;
                         await toggleTrackFavorite(resolvedId);
+                      } catch (err) {
+                        console.error('Track favorite toggle failed', err);
+                        setError('Error guardando favorito de la canción.');
                       } finally {
                         setTrackFavoriteLoading((prev) => ({ ...prev, [spotifyTrackId]: false }));
                       }
@@ -850,9 +873,9 @@ export function AlbumDetailPage() {
                   </button>
                   <button
                     className="btn-ghost"
-                    style={{ borderRadius: 8, fontSize: 12, padding: '6px 10px', opacity: 0.6 }}
-                    disabled
-                    title="Próximamente: añadir a lista"
+                    style={{ borderRadius: 8, fontSize: 12, padding: '6px 10px' }}
+                    onClick={() => setPlaylistTrack(t)}
+                    title="Añadir a lista"
                   >
                     ＋ Lista
                   </button>
@@ -867,6 +890,44 @@ export function AlbumDetailPage() {
           })}
         </div>
       </div>
+
+      <AddToPlaylistModal
+        open={!!playlistTrack}
+        title="Añadir canción a lista"
+        subtitle={
+          playlistTrack
+            ? `${playlistTrack.name} · ${playlistTrack.artists?.[0]?.name || 'Artista desconocido'}`
+            : undefined
+        }
+        onClose={() => setPlaylistTrack(null)}
+        resolveTrackIds={async () => {
+          if (!playlistTrack) return [];
+          const spotifyTrackId = resolveTrackId(playlistTrack);
+          if (!spotifyTrackId) return [];
+          const resolvedId = trackLocalIds[spotifyTrackId] || (await ensureTrackLocalId(spotifyTrackId));
+          return resolvedId ? [resolvedId] : [];
+        }}
+      />
+
+      <AddToPlaylistModal
+        open={playlistAlbumOpen}
+        title="Añadir álbum entero"
+        subtitle={`${album.name} · ${tracks.length} pistas`}
+        onClose={() => setPlaylistAlbumOpen(false)}
+        resolveTrackIds={async () => {
+          const ids: number[] = [];
+          const seen = new Set<number>();
+          for (const track of tracks) {
+            const spotifyTrackId = resolveTrackId(track);
+            if (!spotifyTrackId) continue;
+            const resolvedId = trackLocalIds[spotifyTrackId] || (await ensureTrackLocalId(spotifyTrackId));
+            if (!resolvedId || seen.has(resolvedId)) continue;
+            seen.add(resolvedId);
+            ids.push(resolvedId);
+          }
+          return ids;
+        }}
+      />
 
     </div>
   );

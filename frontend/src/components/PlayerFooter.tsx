@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { Shuffle } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ListMusic, Shuffle } from 'lucide-react';
+import { AddToPlaylistModal } from '@/components/AddToPlaylistModal';
+import { audio2Api } from '@/lib/api';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import type { PlayerQueueItem } from '@/store/usePlayerStore';
 
@@ -20,6 +22,7 @@ export function PlayerFooter() {
   const audioDownloadStatus = usePlayerStore((s) => s.audioDownloadStatus);
   const audioDownloadVideoId = usePlayerStore((s) => s.audioDownloadVideoId);
   const onPlayTrack = usePlayerStore((s) => s.onPlayTrack);
+  const setOnPlayTrack = usePlayerStore((s) => s.setOnPlayTrack);
   const setAudioEl = usePlayerStore((s) => s.setAudioEl);
   const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
   const setDuration = usePlayerStore((s) => s.setDuration);
@@ -41,29 +44,15 @@ export function PlayerFooter() {
   const upgradeInFlightRef = useRef(false);
   const lastVolumeRef = useRef(volume);
   const endGuardRef = useRef(false);
-  const getPreferredFormats = () => {
-    const audio = audioRef.current;
-    if (!audio) return { fileFormat: 'm4a', streamFormat: 'm4a' };
-    const canMp3 = audio.canPlayType('audio/mpeg');
-    const canM4a = audio.canPlayType('audio/mp4');
-    const canWebm = audio.canPlayType('audio/webm');
-    return {
-      fileFormat: canMp3 ? 'mp3' : 'm4a',
-      streamFormat: canM4a ? 'm4a' : canWebm ? 'webm' : 'm4a',
-    };
-  };
+  const [showQueuePanel, setShowQueuePanel] = useState(false);
+  const [memoryPlaylists, setMemoryPlaylists] = useState<Array<{ id: number; name: string; description?: string }>>([]);
+  const [memoryLoading, setMemoryLoading] = useState(false);
+  const [activeMemoryPlaylistId, setActiveMemoryPlaylistId] = useState<number | null>(null);
+  const [memoryMessage, setMemoryMessage] = useState('');
+  const [addNowPlayingOpen, setAddNowPlayingOpen] = useState(false);
 
   const prevItem = currentIndex > 0 ? queue[currentIndex - 1] : null;
   const nextItem = currentIndex >= 0 && currentIndex < queue.length - 1 ? queue[currentIndex + 1] : null;
-
-  const shuffleQueue = useCallback((items: PlayerQueueItem[]) => {
-    const clone = [...items];
-    for (let i = clone.length - 1; i > 0; i -= 1) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [clone[i], clone[j]] = [clone[j], clone[i]];
-    }
-    return clone;
-  }, []);
 
   useEffect(() => {
     if (!audioRef.current) return;
@@ -290,14 +279,6 @@ export function PlayerFooter() {
     stopAudio();
   }, [stopAudio]);
 
-  const handleShuffle = useCallback(() => {
-    if (queue.length < 2 || !onPlayTrack) return;
-    const randomized = shuffleQueue(queue);
-    setQueue(randomized, 0);
-    setCurrentIndex(0);
-    onPlayTrack(randomized[0]);
-  }, [queue, onPlayTrack, setCurrentIndex, setQueue, shuffleQueue]);
-
   const handleToggleShuffleMode = useCallback(() => {
     setShuffleMode(!shuffleMode);
   }, [setShuffleMode, shuffleMode]);
@@ -314,21 +295,148 @@ export function PlayerFooter() {
     onPlayTrack(prevItem);
   }, [prevItem, onPlayTrack]);
 
-  const handleNext = useCallback(() => {
-    if (!queue.length || !onPlayTrack) return;
+  const pickNextQueueItem = useCallback((): PlayerQueueItem | null => {
+    if (!queue.length) return null;
     if (shuffleMode) {
       const currentId = currentIndex >= 0 ? queue[currentIndex]?.videoId : undefined;
       const candidates = queue.filter((item) => item.videoId && item.videoId !== currentId);
       const source = candidates.length ? candidates : queue;
-      const randomItem = source[Math.floor(Math.random() * source.length)];
-      if (randomItem) {
-        onPlayTrack(randomItem);
+      return source[Math.floor(Math.random() * source.length)] || null;
+    }
+    return nextItem || null;
+  }, [currentIndex, nextItem, queue, shuffleMode]);
+
+  const handleNext = useCallback(() => {
+    if (!onPlayTrack) return;
+    const next = pickNextQueueItem();
+    if (!next) return;
+    onPlayTrack(next);
+  }, [onPlayTrack, pickNextQueueItem]);
+
+  const playQueueItem = useCallback(async (item: PlayerQueueItem) => {
+    const queueItems = usePlayerStore.getState().queue;
+    const queueIndex = queueItems.findIndex((candidate) => candidate.spotifyTrackId === item.spotifyTrackId);
+    if (queueIndex >= 0) setCurrentIndex(queueIndex);
+    let videoId = item.videoId;
+    if (!videoId || videoId.startsWith('pending:')) {
+      if (item.localTrackId) {
+        videoId = `local:${item.localTrackId}`;
+      } else if (/^[A-Za-z0-9]{22}$/.test(item.spotifyTrackId)) {
+        try {
+          const existing = await audio2Api.getYoutubeTrackLink(item.spotifyTrackId);
+          const existingVideo = existing.data?.youtube_video_id;
+          if (existingVideo) {
+            videoId = existingVideo;
+          } else {
+            const refreshed = await audio2Api.refreshYoutubeTrackLink(item.spotifyTrackId, {
+              artist: item.artist,
+              track: item.title,
+            });
+            videoId = refreshed.data?.youtube_video_id;
+          }
+        } catch {
+          videoId = undefined;
+        }
       }
+    }
+    if (!videoId) {
+      setStatusMessage('Sin enlace de YouTube para esta pista');
       return;
     }
-    if (!nextItem) return;
-    onPlayTrack(nextItem);
-  }, [currentIndex, nextItem, onPlayTrack, queue, shuffleMode]);
+    await playByVideoId({
+      localTrackId: item.localTrackId,
+      spotifyTrackId: item.spotifyTrackId,
+      title: item.title,
+      artist: item.artist,
+      artistSpotifyId: item.artistSpotifyId,
+      videoId,
+      durationSec: item.durationMs ? Math.round(item.durationMs / 1000) : undefined,
+    });
+  }, [playByVideoId, setCurrentIndex, setStatusMessage]);
+
+  const loadMemoryPlaylists = useCallback(async () => {
+    setMemoryLoading(true);
+    setMemoryMessage('');
+    try {
+      const response = await audio2Api.getAllPlaylists();
+      const items = (response.data || []).map((item: { id: number; name: string; description?: string }) => ({
+        id: item.id,
+        name: item.name,
+        description: item.description || '',
+      }));
+      setMemoryPlaylists(items);
+    } catch {
+      setMemoryMessage('No se pudieron cargar las listas guardadas');
+    } finally {
+      setMemoryLoading(false);
+    }
+  }, []);
+
+  const applyMemoryPlaylist = useCallback(async (playlistId: number) => {
+    try {
+      const response = await audio2Api.getPlaylistTracks(playlistId);
+      const tracks = Array.isArray(response.data) ? response.data : [];
+      const items: PlayerQueueItem[] = tracks.map((track: {
+        id: number;
+        spotify_id?: string | null;
+        name?: string;
+        duration_ms?: number;
+        artist?: { name?: string; spotify_id?: string };
+        artist_id?: number;
+        download_path?: string | null;
+      }) => ({
+        localTrackId: track.id,
+        spotifyTrackId: track.spotify_id || `local-${track.id}`,
+        title: track.name || 'Sin título',
+        artist: track.artist?.name,
+        artistSpotifyId: track.artist?.spotify_id || undefined,
+        durationMs: track.duration_ms || undefined,
+        videoId: track.download_path ? `local:${track.id}` : `pending:${track.spotify_id || track.id}`,
+      }));
+      setQueue(items, items.length ? 0 : -1);
+      setCurrentIndex(items.length ? 0 : -1);
+      setOnPlayTrack((nextItem: PlayerQueueItem) => {
+        void playQueueItem(nextItem);
+      });
+      setMemoryMessage(items.length ? `Lista cargada: ${items.length} pistas` : 'La lista está vacía');
+    } catch {
+      setMemoryMessage('No se pudo cargar la lista seleccionada');
+    }
+  }, [playQueueItem, setCurrentIndex, setOnPlayTrack, setQueue]);
+
+  useEffect(() => {
+    if (!showQueuePanel) return;
+    void loadMemoryPlaylists();
+  }, [loadMemoryPlaylists, showQueuePanel]);
+
+  const resolveNowPlayingTrackIds = useCallback(async (): Promise<number[]> => {
+    const current = usePlayerStore.getState().nowPlaying;
+    if (!current) return [];
+    if (typeof current.localTrackId === 'number') return [current.localTrackId];
+    if (/^[A-Za-z0-9]{22}$/.test(current.spotifyTrackId)) {
+      try {
+        const resolved = await audio2Api.resolveTracks([current.spotifyTrackId]);
+        const resolvedId = resolved?.data?.items?.[0]?.track_id;
+        return typeof resolvedId === 'number' ? [resolvedId] : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  }, []);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const handleEndedAutoNext = () => {
+      if (!onPlayTrack) return;
+      const next = pickNextQueueItem();
+      if (!next) return;
+      window.setTimeout(() => onPlayTrack(next), 80);
+    };
+    audio.addEventListener('ended', handleEndedAutoNext);
+    return () => audio.removeEventListener('ended', handleEndedAutoNext);
+  }, [onPlayTrack, pickNextQueueItem]);
 
   useEffect(() => {
     const clampVolume = (value: number) => Math.max(0, Math.min(100, value));
@@ -399,6 +507,12 @@ export function PlayerFooter() {
           event.preventDefault();
           handleStop();
           break;
+        case 'KeyL':
+          event.preventDefault();
+          if (nowPlaying) {
+            setAddNowPlayingOpen(true);
+          }
+          break;
         default:
           break;
       }
@@ -452,14 +566,6 @@ export function PlayerFooter() {
             <path d="M11 5L19 12L11 19V5z" />
           </svg>
         </button>
-        <button
-          className="album-player__btn"
-          onClick={handleShuffle}
-          disabled={queue.length < 2 || !onPlayTrack}
-          title="Shuffle"
-        >
-          <Shuffle className="h-4 w-4" />
-        </button>
         <button className="album-player__btn" onClick={handleStop} disabled={!nowPlaying} title={isVideo ? 'Cerrar video' : 'Detener'}>
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M6 6h12v12H6z" />
@@ -501,6 +607,23 @@ export function PlayerFooter() {
           <button className={`album-player__mode-btn ${playbackMode === 'video' ? 'is-active' : ''}`} onClick={() => setPlaybackMode('video')} type="button">
             Video
           </button>
+          <button
+            className={`album-player__mode-btn ${showQueuePanel ? 'is-active' : ''}`}
+            onClick={() => setShowQueuePanel((prev) => !prev)}
+            type="button"
+            title="Mostrar cola y listas guardadas"
+          >
+            <ListMusic className="h-3.5 w-3.5" />
+          </button>
+          <button
+            className="album-player__mode-btn"
+            onClick={() => setAddNowPlayingOpen(true)}
+            type="button"
+            title="Añadir pista actual a lista (atajo: L)"
+            disabled={!nowPlaying}
+          >
+            + Lista
+          </button>
         </div>
         <div className="album-player__volume">
           <input
@@ -534,6 +657,104 @@ export function PlayerFooter() {
   );
 
   return (
-    <footer className="album-player">{renderControls()}</footer>
+    <>
+      {showQueuePanel && (
+        <div
+          style={{
+            position: 'fixed',
+            right: 16,
+            bottom: 92,
+            width: 420,
+            maxHeight: '55vh',
+            overflow: 'auto',
+            zIndex: 80,
+            background: 'var(--panel-2)',
+            border: '1px solid var(--border)',
+            borderRadius: 12,
+            padding: 10,
+            display: 'grid',
+            gap: 10,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <strong>Cola actual</strong>
+            <button className="badge" onClick={() => setShowQueuePanel(false)} type="button">
+              Cerrar
+            </button>
+          </div>
+          <div style={{ maxHeight: 180, overflow: 'auto', display: 'grid', gap: 4 }}>
+            {queue.length ? (
+              queue.map((item, idx) => (
+                <button
+                  key={`${item.spotifyTrackId}-${idx}`}
+                  type="button"
+                  onClick={() => void playQueueItem(item)}
+                  style={{
+                    textAlign: 'left',
+                    border: '1px solid var(--border)',
+                    background: idx === currentIndex ? 'rgba(5, 247, 165, 0.15)' : 'var(--panel)',
+                    borderRadius: 8,
+                    padding: '6px 8px',
+                    cursor: 'pointer',
+                    color: 'inherit',
+                  }}
+                >
+                  <span style={{ fontWeight: 600 }}>{item.title}</span>
+                  {item.artist ? <span style={{ color: 'var(--muted)' }}> · {item.artist}</span> : null}
+                </button>
+              ))
+            ) : (
+              <div style={{ color: 'var(--muted)', fontSize: 13 }}>No hay cola activa.</div>
+            )}
+          </div>
+
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+            <strong>Listas en memoria</strong>
+            <div style={{ marginTop: 8, maxHeight: 170, overflow: 'auto', display: 'grid', gap: 4 }}>
+              {memoryLoading ? (
+                <div style={{ color: 'var(--muted)', fontSize: 13 }}>Cargando listas...</div>
+              ) : memoryPlaylists.length ? (
+                memoryPlaylists.map((playlist) => (
+                  <button
+                    key={playlist.id}
+                    type="button"
+                    onClick={() => {
+                      setActiveMemoryPlaylistId(playlist.id);
+                      void applyMemoryPlaylist(playlist.id);
+                    }}
+                    style={{
+                      textAlign: 'left',
+                      border: '1px solid var(--border)',
+                      background:
+                        activeMemoryPlaylistId === playlist.id ? 'rgba(5, 247, 165, 0.15)' : 'var(--panel)',
+                      borderRadius: 8,
+                      padding: '6px 8px',
+                      cursor: 'pointer',
+                      color: 'inherit',
+                    }}
+                  >
+                    <span style={{ fontWeight: 600 }}>{playlist.name}</span>
+                    {playlist.description ? (
+                      <span style={{ color: 'var(--muted)' }}> · {playlist.description}</span>
+                    ) : null}
+                  </button>
+                ))
+              ) : (
+                <div style={{ color: 'var(--muted)', fontSize: 13 }}>Sin listas guardadas.</div>
+              )}
+            </div>
+          </div>
+          {memoryMessage ? <div style={{ color: 'var(--muted)', fontSize: 12 }}>{memoryMessage}</div> : null}
+        </div>
+      )}
+      <AddToPlaylistModal
+        open={addNowPlayingOpen}
+        title="Añadir reproducción actual a lista"
+        subtitle={nowPlaying ? `${nowPlaying.title}${nowPlaying.artist ? ` · ${nowPlaying.artist}` : ''}` : 'Sin pista en reproducción'}
+        onClose={() => setAddNowPlayingOpen(false)}
+        resolveTrackIds={resolveNowPlayingTrackIds}
+      />
+      <footer className="album-player">{renderControls()}</footer>
+    </>
   );
 }

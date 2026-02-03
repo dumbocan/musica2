@@ -91,6 +91,10 @@ type PlayerStore = {
   seekAudio: (value: number) => void;
   shuffleMode: boolean;
   setShuffleMode: (enabled: boolean) => void;
+  crossfadeEnabled: boolean;
+  crossfadeMs: number;
+  setCrossfadeEnabled: (enabled: boolean) => void;
+  setCrossfadeMs: (value: number) => void;
 };
 
 const getFormats = (audio: HTMLAudioElement | null) => {
@@ -104,8 +108,67 @@ const getFormats = (audio: HTMLAudioElement | null) => {
   };
 };
 
+const crossfadeToSource = async (
+  mainAudio: HTMLAudioElement,
+  nextSrc: string,
+  targetVolume: number,
+  durationMs = 1000
+): Promise<boolean> => {
+  const ghost = new Audio();
+  ghost.preload = 'auto';
+  ghost.muted = false;
+  ghost.volume = 0;
+  ghost.src = nextSrc;
+
+  try {
+    await ghost.play();
+  } catch {
+    return false;
+  }
+
+  const start = performance.now();
+  const initialMainVolume = Number.isFinite(mainAudio.volume) ? mainAudio.volume : targetVolume;
+  await new Promise<void>((resolve) => {
+    const timer = setInterval(() => {
+      const elapsed = performance.now() - start;
+      const progress = Math.max(0, Math.min(1, elapsed / durationMs));
+      mainAudio.volume = initialMainVolume * (1 - progress);
+      ghost.volume = targetVolume * progress;
+      if (progress >= 1) {
+        clearInterval(timer);
+        resolve();
+      }
+    }, 40);
+  });
+
+  const resumeAt = Number.isFinite(ghost.currentTime) ? ghost.currentTime : 0;
+  mainAudio.pause();
+  mainAudio.src = nextSrc;
+  mainAudio.load();
+  try {
+    if (resumeAt > 0) {
+      mainAudio.currentTime = resumeAt;
+    }
+  } catch {
+    // ignore seek errors while media is loading
+  }
+  mainAudio.volume = targetVolume;
+  try {
+    await mainAudio.play();
+    ghost.pause();
+    ghost.src = '';
+    return true;
+  } catch {
+    ghost.pause();
+    ghost.src = '';
+    return false;
+  }
+};
+
 const RECENT_PLAYS_KEY = 'audio2_recent_plays';
 const MAX_RECENT_PLAYS = 20;
+const CROSSFADER_ENABLED_KEY = 'audio2_crossfade_enabled';
+const CROSSFADER_MS_KEY = 'audio2_crossfade_ms';
 
 const loadRecentPlays = (): RecentPlay[] => {
   try {
@@ -126,6 +189,26 @@ const persistRecentPlays = (plays: RecentPlay[]) => {
     localStorage.setItem(RECENT_PLAYS_KEY, JSON.stringify(plays));
   } catch {
     // ignore storage errors
+  }
+};
+
+const loadCrossfadeEnabled = (): boolean => {
+  try {
+    const raw = localStorage.getItem(CROSSFADER_ENABLED_KEY);
+    return raw === null ? true : raw === 'true';
+  } catch {
+    return true;
+  }
+};
+
+const loadCrossfadeMs = (): number => {
+  try {
+    const raw = localStorage.getItem(CROSSFADER_MS_KEY);
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return 1000;
+    return Math.max(0, Math.min(4000, Math.round(parsed)));
+  } catch {
+    return 1000;
   }
 };
 
@@ -201,9 +284,10 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
       audioDownloadStatus: 'checking',
     });
     audio.muted = false;
-    audio.pause();
-    audio.currentTime = 0;
     const { fileFormat, streamFormat } = getFormats(audio);
+    const targetVolume = Math.max(0, Math.min(get().volume, 100)) / 100;
+    let nextSrc = '';
+    let nextAudioMode: AudioSourceMode = 'stream';
 
     // DB-FIRST: Check if track has local file in DB
     let localFilePath: string | null = null;
@@ -225,14 +309,15 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
 
     // Use local file if found in DB
     if (localFilePath) {
+      nextAudioMode = 'file';
       set({ audioSourceMode: 'file', statusMessage: '', audioDownloadStatus: 'downloaded' });
       if (payload.localTrackId) {
-        audio.src = `${API_BASE_URL}/youtube/download/by-local-track/${payload.localTrackId}/file${tokenQuery}`;
+        nextSrc = `${API_BASE_URL}/youtube/download/by-local-track/${payload.localTrackId}/file${tokenQuery}`;
       } else if (payload.spotifyTrackId && /^[A-Za-z0-9]{22}$/.test(payload.spotifyTrackId)) {
-        audio.src = `${API_BASE_URL}/youtube/download/by-track/${encodeURIComponent(payload.spotifyTrackId)}/file${tokenQuery}`;
+        nextSrc = `${API_BASE_URL}/youtube/download/by-track/${encodeURIComponent(payload.spotifyTrackId)}/file${tokenQuery}`;
       } else {
         const videoIdForDownload = dbYoutubeVideoId || payload.videoId;
-        audio.src = `${API_BASE_URL}/youtube/download/${videoIdForDownload}/file?format=${fileFormat}${tokenParam}`;
+        nextSrc = `${API_BASE_URL}/youtube/download/${videoIdForDownload}/file?format=${fileFormat}${tokenParam}`;
       }
     } else {
       if (isLocalSynthetic) {
@@ -253,16 +338,44 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
         }
       }
       if (localFormat) {
+        nextAudioMode = 'file';
         set({ audioSourceMode: 'file', statusMessage: '', audioDownloadStatus: 'downloaded' });
-        audio.src = `${API_BASE_URL}/youtube/download/${payload.videoId}/file?format=${localFormat}${tokenParam}`;
+        nextSrc = `${API_BASE_URL}/youtube/download/${payload.videoId}/file?format=${localFormat}${tokenParam}`;
       } else {
+        nextAudioMode = 'stream';
         set({ audioSourceMode: 'stream', statusMessage: 'Streaming...', audioDownloadStatus: 'downloading' });
-        audio.src = `${API_BASE_URL}/youtube/stream/${payload.videoId}?format=${streamFormat}&cache=true${tokenParam}`;
+        nextSrc = `${API_BASE_URL}/youtube/stream/${payload.videoId}?format=${streamFormat}&cache=true${tokenParam}`;
       }
     }
-    audio.load();
+
+    const { crossfadeEnabled, crossfadeMs } = get();
+    const shouldCrossfade =
+      crossfadeEnabled &&
+      crossfadeMs > 0 &&
+      !audio.paused &&
+      !!audio.src &&
+      !!nextSrc &&
+      audio.src !== nextSrc &&
+      get().playbackMode === 'audio';
+
     try {
-      await audio.play();
+      if (shouldCrossfade) {
+        const faded = await crossfadeToSource(audio, nextSrc, targetVolume, crossfadeMs);
+        if (!faded) {
+          audio.pause();
+          audio.currentTime = 0;
+          audio.src = nextSrc;
+          audio.load();
+          await audio.play();
+        }
+      } else {
+        audio.pause();
+        audio.currentTime = 0;
+        audio.src = nextSrc;
+        audio.load();
+        await audio.play();
+      }
+      set({ audioSourceMode: nextAudioMode });
       get().recordRecentPlay(payload);
       const recordBackendPlay = async () => {
         let trackId = payload.localTrackId;
@@ -351,4 +464,23 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   },
   shuffleMode: false,
   setShuffleMode: (shuffleMode) => set({ shuffleMode }),
+  crossfadeEnabled: loadCrossfadeEnabled(),
+  crossfadeMs: loadCrossfadeMs(),
+  setCrossfadeEnabled: (enabled) => {
+    set({ crossfadeEnabled: enabled });
+    try {
+      localStorage.setItem(CROSSFADER_ENABLED_KEY, String(enabled));
+    } catch {
+      // ignore storage errors
+    }
+  },
+  setCrossfadeMs: (value) => {
+    const next = Math.max(0, Math.min(4000, Math.round(value)));
+    set({ crossfadeMs: next });
+    try {
+      localStorage.setItem(CROSSFADER_MS_KEY, String(next));
+    } catch {
+      // ignore storage errors
+    }
+  },
 }));

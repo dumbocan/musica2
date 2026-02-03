@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { audio2Api } from '@/lib/api';
 import { useApiStore } from '@/store/useApiStore';
+import { usePlayerStore } from '@/store/usePlayerStore';
 
 type DashboardStats = {
   artists_total: number;
@@ -34,6 +35,10 @@ export function SettingsPage() {
   const location = useLocation();
   const isSettingsRoute = location.pathname.startsWith('/settings');
   const setServiceStatus = useApiStore((s) => s.setServiceStatus);
+  const crossfadeEnabled = usePlayerStore((s) => s.crossfadeEnabled);
+  const crossfadeMs = usePlayerStore((s) => s.crossfadeMs);
+  const setCrossfadeEnabled = usePlayerStore((s) => s.setCrossfadeEnabled);
+  const setCrossfadeMs = usePlayerStore((s) => s.setCrossfadeMs);
   const [pauseSettingsPolling, setPauseSettingsPolling] = useState(() => {
     try {
       return localStorage.getItem('pauseSettingsPolling') === 'true';
@@ -927,6 +932,45 @@ export function SettingsPage() {
         </aside>
 
         <main style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div className="card">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 18 }}>Reproducción</div>
+                <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 4 }}>
+                  Controla la transición de volumen entre canciones.
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gap: 12, marginTop: 14 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
+                <input
+                  type="checkbox"
+                  checked={crossfadeEnabled}
+                  onChange={(e) => setCrossfadeEnabled(e.target.checked)}
+                  style={{ width: 16, height: 16, cursor: 'pointer' }}
+                />
+                <span style={{ fontSize: 13 }}>Crossfade entre canciones</span>
+              </label>
+              <div style={{ opacity: crossfadeEnabled ? 1 : 0.55 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--muted)' }}>
+                  <span>Duración</span>
+                  <span>{(crossfadeMs / 1000).toFixed(1)} s</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={4000}
+                  step={100}
+                  value={crossfadeMs}
+                  onChange={(e) => setCrossfadeMs(Number(e.target.value))}
+                  disabled={!crossfadeEnabled}
+                  className="search-input"
+                  style={{ width: '100%', marginTop: 6 }}
+                />
+              </div>
+            </div>
+          </div>
+
           <div className="card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
               <div>

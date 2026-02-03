@@ -6,15 +6,25 @@ Handles play tracking, history, and playback-related functionality.
 
 import logging
 from typing import Dict, Any
+from datetime import date
 from pathlib import Path as FsPath
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
-from sqlalchemy import func
+from pydantic import BaseModel
+from sqlalchemy import and_, func
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from ...core.db import get_session, SessionDep
-from ...models.base import Track, Artist, Album, YouTubeDownload, PlayHistory
+from ...models.base import (
+    Track,
+    Artist,
+    Album,
+    YouTubeDownload,
+    PlayHistory,
+    TrackChartEntry,
+    TrackChartStats,
+)
 
 logger = logging.getLogger(__name__)
 REPO_ROOT = FsPath(__file__).resolve().parents[3]
@@ -67,7 +77,47 @@ def _resolve_download_path(raw_path: str | None) -> FsPath | None:
     return None
 
 
+def _load_best_position_dates(
+    session,
+    track_ids: list[int],
+) -> dict[tuple[int, str, str], date]:
+    if not track_ids:
+        return {}
+    rows = session.exec(
+        select(
+            TrackChartEntry.track_id,
+            TrackChartEntry.chart_source,
+            TrackChartEntry.chart_name,
+            func.min(TrackChartEntry.chart_date),
+        )
+        .join(
+            TrackChartStats,
+            and_(
+                TrackChartStats.track_id == TrackChartEntry.track_id,
+                TrackChartStats.chart_source == TrackChartEntry.chart_source,
+                TrackChartStats.chart_name == TrackChartEntry.chart_name,
+                TrackChartEntry.rank == TrackChartStats.best_position,
+            ),
+        )
+        .where(TrackChartEntry.track_id.in_(track_ids))
+        .group_by(
+            TrackChartEntry.track_id,
+            TrackChartEntry.chart_source,
+            TrackChartEntry.chart_name,
+        )
+    ).all()
+    return {
+        (track_id, chart_source, chart_name): chart_date
+        for track_id, chart_source, chart_name, chart_date in rows
+        if chart_date
+    }
+
+
 router = APIRouter(tags=["tracks"])
+
+
+class TrackResolveRequest(BaseModel):
+    spotify_track_ids: list[str]
 
 
 @router.post("/play/{track_id}")
@@ -89,6 +139,26 @@ def record_track_play(
         "message": "Play recorded",
         "play_history": play_history.dict(),
     }
+
+
+@router.post("/resolve")
+def resolve_tracks(payload: TrackResolveRequest) -> dict:
+    """Resolve Spotify track IDs to local track IDs."""
+    spotify_ids = [track_id for track_id in payload.spotify_track_ids if track_id]
+    if not spotify_ids:
+        return {"items": []}
+
+    with get_session() as sync_session:
+        rows = sync_session.exec(
+            select(Track.id, Track.spotify_id).where(Track.spotify_id.in_(spotify_ids))
+        ).all()
+
+    items = [
+        {"track_id": track_id, "spotify_track_id": spotify_id}
+        for track_id, spotify_id in rows
+        if spotify_id
+    ]
+    return {"items": items}
 
 
 @router.get("/id/{track_id}/download-info")
@@ -313,7 +383,6 @@ def get_chart_statistics(
     session: AsyncSession = Depends(SessionDep)
 ) -> Dict[str, Any]:
     """Get chart statistics for tracks."""
-    from ...models.base import TrackChartStats
 
     spotify_list = [t for t in (spotify_ids or "").split(",") if t]
     track_id_list = [int(t) for t in (track_ids or "").split(",") if t.isdigit()]
@@ -357,8 +426,7 @@ def get_chart_statistics(
             if next_rank < current_rank:
                 chosen[row.track_id] = row
 
-        # TODO: Implement _load_best_position_dates function
-        best_date_map = {}
+        best_date_map = _load_best_position_dates(sync_session, list(id_map.keys()))
 
         items = []
         for track_id, spotify_id in id_map.items():

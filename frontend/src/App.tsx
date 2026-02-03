@@ -12,6 +12,7 @@ import { YouTubeOverlayPlayer } from '@/components/YouTubeOverlayPlayer';
 import { Dashboard } from '@/pages/Dashboard';
 import { SearchPage } from '@/pages/SearchPage';
 import { ArtistsPage } from '@/pages/ArtistsPage';
+import { HiddenArtistsPage } from '@/pages/HiddenArtistsPage';
 import { TracksPage } from '@/pages/TracksPage';
 import { PlaylistsPage } from '@/pages/PlaylistsPage';
 import { DownloadsPage } from '@/pages/DownloadsPage';
@@ -241,6 +242,7 @@ function AppShell() {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/artists/discography/:spotifyId" element={<ArtistDiscographyPage />} />
+            <Route path="/artists/hidden" element={<HiddenArtistsPage />} />
             <Route path="/artists/:spotifyId" element={<ArtistDiscographyPage />} />
             <Route path="/albums/:spotifyId" element={<AlbumDetailPage />} />
             <Route path="/artists" element={<ArtistsPage />} />

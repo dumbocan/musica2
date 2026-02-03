@@ -113,10 +113,18 @@ export const audio2Api = {
 
   getAllArtists: (params?: { offset?: number; limit?: number; order?: 'pop-desc' | 'pop-asc' | 'name-asc'; user_id?: number }) =>
     api.get('/artists/', { params }),
+  getHiddenArtists: (params?: {
+    user_id: number;
+    offset?: number;
+    limit?: number;
+    order?: 'pop-desc' | 'pop-asc' | 'name-asc';
+    search?: string;
+    genre?: string;
+  }) => api.get('/artists/management/hidden', { params }),
   hideArtist: (artistId: number, userId: number) =>
-    api.post(`/artists/id/${artistId}/hide`, null, { params: { user_id: userId } }),
+    api.post(`/artists/management/id/${artistId}/hide`, null, { params: { user_id: userId } }),
   unhideArtist: (artistId: number, userId: number) =>
-    api.delete(`/artists/id/${artistId}/hide`, { params: { user_id: userId } }),
+    api.delete(`/artists/management/id/${artistId}/hide`, { params: { user_id: userId } }),
 
   // Albums
   getAllAlbums: () => api.get('/albums/'),
@@ -137,6 +145,7 @@ export const audio2Api = {
     after_id?: number | null;
     filter?: 'all' | 'favorites' | 'withLink' | 'noLink' | 'hasFile' | 'missingFile';
     search?: string;
+    user_id?: number;
   }) =>
     api.get('/tracks/overview/', { params, timeout: 60000 }),
   resolveTracks: (spotifyTrackIds: string[]) =>
@@ -198,6 +207,12 @@ export const audio2Api = {
 
   // Playlists
   getAllPlaylists: () => api.get('/playlists/'),
+  createPlaylist: (params: { name: string; description?: string; user_id?: number }) =>
+    api.post('/playlists/', null, { params }),
+  addTrackToPlaylist: (playlistId: number, trackId: number) =>
+    api.post(`/playlists/id/${playlistId}/tracks/${trackId}`),
+  getPlaylistTracks: (playlistId: number) =>
+    api.get(`/playlists/id/${playlistId}/tracks`),
   getListsOverview: (params?: { limit_per_list?: number; artist_spotify_id?: string; artist_name?: string }) =>
     api.get('/lists/overview', { params, timeout: 60000 }),
 

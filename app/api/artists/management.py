@@ -9,14 +9,14 @@ import logging
 from typing import Any, Dict
 
 from fastapi import APIRouter, Query, Depends, HTTPException, Path
-from sqlalchemy import asc, desc
+from sqlalchemy import asc, desc, func
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select
 
 from ...core.db import get_session, SessionDep
 from ...core.spotify import spotify_client
 from ...core.lastfm import lastfm_client
-from ...models.base import Artist, Track
+from ...models.base import Artist, Track, UserHiddenArtist
 from ...core.config import settings
 from ...core.genre_backfill import (
     derive_genres_from_artist_tags,
@@ -274,3 +274,54 @@ async def unhide_artist_for_user_endpoint(
     if not removed:
         raise HTTPException(status_code=404, detail="Hidden artist entry not found")
     return {"message": "Artist unhidden"}
+
+
+@router.get("/hidden")
+async def list_hidden_artists_for_user(
+    user_id: int = Query(..., ge=1, description="User ID"),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    order: str = Query("name-asc", description="name-asc|pop-desc|pop-asc"),
+    search: str = Query("", description="Search by artist name"),
+    genre: str = Query("", description="Filter by genre substring"),
+    session: AsyncSession = Depends(SessionDep),
+) -> Dict[str, Any]:
+    """List artists hidden by the user."""
+    base = (
+        select(Artist)
+        .join(UserHiddenArtist, UserHiddenArtist.artist_id == Artist.id)
+        .where(UserHiddenArtist.user_id == user_id)
+    )
+
+    count_query = (
+        select(func.count())
+        .select_from(Artist)
+        .join(UserHiddenArtist, UserHiddenArtist.artist_id == Artist.id)
+        .where(UserHiddenArtist.user_id == user_id)
+    )
+
+    search_term = (search or "").strip()
+    if search_term:
+        like = f"%{search_term}%"
+        base = base.where(Artist.name.ilike(like))
+        count_query = count_query.where(Artist.name.ilike(like))
+
+    genre_term = (genre or "").strip()
+    if genre_term:
+        like = f"%{genre_term}%"
+        base = base.where(Artist.genres.ilike(like))
+        count_query = count_query.where(Artist.genres.ilike(like))
+
+    if order == "pop-desc":
+        base = base.order_by(desc(Artist.popularity), asc(Artist.name))
+    elif order == "pop-asc":
+        base = base.order_by(asc(Artist.popularity), asc(Artist.name))
+    else:
+        base = base.order_by(asc(Artist.name))
+
+    total = (await session.exec(count_query)).one() or 0
+    rows = (await session.exec(base.offset(offset).limit(limit))).all()
+    return {
+        "items": [artist.dict() for artist in rows],
+        "total": int(total),
+    }
