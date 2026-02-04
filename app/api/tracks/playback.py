@@ -485,14 +485,14 @@ async def get_recently_added_tracks(
     if hidden_exists is not None:
         statement = statement.where(~hidden_exists)
 
-    rows = session.exec(statement).all()
+    rows = (await session.exec(statement)).all()
     spotify_ids = [track.spotify_id for track, _, _ in rows if track.spotify_id]
 
     downloads = []
     if spotify_ids:
-        downloads = session.exec(
+        downloads = (await session.exec(
             select(YouTubeDownload).where(YouTubeDownload.spotify_track_id.in_(spotify_ids))
-        ).all()
+        )).all()
 
     download_map = _select_best_downloads(downloads)
 
@@ -568,11 +568,11 @@ async def get_track_recommendations(
     # Get favorite artist IDs
     favorite_artist_ids = []
     if user_id:
-        fav_artists = session.exec(
+        fav_artists = (await session.exec(
             select(UserFavorite.artist_id)
             .where(UserFavorite.user_id == user_id)
             .distinct()
-        ).all()
+        )).all()
         favorite_artist_ids = [a for a in fav_artists if a]
 
     # Get tracks from favorite artists
@@ -590,13 +590,13 @@ async def get_track_recommendations(
         if hidden_exists is not None:
             fav_tracks_query = fav_tracks_query.where(~hidden_exists)
 
-        fav_tracks = session.exec(fav_tracks_query).all()
+        fav_tracks = (await session.exec(fav_tracks_query)).all()
 
         # Get downloads for these tracks
         spotify_ids = [t.spotify_id for t, _, _ in fav_tracks if t.spotify_id]
-        downloads = session.exec(
+        downloads = (await session.exec(
             select(YouTubeDownload).where(YouTubeDownload.spotify_track_id.in_(spotify_ids))
-        ).all()
+        )).all()
         download_map = _select_best_downloads(downloads)
 
         for track, artist, album in fav_tracks:
@@ -625,21 +625,21 @@ async def get_track_recommendations(
     if not spotify_track_ids and track_ids:
         local_track_ids = [int(t) for t in track_ids if t.isdigit()]
         if local_track_ids:
-            rows = session.exec(
+            rows = (await session.exec(
                 select(Track.spotify_id)
                 .where(Track.id.in_(local_track_ids))
                 .where(Track.spotify_id.is_not(None))
-            ).all()
+            )).all()
             spotify_track_ids = [r for r in rows if r]
 
     if not spotify_artist_ids and artist_ids:
         local_artist_ids = [int(a) for a in artist_ids if a.isdigit()]
         if local_artist_ids:
-            rows = session.exec(
+            rows = (await session.exec(
                 select(Artist.spotify_id)
                 .where(Artist.id.in_(local_artist_ids))
                 .where(Artist.spotify_id.is_not(None))
-            ).all()
+            )).all()
             spotify_artist_ids = [r for r in rows if r]
 
     if not spotify_track_ids and not spotify_artist_ids:
