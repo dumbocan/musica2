@@ -273,7 +273,7 @@ async def stream_audio(
     cache: bool = Query(True),
     session: AsyncSession = Depends(SessionDep),
 ):
-    """Stream audio from YouTube; cache file on disk if requested with organized folder structure."""
+    """Stream audio from YouTube; cache as MP3 with organized folder structure when track info available."""
     # Try to get track info for organized download path
     artist_name = None
     track_name = None
@@ -305,27 +305,69 @@ async def stream_audio(
 
             track_name = track.name
 
-    # Calculate organized output path if we have track info
+    # If we have track info and cache is enabled, download as MP3 organized
+    if cache and artist_name and track_name:
+        if album_name:
+            mp3_path = youtube_client.get_album_download_path(artist_name, album_name, track_name, "mp3")
+        else:
+            mp3_path = youtube_client.get_artist_download_path(artist_name, track_name, "mp3")
+
+        # Check if already downloaded
+        if mp3_path.exists():
+            file_size = mp3_path.stat().st_size
+            await _mark_youtube_download_status(
+                session,
+                video_id,
+                "completed",
+                error_message=None,
+                download_path=str(mp3_path.relative_to(youtube_client.download_dir)),
+                format_type="mp3",
+                file_size=file_size,
+            )
+            return FileResponse(path=mp3_path, media_type="audio/mp3")
+
+        # Download as MP3 organized
+        await _mark_youtube_download_status(session, video_id, "downloading", error_message=None)
+        try:
+            result = await youtube_client.download_audio_for_track(
+                video_id=video_id,
+                artist_name=artist_name,
+                track_name=track_name,
+                album_name=album_name,
+                output_format="mp3"
+            )
+        except HTTPException as exc:
+            await _mark_youtube_download_status(
+                session,
+                video_id,
+                "error",
+                error_message=str(exc.detail),
+                format_type="mp3",
+            )
+            raise HTTPException(status_code=502, detail=f"Unable to download audio: {exc.detail}")
+
+        if result.get("status") in ("completed", "already_exists"):
+            file_path = Path(result.get("file_path"))
+            if file_path.exists():
+                file_size = file_path.stat().st_size
+                await _mark_youtube_download_status(
+                    session,
+                    video_id,
+                    "completed",
+                    error_message=None,
+                    download_path=str(file_path.relative_to(youtube_client.download_dir)),
+                    format_type="mp3",
+                    file_size=file_size,
+                )
+                return FileResponse(path=file_path, media_type="audio/mp3")
+
+    # No track info or cache disabled: stream directly (original behavior)
     output_path = None
     if artist_name and track_name:
         if album_name:
             output_path = youtube_client.get_album_download_path(artist_name, album_name, track_name, format)
         else:
             output_path = youtube_client.get_artist_download_path(artist_name, track_name, format)
-
-    if cache and output_path and output_path.exists():
-        # Serve already organized cached file
-        file_size = output_path.stat().st_size
-        await _mark_youtube_download_status(
-            session,
-            video_id,
-            "completed",
-            error_message=None,
-            download_path=str(output_path.relative_to(youtube_client.download_dir)),
-            format_type=format,
-            file_size=file_size,
-        )
-        return FileResponse(path=output_path, media_type="audio/mp4" if format == "m4a" else "audio/webm")
 
     await _mark_youtube_download_status(session, video_id, "downloading", error_message=None)
     try:
@@ -379,7 +421,6 @@ async def stream_audio(
                         file_size=Path(cache_path).stat().st_size,
                     )
                 elif bytes_sent > 0:
-                    # Reproduced by stream but file not cached to disk.
                     await _mark_youtube_download_status(
                         session,
                         video_id,
