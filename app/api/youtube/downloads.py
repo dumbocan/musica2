@@ -2,6 +2,7 @@
 YouTube download management endpoints.
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -273,8 +274,12 @@ async def stream_audio(
     cache: bool = Query(True),
     session: AsyncSession = Depends(SessionDep),
 ):
-    """Stream audio from YouTube; cache as MP3 with organized folder structure when track info available."""
-    # Try to get track info for organized download path
+    """Stream audio from YouTube with parallel caching to organized MP3 structure.
+
+    Policy: Stream IMMEDIATELY, cache in PARALLEL (best-effort).
+    Never wait for download before starting stream.
+    """
+    # Try to get track info for organized cache path (used for parallel download)
     artist_name = None
     track_name = None
     album_name = None
@@ -305,77 +310,47 @@ async def stream_audio(
 
             track_name = track.name
 
-    # If we have track info and cache is enabled, download as MP3 organized
+    # Calculate organized cache path for parallel download
+    cache_path = None
+    should_download_mp3 = False
     if cache and artist_name and track_name:
         if album_name:
-            mp3_path = youtube_client.get_album_download_path(artist_name, album_name, track_name, "mp3")
+            cache_path = youtube_client.get_album_download_path(artist_name, album_name, track_name, "mp3")
         else:
-            mp3_path = youtube_client.get_artist_download_path(artist_name, track_name, "mp3")
+            cache_path = youtube_client.get_artist_download_path(artist_name, track_name, "mp3")
 
         # Check if already downloaded
-        if mp3_path.exists():
-            file_size = mp3_path.stat().st_size
+        if cache_path.exists():
+            file_size = cache_path.stat().st_size
             await _mark_youtube_download_status(
                 session,
                 video_id,
                 "completed",
                 error_message=None,
-                download_path=str(mp3_path.relative_to(youtube_client.download_dir)),
+                download_path=str(cache_path.relative_to(youtube_client.download_dir)),
                 format_type="mp3",
                 file_size=file_size,
             )
-            return FileResponse(path=mp3_path, media_type="audio/mp3")
+            return FileResponse(path=cache_path, media_type="audio/mp3")
 
-        # Download as MP3 organized
-        await _mark_youtube_download_status(session, video_id, "downloading", error_message=None)
-        try:
-            result = await youtube_client.download_audio_for_track(
-                video_id=video_id,
-                artist_name=artist_name,
-                track_name=track_name,
-                album_name=album_name,
-                output_format="mp3"
-            )
-        except HTTPException as exc:
-            await _mark_youtube_download_status(
-                session,
-                video_id,
-                "error",
-                error_message=str(exc.detail),
-                format_type="mp3",
-            )
-            raise HTTPException(status_code=502, detail=f"Unable to download audio: {exc.detail}")
+        # Mark that we should download MP3 in background (but stream FIRST!)
+        should_download_mp3 = True
 
-        if result.get("status") in ("completed", "already_exists"):
-            file_path = Path(result.get("file_path"))
-            if file_path.exists():
-                file_size = file_path.stat().st_size
-                await _mark_youtube_download_status(
-                    session,
-                    video_id,
-                    "completed",
-                    error_message=None,
-                    download_path=str(file_path.relative_to(youtube_client.download_dir)),
-                    format_type="mp3",
-                    file_size=file_size,
-                )
-                return FileResponse(path=file_path, media_type="audio/mp3")
-
-    # No track info or cache disabled: stream directly (original behavior)
-    output_path = None
-    if artist_name and track_name:
-        if album_name:
-            output_path = youtube_client.get_album_download_path(artist_name, album_name, track_name, format)
-        else:
-            output_path = youtube_client.get_artist_download_path(artist_name, track_name, format)
-
+    # STREAM FIRST - never wait for download!
     await _mark_youtube_download_status(session, video_id, "downloading", error_message=None)
+
+    # Trigger parallel background download if needed (doesn't block the stream)
+    if should_download_mp3 and cache_path:
+        # Fire-and-forget background task to download MP3
+        asyncio.create_task(_background_download_mp3(session, video_id, artist_name, track_name, album_name, str(cache_path)))
+
+    # Stream immediately (best-effort, may fail if YouTube blocks)
     try:
         data = await youtube_client.stream_audio_to_device(
             video_id=video_id,
             output_format=format,
             cache=cache,
-            output_path=output_path,
+            output_path=Path(cache_path) if cache_path else None,
         )
     except HTTPException as exc:
         await _mark_youtube_download_status(
@@ -409,16 +384,16 @@ async def stream_audio(
                 async for chunk in data["stream"]:
                     bytes_sent += len(chunk)
                     yield chunk
-                cache_path = data.get("cache_file_path")
-                if cache and cache_path and Path(cache_path).exists():
+                cache_path_val = data.get("cache_file_path")
+                if cache and cache_path_val and Path(cache_path_val).exists():
                     await _mark_youtube_download_status(
                         session,
                         video_id,
                         "completed",
                         error_message=None,
-                        download_path=cache_path,
-                        format_type=Path(cache_path).suffix.lstrip(".") or format,
-                        file_size=Path(cache_path).stat().st_size,
+                        download_path=cache_path_val,
+                        format_type=Path(cache_path_val).suffix.lstrip(".") or format,
+                        file_size=Path(cache_path_val).stat().st_size,
                     )
                 elif bytes_sent > 0:
                     await _mark_youtube_download_status(
@@ -441,3 +416,39 @@ async def stream_audio(
 
         return StreamingResponse(tracked_stream(), media_type=data.get("media_type", "audio/mp4"))
     raise HTTPException(status_code=500, detail="Invalid stream response")
+
+
+async def _background_download_mp3(
+    session: AsyncSession,
+    video_id: str,
+    artist_name: str,
+    track_name: str,
+    album_name: str | None,
+    cache_path: str,
+):
+    """Background task to download MP3 to cache. Does NOT block the stream."""
+    try:
+        result = await youtube_client.download_audio_for_track(
+            video_id=video_id,
+            artist_name=artist_name,
+            track_name=track_name,
+            album_name=album_name,
+            output_format="mp3"
+        )
+
+        if result.get("status") in ("completed", "already_exists"):
+            file_path = Path(result.get("file_path"))
+            if file_path.exists():
+                await _mark_youtube_download_status(
+                    session,
+                    video_id,
+                    "completed",
+                    error_message=None,
+                    download_path=str(file_path.relative_to(youtube_client.download_dir)),
+                    format_type="mp3",
+                    file_size=file_path.stat().st_size,
+                )
+                logger.info(f"Background cache completed: {file_path.name}")
+    except Exception as exc:
+        logger.warning(f"Background cache failed for {video_id}: {exc}")
+        # Don't fail the stream if background download fails
