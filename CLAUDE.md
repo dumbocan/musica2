@@ -92,3 +92,38 @@
 - Persistencia obligatoria: tras recargar, el estado se reconstruye desde BD (nunca solo estado local).
 - Identidad consistente: todas las llamadas de favoritos y listados filtrados deben usar el mismo `user_id` efectivo (token activo).
 - Regla de no-regresion: cualquier cambio que rompa el espejo Albums <-> Tracks (TRACK) se considera bug critico.
+
+---
+
+## Code Stability Rules (SAGRADO - Never Regress)
+
+### Golden Rules for Any Code Change
+
+1. **DO NOT modify working code without explicit user permission**
+   - If it works, don't touch it
+   - Only modify if user explicitly requests it or there's a critical bug
+
+2. **If you MUST modify code:**
+   - Understand the existing behavior BEFORE making changes
+   - Run `flake8` BEFORE committing (will block on errors)
+   - Test that the change doesn't break existing functionality
+   - If you're unsure, ask the user before proceeding
+
+3. **Before modifying ANY endpoint/function:**
+   - Read the full file to understand the context
+   - Identify all places that call this function
+   - Verify the change won't break dependent code
+
+4. **Async/Await Pattern (Critical):**
+   - In async endpoints, ALWAYS use `await` with `session.exec()`
+   - Wrong: `session.exec(select(...)).first()` → Fails silently in async
+   - Correct: `(await session.exec(select(...))).first()`
+
+5. **Imports (Critical):**
+   - If you use a module (e.g., `asyncio`), you MUST import it
+   - Missing imports cause F821 errors that flake8 will catch
+
+6. **When in doubt, ask:**
+   - "Do you want me to modify X?"
+   - "Should I change this behavior?"
+   - "I'm not sure about changing this code - can you confirm?"
