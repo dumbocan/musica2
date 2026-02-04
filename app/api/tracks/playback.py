@@ -11,7 +11,7 @@ from pathlib import Path as FsPath
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import and_, func
+from sqlalchemy import and_, exists, func
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -450,3 +450,245 @@ def get_chart_statistics(
                 }
             )
     return {"items": items}
+
+
+@router.get("/recently-added")
+async def get_recently_added_tracks(
+    request: Request,
+    limit: int = Query(10, ge=1, le=50, description="Number of tracks to return"),
+    verify_files: bool = Query(False, description="Check file existence on disk"),
+    session: AsyncSession = Depends(SessionDep),
+) -> dict:
+    """Return the most recently added tracks."""
+    user_id = getattr(request.state, "user_id", None) if request else None
+
+    hidden_exists = None
+    if user_id:
+        from ...models.base import UserHiddenArtist
+        hidden_exists = exists(
+            select(1).where(
+                and_(
+                    UserHiddenArtist.user_id == user_id,
+                    UserHiddenArtist.artist_id == Track.artist_id
+                )
+            )
+        )
+
+    statement = (
+        select(Track, Artist, Album)
+        .join(Artist, Artist.id == Track.artist_id)
+        .outerjoin(Album, Album.id == Track.album_id)
+        .order_by(Track.created_at.desc(), Track.id.desc())
+        .limit(limit)
+    )
+
+    if hidden_exists is not None:
+        statement = statement.where(~hidden_exists)
+
+    rows = session.exec(statement).all()
+    spotify_ids = [track.spotify_id for track, _, _ in rows if track.spotify_id]
+
+    downloads = []
+    if spotify_ids:
+        downloads = session.exec(
+            select(YouTubeDownload).where(YouTubeDownload.spotify_track_id.in_(spotify_ids))
+        ).all()
+
+    download_map = _select_best_downloads(downloads)
+
+    items = []
+    for track, artist, album in rows:
+        download = download_map.get(track.spotify_id) if track.spotify_id else None
+        youtube_video_id = (download.youtube_video_id or None) if download else None
+        youtube_status = download.download_status if download else None
+        youtube_url = f"https://www.youtube.com/watch?v={youtube_video_id}" if youtube_video_id else None
+        file_path = download.download_path if download else None
+        if file_path:
+            file_exists = FsPath(file_path).exists() if verify_files else True
+        else:
+            file_exists = False
+        if file_exists:
+            youtube_status = "completed"
+        elif youtube_video_id and not youtube_status:
+            youtube_status = "link_found"
+
+        items.append({
+            "track_id": track.id,
+            "track_name": track.name,
+            "spotify_track_id": track.spotify_id,
+            "artist_name": artist.name if artist else None,
+            "artist_spotify_id": artist.spotify_id if artist else None,
+            "album_name": album.name if album else None,
+            "album_spotify_id": album.spotify_id if album else None,
+            "duration_ms": track.duration_ms,
+            "popularity": track.popularity,
+            "youtube_video_id": youtube_video_id,
+            "youtube_status": youtube_status,
+            "youtube_url": youtube_url,
+            "local_file_path": file_path,
+            "local_file_exists": file_exists,
+        })
+
+    return {"items": items}
+
+
+@router.get("/recommendations")
+async def get_track_recommendations(
+    request: Request,
+    seed_tracks: str | None = Query(None, description="Comma-separated Spotify track IDs"),
+    seed_artists: str | None = Query(None, description="Comma-separated Spotify artist IDs"),
+    limit: int = Query(20, ge=1, le=50, description="Number of recommendations"),
+    session: AsyncSession = Depends(SessionDep),
+) -> dict:
+    """Get track recommendations based on seed tracks/artists."""
+    from ...core.config import settings
+    from ...core.spotify import spotify_client
+
+    track_ids = [t for t in (seed_tracks or "").split(",") if t]
+    artist_ids = [a for a in (seed_artists or "").split(",") if a]
+
+    if not track_ids and not artist_ids:
+        raise HTTPException(status_code=400, detail="Missing seed_tracks or seed_artists")
+
+    user_id = getattr(request.state, "user_id", None) if request else None
+
+    # Get local recommendations based on user's favorite artists
+    hidden_exists = None
+    if user_id:
+        from ...models.base import UserHiddenArtist, UserFavorite
+        hidden_exists = exists(
+            select(1).where(
+                and_(
+                    UserHiddenArtist.user_id == user_id,
+                    UserHiddenArtist.artist_id == Track.artist_id
+                )
+            )
+        )
+
+    # Get favorite artist IDs
+    favorite_artist_ids = []
+    if user_id:
+        fav_artists = session.exec(
+            select(UserFavorite.artist_id)
+            .where(UserFavorite.user_id == user_id)
+            .distinct()
+        ).all()
+        favorite_artist_ids = [a for a in fav_artists if a]
+
+    # Get tracks from favorite artists
+    local_tracks = []
+    if favorite_artist_ids:
+        fav_tracks_query = (
+            select(Track, Artist, Album)
+            .join(Artist, Artist.id == Track.artist_id)
+            .outerjoin(Album, Album.id == Track.album_id)
+            .where(Track.artist_id.in_(favorite_artist_ids))
+            .where(Track.spotify_id.is_not(None))
+            .order_by(Track.popularity.desc())
+            .limit(limit * 2)
+        )
+        if hidden_exists is not None:
+            fav_tracks_query = fav_tracks_query.where(~hidden_exists)
+
+        fav_tracks = session.exec(fav_tracks_query).all()
+
+        # Get downloads for these tracks
+        spotify_ids = [t.spotify_id for t, _, _ in fav_tracks if t.spotify_id]
+        downloads = session.exec(
+            select(YouTubeDownload).where(YouTubeDownload.spotify_track_id.in_(spotify_ids))
+        ).all()
+        download_map = _select_best_downloads(downloads)
+
+        for track, artist, album in fav_tracks:
+            download = download_map.get(track.spotify_id) if track.spotify_id else None
+            local_tracks.append({
+                "track_id": track.id,
+                "track_name": track.name,
+                "spotify_track_id": track.spotify_id,
+                "artist_name": artist.name if artist else None,
+                "artist_spotify_id": artist.spotify_id if artist else None,
+                "album_name": album.name if album else None,
+                "duration_ms": track.duration_ms,
+                "popularity": track.popularity,
+                "local_file_exists": bool(download.download_path if download else None),
+            })
+
+    # If no Spotify credentials, return local tracks
+    if not settings.SPOTIFY_CLIENT_ID or not settings.SPOTIFY_CLIENT_SECRET:
+        return {"tracks": local_tracks[:limit], "artists": []}
+
+    # Get Spotify recommendations
+    spotify_track_ids = [t for t in track_ids if _is_spotify_id(t)]
+    spotify_artist_ids = [a for a in artist_ids if _is_spotify_id(a)]
+
+    # Convert local IDs to Spotify IDs
+    if not spotify_track_ids and track_ids:
+        local_track_ids = [int(t) for t in track_ids if t.isdigit()]
+        if local_track_ids:
+            rows = session.exec(
+                select(Track.spotify_id)
+                .where(Track.id.in_(local_track_ids))
+                .where(Track.spotify_id.is_not(None))
+            ).all()
+            spotify_track_ids = [r for r in rows if r]
+
+    if not spotify_artist_ids and artist_ids:
+        local_artist_ids = [int(a) for a in artist_ids if a.isdigit()]
+        if local_artist_ids:
+            rows = session.exec(
+                select(Artist.spotify_id)
+                .where(Artist.id.in_(local_artist_ids))
+                .where(Artist.spotify_id.is_not(None))
+            ).all()
+            spotify_artist_ids = [r for r in rows if r]
+
+    if not spotify_track_ids and not spotify_artist_ids:
+        return {"tracks": local_tracks[:limit], "artists": []}
+
+    # Limit seed values
+    spotify_track_ids = list(dict.fromkeys(spotify_track_ids))[:5]
+    spotify_artist_ids = list(dict.fromkeys(spotify_artist_ids))[:5]
+
+    try:
+        import asyncio
+        spotify_payload = await asyncio.wait_for(
+            spotify_client.get_recommendations(
+                seed_tracks=spotify_track_ids or None,
+                seed_artists=spotify_artist_ids or None,
+                limit=min(50, limit * 2),
+            ),
+            timeout=8.0,
+        )
+        spotify_tracks = spotify_payload.get("tracks", [])
+
+        # Combine local and Spotify tracks
+        combined = local_tracks[:limit]
+        seen_spotify_ids = set(t.get("spotify_track_id") for t in combined if t.get("spotify_track_id"))
+
+        for track in spotify_tracks:
+            track_id = track.get("id")
+            if track_id and track_id not in seen_spotify_ids:
+                artists = track.get("artists", [])
+                combined.append({
+                    "track_id": 0,
+                    "track_name": track.get("name"),
+                    "spotify_track_id": track_id,
+                    "artist_name": artists[0].get("name") if artists else None,
+                    "artist_spotify_id": artists[0].get("id") if artists else None,
+                    "album_name": track.get("album", {}).get("name"),
+                    "duration_ms": track.get("duration_ms"),
+                    "popularity": 50,
+                    "local_file_exists": False,
+                })
+                seen_spotify_ids.add(track_id)
+
+        return {"tracks": combined[:limit], "artists": spotify_payload.get("artists", [])}
+
+    except Exception as exc:
+        logger.warning("[tracks/recommendations] Spotify failed: %s", exc)
+        return {"tracks": local_tracks[:limit], "artists": []}
+
+
+def _is_spotify_id(value: str) -> bool:
+    """Check if value is a Spotify ID (22 alphanumeric chars)."""
+    return bool(value and len(value) == 22 and value.replace("_", "").replace("-", "").isalnum())
