@@ -246,3 +246,14 @@ El 2026-01-24 se realizó una auditoría completa del codebase identificando vul
 
 ### Nota
 Si el código queda en estado inservible, consultar commit `86d90cc` (chore: snapshot before major updates) para restaurar un estado funcional conocido.
+
+
+## Favorites Policy (SAGRADO - No Regresion)
+
+- Fuente unica de verdad: tabla `userfavorite` en PostgreSQL.
+- Favoritos son globales por usuario: clave logica `user_id + target_type + target_id`.
+- `target_type` permitido: `ARTIST`, `ALBUM`, `TRACK`.
+- Espejo obligatorio en UI: si marcas en Albums, debe verse en Tracks y Artists segun el tipo.
+- Persistencia obligatoria: tras recargar, el estado se reconstruye desde BD (nunca solo estado local).
+- Identidad consistente: todas las llamadas de favoritos y listados filtrados deben usar el mismo `user_id` efectivo (token activo).
+- Regla de no-regresion: cualquier cambio que rompa el espejo Albums <-> Tracks (TRACK) se considera bug critico.
