@@ -270,7 +270,18 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   },
   playByVideoId: async (payload) => {
     const audio = get().audioEl;
+    const videoController = get().videoController;
     if (!audio) return { ok: false };
+
+    // Pause any playing video embed when starting new track
+    if (videoController) {
+      try {
+        videoController.pause();
+      } catch {
+        // Ignore video controller errors
+      }
+    }
+
     const token = useApiStore.getState().token;
     const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
     const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
