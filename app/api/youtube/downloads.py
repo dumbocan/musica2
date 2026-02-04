@@ -279,27 +279,27 @@ async def stream_audio(
     track_name = None
     album_name = None
 
-    yt = session.exec(
+    yt = (await session.exec(
         select(YouTubeDownload).where(YouTubeDownload.youtube_video_id == video_id)
-    ).first()
+    )).first()
 
     if yt and yt.spotify_track_id:
-        track = session.exec(
+        track = (await session.exec(
             select(Track).where(Track.spotify_id == yt.spotify_track_id)
-        ).first()
+        )).first()
 
         if track:
             if track.artist_id:
-                artist = session.exec(
+                artist = (await session.exec(
                     select(Artist).where(Artist.id == track.artist_id)
-                ).first()
+                )).first()
                 if artist:
                     artist_name = artist.name
 
             if track.album_id:
-                album = session.exec(
+                album = (await session.exec(
                     select(Album).where(Album.id == track.album_id)
-                ).first()
+                )).first()
                 if album:
                     album_name = album.name
 
