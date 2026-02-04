@@ -14,7 +14,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from ...core.db import SessionDep
 from ...core.youtube import youtube_client
-from ...models.base import YouTubeDownload, Track
+from ...models.base import YouTubeDownload, Track, Artist, Album
 
 logger = logging.getLogger(__name__)
 
@@ -273,30 +273,67 @@ async def stream_audio(
     cache: bool = Query(True),
     session: AsyncSession = Depends(SessionDep),
 ):
-    """Stream audio from YouTube; cache file on disk if requested."""
-    if cache:
-        # DB-first: if already cached, serve local file immediately.
-        status = await youtube_client.get_download_status(video_id, format)
-        if status.get("exists"):
-            file_path = status.get("file_path")
-            file_size = status.get("file_size")
-            if file_path:
-                await _mark_youtube_download_status(
-                    session,
-                    video_id,
-                    "completed",
-                    error_message=None,
-                    download_path=file_path,
-                    format_type=format,
-                    file_size=file_size if isinstance(file_size, int) else None,
-                )
-                return FileResponse(path=file_path, media_type="audio/mp4" if format == "m4a" else "audio/webm")
+    """Stream audio from YouTube; cache file on disk if requested with organized folder structure."""
+    # Try to get track info for organized download path
+    artist_name = None
+    track_name = None
+    album_name = None
+
+    yt = session.exec(
+        select(YouTubeDownload).where(YouTubeDownload.youtube_video_id == video_id)
+    ).first()
+
+    if yt and yt.spotify_track_id:
+        track = session.exec(
+            select(Track).where(Track.spotify_id == yt.spotify_track_id)
+        ).first()
+
+        if track:
+            if track.artist_id:
+                artist = session.exec(
+                    select(Artist).where(Artist.id == track.artist_id)
+                ).first()
+                if artist:
+                    artist_name = artist.name
+
+            if track.album_id:
+                album = session.exec(
+                    select(Album).where(Album.id == track.album_id)
+                ).first()
+                if album:
+                    album_name = album.name
+
+            track_name = track.name
+
+    # Calculate organized output path if we have track info
+    output_path = None
+    if artist_name and track_name:
+        if album_name:
+            output_path = youtube_client.get_album_download_path(artist_name, album_name, track_name, format)
+        else:
+            output_path = youtube_client.get_artist_download_path(artist_name, track_name, format)
+
+    if cache and output_path and output_path.exists():
+        # Serve already organized cached file
+        file_size = output_path.stat().st_size
+        await _mark_youtube_download_status(
+            session,
+            video_id,
+            "completed",
+            error_message=None,
+            download_path=str(output_path.relative_to(youtube_client.download_dir)),
+            format_type=format,
+            file_size=file_size,
+        )
+        return FileResponse(path=output_path, media_type="audio/mp4" if format == "m4a" else "audio/webm")
+
     await _mark_youtube_download_status(session, video_id, "downloading", error_message=None)
     try:
         data = await youtube_client.stream_audio_to_device(
             video_id=video_id,
             output_format=format,
             cache=cache,
+            output_path=output_path,
         )
     except HTTPException as exc:
         await _mark_youtube_download_status(

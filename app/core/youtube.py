@@ -952,16 +952,18 @@ class YouTubeClient:
         video_id: str,
         artist_name: str,
         track_name: str,
+        album_name: str = None,
         format_quality: str = "bestaudio",
         output_format: str = "mp3"
     ) -> Dict[str, Any]:
         """
-        Download audio from a YouTube video using clean filename (Artist - Track).
+        Download audio from a YouTube video using organized folder structure.
 
         Args:
             video_id: YouTube video ID
-            artist_name: Artist name for clean filename
-            track_name: Track name for clean filename
+            artist_name: Artist name for folder structure
+            track_name: Track name for filename
+            album_name: Album name for folder structure (optional)
             format_quality: Audio quality preference
             output_format: Output audio format (mp3, m4a, etc.)
 
@@ -972,9 +974,11 @@ class YouTubeClient:
             # Best-effort metadata; do not fail download on quota errors.
             video_details = await self._safe_get_video_details(video_id)
 
-            # Create clean filename: "Artist - Track"
-            filename = f"{artist_name} - {track_name}"
-            output_path = self.get_download_path(filename, output_format)
+            # Use organized path: downloads/Artist/Album/Track.mp3
+            if album_name:
+                output_path = self.get_album_download_path(artist_name, album_name, track_name, output_format)
+            else:
+                output_path = self.get_artist_download_path(artist_name, track_name, output_format)
 
             # Check if already downloaded
             if output_path.exists():
