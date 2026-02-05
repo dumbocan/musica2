@@ -242,7 +242,7 @@ export function PlayerFooter() {
     audioDownloadVideoId === nowPlaying.videoId &&
     audioDownloadStatus === 'downloading';
   const trackLabel = nowPlaying
-    ? `${isVideo ? 'Video' : 'Reproduciendo'}: ${nowPlaying.title} · ${nowPlaying.artist || ''}`
+    ? `${isVideo ? 'Video' : 'Reproduciendo'}: ${nowPlaying.title} - ${nowPlaying.artist || ''}`
     : isVideo
       ? 'Selecciona una canción para ver el video'
       : 'Selecciona una canción para reproducir';
@@ -317,31 +317,13 @@ export function PlayerFooter() {
     const queueItems = usePlayerStore.getState().queue;
     const queueIndex = queueItems.findIndex((candidate) => candidate.spotifyTrackId === item.spotifyTrackId);
     if (queueIndex >= 0) setCurrentIndex(queueIndex);
+    // DB-FIRST: Always pass the videoId we have, let playByVideoId handle refresh if needed
     let videoId = item.videoId;
     if (!videoId || videoId.startsWith('pending:')) {
       if (item.localTrackId) {
         videoId = `local:${item.localTrackId}`;
-      } else if (/^[A-Za-z0-9]{22}$/.test(item.spotifyTrackId)) {
-        try {
-          const existing = await audio2Api.getYoutubeTrackLink(item.spotifyTrackId);
-          const existingVideo = existing.data?.youtube_video_id;
-          if (existingVideo) {
-            videoId = existingVideo;
-          } else {
-            const refreshed = await audio2Api.refreshYoutubeTrackLink(item.spotifyTrackId, {
-              artist: item.artist,
-              track: item.title,
-            });
-            videoId = refreshed.data?.youtube_video_id;
-          }
-        } catch {
-          videoId = undefined;
-        }
       }
-    }
-    if (!videoId) {
-      setStatusMessage('Sin enlace de YouTube para esta pista');
-      return;
+      // Don't refresh here - let playByVideoId handle it per BIBLIA policy
     }
     await playByVideoId({
       localTrackId: item.localTrackId,
@@ -349,10 +331,10 @@ export function PlayerFooter() {
       title: item.title,
       artist: item.artist,
       artistSpotifyId: item.artistSpotifyId,
-      videoId,
+      videoId: videoId || '',
       durationSec: item.durationMs ? Math.round(item.durationMs / 1000) : undefined,
     });
-  }, [playByVideoId, setCurrentIndex, setStatusMessage]);
+  }, [playByVideoId, setCurrentIndex]);
 
   const loadMemoryPlaylists = useCallback(async () => {
     setMemoryLoading(true);

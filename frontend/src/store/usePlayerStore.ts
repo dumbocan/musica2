@@ -97,6 +97,12 @@ type PlayerStore = {
   setCrossfadeMs: (value: number) => void;
 };
 
+// Helper to validate YouTube video IDs
+const isValidVideoId = (id: string | undefined): boolean => {
+  if (!id) return false;
+  return id.length === 11 && /^[A-Za-z0-9_-]{11}$/.test(id);
+};
+
 const getFormats = (audio: HTMLAudioElement | null) => {
   if (!audio) return { fileFormat: 'm4a', streamFormat: 'm4a' };
   const canMp3 = audio.canPlayType('audio/mpeg');
@@ -336,12 +342,38 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
         audio.src = '';
         return { ok: false };
       }
-      // Fall back to checking YouTube downloads folder
+
+      // DB-FIRST: Check if we have a valid video ID
+      let videoId = payload.videoId;
+      if (!isValidVideoId(videoId) && payload.spotifyTrackId && /^[A-Za-z0-9]{22}$/.test(payload.spotifyTrackId)) {
+        // No valid video ID - search YouTube for the track
+        set({ statusMessage: 'Buscando enlace de YouTube...' });
+        try {
+          const linkResult = await audio2Api.refreshYoutubeTrackLink(payload.spotifyTrackId, {
+            artist: payload.artist,
+            track: payload.title,
+          });
+          if (linkResult.data?.youtube_video_id) {
+            videoId = linkResult.data.youtube_video_id;
+            set({ statusMessage: 'Enlace encontrado, preparando reproducción...', audioDownloadStatus: 'downloading' });
+          }
+        } catch {
+          // Ignore errors, proceed without video ID
+        }
+      }
+
+      if (!isValidVideoId(videoId)) {
+        set({ audioSourceMode: 'stream', statusMessage: 'Sin enlace de YouTube', audioDownloadStatus: 'error' });
+        audio.src = '';
+        return { ok: false };
+      }
+
+      // Check for local download first
       const candidateFormats = Array.from(new Set([fileFormat, 'm4a', 'mp3', 'webm']));
       let localFormat: string | null = null;
       for (const fmt of candidateFormats) {
         const status = await audio2Api
-          .getYoutubeDownloadStatus(payload.videoId, { format: fmt })
+          .getYoutubeDownloadStatus(videoId, { format: fmt })
           .catch(() => null);
         if (status?.data?.exists) {
           localFormat = fmt;
@@ -351,11 +383,11 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
       if (localFormat) {
         nextAudioMode = 'file';
         set({ audioSourceMode: 'file', statusMessage: '', audioDownloadStatus: 'downloaded' });
-        nextSrc = `${API_BASE_URL}/youtube/download/${payload.videoId}/file?format=${localFormat}${tokenParam}`;
+        nextSrc = `${API_BASE_URL}/youtube/download/${videoId}/file?format=${localFormat}${tokenParam}`;
       } else {
         nextAudioMode = 'stream';
         set({ audioSourceMode: 'stream', statusMessage: 'Streaming...', audioDownloadStatus: 'downloading' });
-        nextSrc = `${API_BASE_URL}/youtube/stream/${payload.videoId}?format=${streamFormat}&cache=true${tokenParam}`;
+        nextSrc = `${API_BASE_URL}/youtube/stream/${videoId}?format=${streamFormat}&cache=true${tokenParam}`;
       }
     }
 
