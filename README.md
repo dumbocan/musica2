@@ -83,6 +83,13 @@ Se ha realizado una revisión exhaustiva del código del frontend para mejorar l
 - **Importante**: después de cambiar claves en `.env`, reinicia backend (`uvicorn`) para que cargue los nuevos valores.
 - **Fallback yt-dlp (opt-in)**: cuando la cuota de YouTube se agota, el backend puede buscar links con yt-dlp si activas `YTDLP_FALLBACK_ENABLED=true`. Ajusta `YTDLP_DAILY_LIMIT` y `YTDLP_MIN_INTERVAL_SECONDS` para controlar el coste diario.
 - **Cookies para yt-dlp (recomendado)**: para reducir bloqueos `Sign in to confirm you're not a bot`, configura `YTDLP_COOKIES_FROM_BROWSER=firefox` (o `chrome/brave` según tu sesión) en `.env`. También puedes usar `YTDLP_COOKIES_FILE=/ruta/cookies.txt`.
+- **Renovación de cookies**: cuando veas errores `Sign in to confirm you're not a bot`, ejecuta:
+  ```bash
+  python scripts/renew_youtube_cookies.py --check  # Verificar estado
+  python scripts/renew_youtube_cookies.py          # Renovar cookies (usa Firefox)
+  python scripts/renew_youtube_cookies.py --browser chrome  # Usar Chrome
+  ```
+  Las cookies caducan cada ~30 días y el script las renueva automáticamente desde el navegador.
 - **Runtime JS automático para yt-dlp**: el backend ahora autodetecta `node` y habilita componentes remotos EJS para resolver challenges de YouTube (`SABR/signature`). Si existe `storage/cookies/youtube_cookies.txt`, se usa automáticamente como `cookiefile`.
 - **Playback restaurado en paralelo**: `/youtube/stream` volvió al flujo “reproducir mientras descarga/cachea”. Si el audio ya existe en disco, sirve local (DB-first). Si no existe, hace stream inmediato y guarda en paralelo.
 - **Streaming robusto ante 403 de googlevideo**: el backend usa cabeceras del extractor y descarga por rangos cerrados (`bytes=start-end`) para evitar errores de reproducción donde el navegador veía `200` pero el stream real fallaba.
@@ -168,6 +175,10 @@ UI → Backend
 - **Descargas locales “fake”**: no uses `youtube_video_id` inventados (no son 11 chars). Si hay audio local sin link real, no muestres “Abrir en YouTube” en el UI.
 - **Organización de descargas**: los archivos deben quedar en `downloads/<Artist>/<Album>/<Track>.<ext>`. Para migrar descargas antiguas usa `scripts/organize_downloads_by_album.py --resolve-unknown --resolve-spotify --spotify-create` (requiere credenciales Spotify).
 - **Contador de uso**: `frontend/src/components/YoutubeRequestCounter.tsx` consulta `/youtube/usage` periódicamente; si el backend está apagado verás errores de red en consola.
+- **Error "Sign in to confirm you're not a bot"**: Las cookies de YouTube caducan cada ~30 días. Cuando veas este error:
+  1. Ejecuta `python scripts/renew_youtube_cookies.py` para renovar
+  2. O usa `python scripts/renew_youtube_cookies.py --browser chrome` si usas Chrome
+  3. Si los tracks tienen `status=link_found` pero `download_path` vacío, descárgalos manualmente con `python scripts/download_tracks.py` o desde Settings.
 
 ## ▶️ Playback & Download Policy (BIBLIA - No Regresar)
 

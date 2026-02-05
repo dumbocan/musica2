@@ -365,9 +365,9 @@ export function Dashboard() {
           </div>
         ) : (
           <div className="grid-cards">
-            {recommendations.map((rec) => (
+            {recommendations.map((rec, index) => (
               <button
-                key={rec.id}
+                key={rec.id ?? `rec-${index}`}
                 className="card dashboard-rec"
                 onClick={() => void playFromRecommendation(rec)}
                 type="button"
