@@ -1144,6 +1144,20 @@ async def orchestrated_search(
         tracks = [t for t in tracks if _track_title_matches(q, t.get("name", ""))]
     if lastfm_enriched:
         await _materialize_spotify_entries(session, lastfm_enriched, schedule_limit=limit)
+    # Also materialize artists from track results (BIBLIA: save all artists found)
+    if tracks:
+        track_artists = []
+        for track in tracks:
+            for artist in track.get("artists", []) or []:
+                artist_id = artist.get("id")
+                if artist_id:
+                    track_artists.append({
+                        "spotify": artist,
+                        "lastfm": {},
+                        "name": artist.get("name"),
+                    })
+        if track_artists:
+            await _materialize_spotify_entries(session, track_artists, schedule_limit=3)
     payload = {
         "query": q,
         "page": max(page, 0),
