@@ -35,6 +35,7 @@ export function PlayerFooter() {
   const tryUpgradeToFile = usePlayerStore((s) => s.tryUpgradeToFile);
   const resumeAudio = usePlayerStore((s) => s.resumeAudio);
   const pauseAudio = usePlayerStore((s) => s.pauseAudio);
+  const removeFromQueue = usePlayerStore((s) => s.removeFromQueue);
   const stopAudio = usePlayerStore((s) => s.stopAudio);
   const seekAudio = usePlayerStore((s) => s.seekAudio);
   const setQueue = usePlayerStore((s) => s.setQueue);
@@ -317,21 +318,14 @@ export function PlayerFooter() {
     const queueItems = usePlayerStore.getState().queue;
     const queueIndex = queueItems.findIndex((candidate) => candidate.spotifyTrackId === item.spotifyTrackId);
     if (queueIndex >= 0) setCurrentIndex(queueIndex);
-    // DB-FIRST: Always pass the videoId we have, let playByVideoId handle refresh if needed
-    let videoId = item.videoId;
-    if (!videoId || videoId.startsWith('pending:')) {
-      if (item.localTrackId) {
-        videoId = `local:${item.localTrackId}`;
-      }
-      // Don't refresh here - let playByVideoId handle it per BIBLIA policy
-    }
+    // DB-FIRST: Pass videoId as-is, let playByVideoId handle refresh if needed
     await playByVideoId({
       localTrackId: item.localTrackId,
       spotifyTrackId: item.spotifyTrackId,
       title: item.title,
       artist: item.artist,
       artistSpotifyId: item.artistSpotifyId,
-      videoId: videoId || '',
+      videoId: item.videoId || '',
       durationSec: item.durationMs ? Math.round(item.durationMs / 1000) : undefined,
     });
   }, [playByVideoId, setCurrentIndex]);
@@ -667,23 +661,58 @@ export function PlayerFooter() {
           <div style={{ maxHeight: 180, overflow: 'auto', display: 'grid', gap: 4 }}>
             {queue.length ? (
               queue.map((item, idx) => (
-                <button
+                <div
                   key={`${item.spotifyTrackId}-${idx}`}
-                  type="button"
-                  onClick={() => void playQueueItem(item)}
                   style={{
-                    textAlign: 'left',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
                     border: '1px solid var(--border)',
                     background: idx === currentIndex ? 'rgba(5, 247, 165, 0.15)' : 'var(--panel)',
                     borderRadius: 8,
-                    padding: '6px 8px',
-                    cursor: 'pointer',
-                    color: 'inherit',
+                    padding: '4px 6px',
+                    paddingRight: 4,
                   }}
                 >
-                  <span style={{ fontWeight: 600 }}>{item.title}</span>
-                  {item.artist ? <span style={{ color: 'var(--muted)' }}> · {item.artist}</span> : null}
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => void playQueueItem(item)}
+                    style={{
+                      flex: 1,
+                      textAlign: 'left',
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: 'inherit',
+                      padding: 0,
+                    }}
+                  >
+                    <span style={{ fontWeight: 600, fontSize: 13 }}>{item.title}</span>
+                    {item.artist ? <span style={{ color: 'var(--muted)', fontSize: 12 }}> · {item.artist}</span> : null}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeFromQueue(idx)}
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: '50%',
+                      background: 'var(--destructive)',
+                      border: 'none',
+                      color: 'var(--destructive-foreground)',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: 13,
+                      fontWeight: 700,
+                      flexShrink: 0,
+                    }}
+                    title="Eliminar de la cola"
+                  >
+                    ×
+                  </button>
+                </div>
               ))
             ) : (
               <div style={{ color: 'var(--muted)', fontSize: 13 }}>No hay cola activa.</div>
