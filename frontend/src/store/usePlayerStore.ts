@@ -95,6 +95,7 @@ type PlayerStore = {
   crossfadeMs: number;
   setCrossfadeEnabled: (enabled: boolean) => void;
   setCrossfadeMs: (value: number) => void;
+  removeFromQueue: (index: number) => void;
 };
 
 // Helper to validate YouTube video IDs
@@ -525,5 +526,21 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
     } catch {
       // ignore storage errors
     }
+  },
+  removeFromQueue: (index) => {
+    const { queue, currentIndex } = get();
+    if (index < 0 || index >= queue.length) return;
+    const newQueue = queue.filter((_, i) => i !== index);
+    let newCurrentIndex = currentIndex;
+    if (index < currentIndex) {
+      newCurrentIndex = currentIndex - 1;
+    } else if (index === currentIndex) {
+      if (newQueue.length === 0) {
+        newCurrentIndex = -1;
+      } else {
+        newCurrentIndex = Math.max(0, index - 1);
+      }
+    }
+    set({ queue: newQueue, currentIndex: newCurrentIndex });
   },
 }));
