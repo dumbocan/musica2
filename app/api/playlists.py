@@ -6,7 +6,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Path, HTTPException, Query
 from ..crud import (
     create_playlist, update_playlist, delete_playlist,
-    add_track_to_playlist, remove_track_from_playlist
+    remove_track_from_playlist
 )
 from ..core.db import get_session
 from ..models.base import Playlist, PlaylistTrack, Track
@@ -143,11 +143,48 @@ def add_track_to_playlist_endpoint(
     playlist_id: int = Path(..., description="Local playlist ID"),
     track_id: int = Path(..., description="Local track ID")
 ):
-    """Add track to playlist."""
-    playlist_track = add_track_to_playlist(playlist_id, track_id)
-    if not playlist_track:
-        raise HTTPException(status_code=404, detail="Playlist or track not found, or track already in playlist")
-    return {"message": "Track added to playlist", "playlist_track": playlist_track}
+    """Add track to playlist. Returns 200 if already exists."""
+    from ..models.base import PlaylistTrack
+
+    with get_session() as session:
+        playlist = session.exec(select(Playlist).where(Playlist.id == playlist_id)).first()
+        track = session.exec(select(Track).where(Track.id == track_id)).first()
+
+        if not playlist:
+            raise HTTPException(status_code=404, detail="Playlist not found")
+        if not track:
+            raise HTTPException(status_code=404, detail="Track not found")
+
+        # Check if already in playlist
+        existing = session.exec(
+            select(PlaylistTrack).where(
+                PlaylistTrack.playlist_id == playlist_id,
+                PlaylistTrack.track_id == track_id
+            )
+        ).first()
+
+        if existing:
+            return {"message": "Track already in playlist", "playlist_track": existing, "already_exists": True}
+
+        # Add track
+        max_order = session.exec(
+            select(PlaylistTrack.order)
+            .where(PlaylistTrack.playlist_id == playlist_id)
+            .order_by(PlaylistTrack.order.desc())
+            .limit(1)
+        ).first()
+        new_order = (max_order or 0) + 1
+
+        playlist_track = PlaylistTrack(
+            playlist_id=playlist_id,
+            track_id=track_id,
+            order=new_order
+        )
+        session.add(playlist_track)
+        session.commit()
+        session.refresh(playlist_track)
+
+    return {"message": "Track added to playlist", "playlist_track": playlist_track, "already_exists": False}
 
 
 @router.delete("/id/{playlist_id}/tracks/{track_id}")
