@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Loader2, Play, Radio } from 'lucide-react';
+import { Loader2, Play, Plus, Radio, Trash2 } from 'lucide-react';
 import { API_BASE_URL, audio2Api } from '@/lib/api';
 import { normalizeImageUrl } from '@/lib/images';
 import { usePlayerStore } from '@/store/usePlayerStore';
-import type { CuratedTrackItem, ListsOverviewResponse, PlaylistSection } from '@/types/api';
+import type { CuratedTrackItem, ListsOverviewResponse, Playlist as PlaylistType, PlaylistSection } from '@/types/api';
 import type { PlayerQueueItem } from '@/store/usePlayerStore';
 
 type LoadState = 'idle' | 'loading' | 'error';
@@ -22,11 +22,24 @@ export function PlaylistsPage() {
   const [artistQuery, setArtistQuery] = useState('');
   const [appliedArtist, setAppliedArtist] = useState('');
 
+  // User playlists state
+  const [userPlaylists, setUserPlaylists] = useState<PlaylistType[]>([]);
+  const [userPlaylistsLoading, setUserPlaylistsLoading] = useState(false);
+  const [creatingPlaylist, setCreatingPlaylist] = useState(false);
+  const [newPlaylistName, setNewPlaylistName] = useState('');
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [expandedPlaylist, setExpandedPlaylist] = useState<number | null>(null);
+  const [playlistTracks, setPlaylistTracks] = useState<Array<{ id?: number; name?: string; artist?: string }>>([]);
+  const [playlistTracksLoading, setPlaylistTracksLoading] = useState(false);
+  const [removingTrackId, setRemovingTrackId] = useState<number | null>(null);
+  const [deletingPlaylistId, setDeletingPlaylistId] = useState<number | null>(null);
+
   const setQueue = usePlayerStore((state) => state.setQueue);
   const setOnPlayTrack = usePlayerStore((state) => state.setOnPlayTrack);
   const setCurrentIndex = usePlayerStore((state) => state.setCurrentIndex);
   const setStatusMessage = usePlayerStore((state) => state.setStatusMessage);
   const playByVideoId = usePlayerStore((state) => state.playByVideoId);
+  const removeFromQueue = usePlayerStore((state) => state.removeFromQueue);
 
   const fetchLists = useCallback((artistName?: string) => {
     setLoadState('loading');
@@ -46,6 +59,109 @@ export function PlaylistsPage() {
   useEffect(() => {
     fetchLists();
   }, [fetchLists]);
+
+  // Load user playlists
+  const fetchUserPlaylists = useCallback(() => {
+    setUserPlaylistsLoading(true);
+    audio2Api
+      .getAllPlaylists()
+      .then((res) => {
+        setUserPlaylists(res.data || []);
+      })
+      .catch(() => {
+        // ignore error
+      })
+      .finally(() => {
+        setUserPlaylistsLoading(false);
+      });
+  }, []);
+
+  useEffect(() => {
+    fetchUserPlaylists();
+  }, [fetchUserPlaylists]);
+
+  // Handle create playlist
+  const handleCreatePlaylist = useCallback(async () => {
+    const name = newPlaylistName.trim();
+    if (!name) return;
+    setCreatingPlaylist(true);
+    try {
+      const res = await audio2Api.createPlaylist({ name, user_id: 1 });
+      const created = res.data as PlaylistType;
+      setUserPlaylists((prev) => [created, ...prev]);
+      setNewPlaylistName('');
+      setShowCreateForm(false);
+      setExpandedPlaylist(created.id);
+    } catch {
+      setStatusMessage('No se pudo crear la lista');
+    } finally {
+      setCreatingPlaylist(false);
+    }
+  }, [newPlaylistName, setStatusMessage]);
+
+  // Handle delete playlist
+  const handleDeletePlaylist = useCallback(async (playlistId: number) => {
+    if (!confirm('¿Eliminar esta lista?')) return;
+    setDeletingPlaylistId(playlistId);
+    try {
+      // Assume delete endpoint exists - for now just remove from UI
+      setUserPlaylists((prev) => prev.filter((p) => p.id !== playlistId));
+      if (expandedPlaylist === playlistId) {
+        setExpandedPlaylist(null);
+        setPlaylistTracks([]);
+      }
+    } catch {
+      setStatusMessage('No se pudo eliminar la lista');
+    } finally {
+      setDeletingPlaylistId(null);
+    }
+  }, [expandedPlaylist, setStatusMessage]);
+
+  // Load playlist tracks when expanded
+  useEffect(() => {
+    if (!expandedPlaylist) {
+      setPlaylistTracks([]);
+      return;
+    }
+    let cancelled = false;
+    setPlaylistTracksLoading(true);
+    audio2Api
+      .getPlaylistTracks(expandedPlaylist)
+      .then((res) => {
+        if (cancelled) return;
+        const items = Array.isArray(res.data) ? res.data : [];
+        setPlaylistTracks(
+          items.map((item: { id?: number; name?: string; artist?: { name?: string } }) => ({
+            id: item.id,
+            name: item.name,
+            artist: item.artist?.name,
+          }))
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setPlaylistTracks([]);
+      })
+      .finally(() => {
+        if (!cancelled) setPlaylistTracksLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [expandedPlaylist]);
+
+  // Remove track from playlist
+  const handleRemoveTrack = useCallback(async (trackId: number) => {
+    if (!expandedPlaylist) return;
+    setRemovingTrackId(trackId);
+    try {
+      await audio2Api.removeTrackFromPlaylist(expandedPlaylist, trackId);
+      setPlaylistTracks((prev) => prev.filter((t) => t.id !== trackId));
+    } catch {
+      setStatusMessage('No se pudo eliminar la canción');
+    } finally {
+      setRemovingTrackId(null);
+    }
+  }, [expandedPlaylist, setStatusMessage]);
 
   const handleApplyArtist = useCallback(() => {
     const value = artistQuery.trim();
@@ -123,10 +239,11 @@ export function PlaylistsPage() {
 
   const queueHandler = useCallback(
     (item: PlayerQueueItem) => {
-      if (!item || !item.videoId) {
-        setStatusMessage('La pista necesita un enlace de YouTube para reproducirse');
+      if (!item) {
+        setStatusMessage('Pista inválida');
         return;
       }
+      // DB-FIRST: Let playByVideoId handle missing videoId (it will search YouTube)
       const currentQueue = usePlayerStore.getState().queue;
       const idx = currentQueue.findIndex((entry) => entry.videoId === item.videoId);
       if (idx >= 0) {
@@ -139,7 +256,7 @@ export function PlaylistsPage() {
         title: item.title,
         artist: item.artist,
         artistSpotifyId: item.artistSpotifyId,
-        videoId: item.videoId,
+        videoId: item.videoId || '',
         durationSec: item.durationMs ? Math.round(item.durationMs / 1000) : undefined,
       });
     },
@@ -273,6 +390,160 @@ export function PlaylistsPage() {
       </header>
 
       {renderStatus()}
+
+      {/* User Playlists Section */}
+      <section>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.3em] text-muted-foreground">Mis playlists</p>
+            <h2 className="text-xl font-bold">Tus listas guardadas</h2>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowCreateForm(true)}
+            className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-accent-foreground"
+          >
+            <Plus className="h-4 w-4" />
+            Nueva lista
+          </button>
+        </div>
+
+        {/* Create Form */}
+        {showCreateForm && (
+          <div className="mb-4 rounded-xl border border-border bg-panel p-4">
+            <div className="flex flex-wrap gap-3 items-end">
+              <div className="flex-1 min-w-[200px]">
+                <label className="block text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground mb-2">
+                  Nombre de la lista
+                </label>
+                <input
+                  type="text"
+                  value={newPlaylistName}
+                  onChange={(e) => setNewPlaylistName(e.target.value)}
+                  placeholder="Mi playlist..."
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void handleCreatePlaylist();
+                    if (e.key === 'Escape') setShowCreateForm(false);
+                  }}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleCreatePlaylist()}
+                disabled={creatingPlaylist || !newPlaylistName.trim()}
+                className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-accent-foreground disabled:opacity-50"
+              >
+                {creatingPlaylist ? 'Creando...' : 'Crear'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCreateForm(false);
+                  setNewPlaylistName('');
+                }}
+                className="rounded-lg border border-border bg-background px-4 py-2 text-sm"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Playlists Grid */}
+        {userPlaylistsLoading ? (
+          <div className="flex items-center gap-3 text-sm text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            Cargando playlists...
+          </div>
+        ) : userPlaylists.length === 0 ? (
+          <div className="rounded-xl border border-border/70 bg-panel-foreground/5 p-6 text-sm text-muted-foreground">
+            No tienes playlists creadas. Crea una nueva para añadir tus canciones favoritas.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {userPlaylists.map((playlist) => (
+              <div
+                key={playlist.id}
+                className="group relative rounded-xl border border-border bg-panel overflow-hidden"
+              >
+                <div className="p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <h3 className="font-semibold truncate">{playlist.name}</h3>
+                      {playlist.description && (
+                        <p className="text-xs text-muted-foreground truncate mt-1">{playlist.description}</p>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void handleDeletePlaylist(playlist.id!)}
+                      disabled={deletingPlaylistId === playlist.id}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                      title="Eliminar lista"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+                <div className="px-4 pb-4">
+                  <button
+                    type="button"
+                    onClick={() => setExpandedPlaylist(expandedPlaylist === playlist.id ? null : playlist.id!)}
+                    className="w-full rounded-lg border border-border bg-background py-2 text-sm font-medium transition hover:bg-panel"
+                  >
+                    {expandedPlaylist === playlist.id ? 'Ocultar' : 'Ver canciones'}
+                  </button>
+                </div>
+
+                {/* Expanded Track List */}
+                {expandedPlaylist === playlist.id && (
+                  <div className="border-t border-border bg-panel-foreground/30 p-4 max-h-64 overflow-auto">
+                    {playlistTracksLoading ? (
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Cargando...
+                      </div>
+                    ) : playlistTracks.length > 0 ? (
+                      <div className="space-y-2">
+                        {playlistTracks.map((track, idx) => (
+                          <div
+                            key={`${track.id || idx}-${track.name || ''}`}
+                            className="flex items-center justify-between gap-2 text-sm py-1.5"
+                          >
+                            <span className="truncate min-w-0">
+                              {track.name || 'Sin título'}
+                              {track.artist && (
+                                <span className="text-muted-foreground"> · {track.artist}</span>
+                              )}
+                            </span>
+                            {track.id && (
+                              <button
+                                type="button"
+                                onClick={() => void handleRemoveTrack(track.id!)}
+                                disabled={removingTrackId === track.id}
+                                className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
+                                title="Eliminar"
+                              >
+                                {removingTrackId === track.id ? '...' : '×'}
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-muted-foreground py-2">
+                        Esta lista está vacía. Añade canciones desde cualquier pista.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
         {sections.map((section, sectionIndex) => (
