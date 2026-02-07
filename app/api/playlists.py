@@ -46,7 +46,9 @@ def get_playlist(playlist_id: int = Path(..., description="Local playlist ID")) 
 
 @router.get("/id/{playlist_id}/tracks")
 def get_playlist_tracks(playlist_id: int = Path(..., description="Local playlist ID")) -> List[Track]:
-    """Get all tracks in a playlist."""
+    """Get all tracks in a playlist with YouTube enrichment (same as tracks/overview)."""
+    from ..models.base import YouTubeDownload, Artist, Album
+
     with get_session() as session:
         playlist = session.exec(select(Playlist).where(Playlist.id == playlist_id)).first()
         if not playlist:
@@ -60,9 +62,58 @@ def get_playlist_tracks(playlist_id: int = Path(..., description="Local playlist
         ).all()
 
         track_ids = [pt.track_id for pt in playlist_tracks]
-        tracks = session.exec(select(Track).where(Track.id.in_(track_ids))).all()
+        if not track_ids:
+            return []
 
-        return tracks
+        # Get all YouTube downloads for these tracks (same logic as tracks/overview)
+        all_downloads = session.exec(
+            select(YouTubeDownload).where(YouTubeDownload.spotify_track_id.in_(
+                select(Track.spotify_id).where(Track.id.in_(track_ids))
+            ))
+        ).all()
+        download_map = {d.spotify_track_id: d for d in all_downloads}
+
+        # Get tracks with artist info
+        tracks_with_artist = session.exec(
+            select(Track, Artist, Album)
+            .outerjoin(Artist, Artist.id == Track.artist_id)
+            .outerjoin(Album, Album.id == Track.album_id)
+            .where(Track.id.in_(track_ids))
+        ).all()
+
+        # Build response with enrichment (same format as tracks/overview)
+        items = []
+        for track, artist, album in tracks_with_artist:
+            download = download_map.get(track.spotify_id) if track.spotify_id else None
+            youtube_video_id = (download.youtube_video_id or None) if download else None
+            youtube_status = download.download_status if download else None
+            youtube_url = f"https://www.youtube.com/watch?v={youtube_video_id}" if youtube_video_id else None
+            file_path = download.download_path if download else None
+
+            # Determine videoId (same logic as TracksPage buildQueueItems)
+            if file_path:
+                video_id_for_player = None  # Will use local file via localTrackId
+            elif youtube_video_id:
+                video_id_for_player = youtube_video_id
+            else:
+                video_id_for_player = None
+
+            items.append({
+                "id": track.id,
+                "name": track.name,
+                "spotify_id": track.spotify_id,
+                "duration_ms": track.duration_ms,
+                "artist": {"name": artist.name, "spotify_id": artist.spotify_id} if artist else None,
+                "album": {"name": album.name} if album else None,
+                "youtube_video_id": youtube_video_id,
+                "youtube_url": youtube_url,
+                "youtube_status": youtube_status,
+                "download_path": file_path,
+                "local_file_exists": bool(file_path),
+                "videoId": video_id_for_player,  # For frontend compatibility
+            })
+
+        return items
 
 
 @router.put("/id/{playlist_id}")

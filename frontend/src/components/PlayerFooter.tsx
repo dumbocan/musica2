@@ -358,8 +358,8 @@ export function PlayerFooter() {
         name?: string;
         duration_ms?: number;
         artist?: { name?: string; spotify_id?: string };
-        artist_id?: number;
         download_path?: string | null;
+        videoId?: string | null;  // Enriched from backend
       }) => ({
         localTrackId: track.id,
         spotifyTrackId: track.spotify_id || `local-${track.id}`,
@@ -367,7 +367,7 @@ export function PlayerFooter() {
         artist: track.artist?.name,
         artistSpotifyId: track.artist?.spotify_id || undefined,
         durationMs: track.duration_ms || undefined,
-        videoId: track.download_path ? `local:${track.id}` : `pending:${track.spotify_id || track.id}`,
+        videoId: track.videoId || (track.download_path ? `local:${track.id}` : ''),
       }));
       setQueue(items, items.length ? 0 : -1);
       setCurrentIndex(items.length ? 0 : -1);
