@@ -150,6 +150,8 @@ export const audio2Api = {
     api.get('/tracks/overview/', { params, timeout: 60000 }),
   resolveTracks: (spotifyTrackIds: string[]) =>
     api.post('/tracks/resolve', { spotify_track_ids: spotifyTrackIds }),
+  saveTrackFromSpotify: (spotifyTrackId: string) =>
+    api.post('/tracks/save-from-spotify', { spotify_track_id: spotifyTrackId }),
   getRecentlyAddedTracks: (params?: { limit?: number }) =>
     api.get('/tracks/recently-added', { params }),
   getMostPlayedTracks: (params?: { limit?: number }) =>

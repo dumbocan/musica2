@@ -255,6 +255,99 @@ async def _materialize_spotify_entries(
         existing_ids.add(spotify_id)
 
 
+async def _persist_spotify_track_snapshot(track_data: dict) -> None:
+    """Persist a Spotify track to the local database."""
+    if not track_data:
+        return
+    spotify_id = track_data.get("id")
+    if not spotify_id:
+        return
+
+    def _save() -> None:
+        try:
+            from ..crud import save_track, save_album
+            # Get or create artist
+            artist_id = None
+            if track_data.get("artists"):
+                primary_artist = track_data["artists"][0] if track_data["artists"] else None
+                if primary_artist:
+                    from ..crud import save_artist
+                    artist = save_artist({
+                        "id": primary_artist.get("id"),
+                        "name": primary_artist.get("name", ""),
+                        "images": [],
+                        "followers": {"total": 0},
+                        "popularity": 0,
+                        "genres": [],
+                    })
+                    artist_id = artist.id if artist else None
+
+            # Get or create album
+            album_id = None
+            album_data = track_data.get("album")
+            if album_data:
+                album = save_album(album_data)
+                album_id = album.id if album else None
+
+            # Save track
+            save_track(track_data, album_id=album_id, artist_id=artist_id)
+        except Exception as exc:
+            logger.warning(
+                "[search] failed to persist track %s: %s",
+                track_data.get("name") or spotify_id,
+                exc,
+            )
+
+    try:
+        await asyncio.to_thread(_save)
+    except Exception as exc:
+        logger.warning(
+            "[search] persistence worker failed for track %s: %s",
+            track_data.get("name") or spotify_id,
+            exc,
+        )
+
+
+async def _materialize_spotify_tracks(
+    session: AsyncSession,
+    tracks: list[dict],
+    schedule_limit: int = 5,
+) -> None:
+    """Ensure Spotify tracks are saved locally and queue refreshing if missing."""
+    if not tracks:
+        return
+
+    unique_ids = {t.get("id") for t in tracks if t.get("id")}
+    existing_ids: set[str] = set()
+    try:
+        rows = await session.exec(
+            select(Track.spotify_id).where(Track.spotify_id.in_(list(unique_ids)))
+        )
+        existing_ids = {row for row in rows if row}
+    except Exception as exc:
+        logger.warning("[search] failed to check existing tracks: %s", exc)
+
+    saved = 0
+    for track in tracks:
+        spotify_id = track.get("id")
+        if not spotify_id:
+            continue
+        # Persist the track in background
+        asyncio.create_task(_persist_spotify_track_snapshot(track))
+        if saved >= schedule_limit:
+            continue
+        if spotify_id in existing_ids:
+            continue
+        # Queue YouTube link fetching for new tracks
+        try:
+            from ..services.library_expansion import schedule_track_youtube_fetch
+            schedule_track_youtube_fetch(spotify_id)
+        except Exception:
+            pass
+        saved += 1
+        existing_ids.add(spotify_id)
+
+
 async def _favorite_ids(session: AsyncSession, entity_type: SearchEntityType, user_id: int | None) -> set[int]:
     if not user_id:
         return set()
@@ -1147,17 +1240,34 @@ async def orchestrated_search(
     # Also materialize artists from track results (BIBLIA: save all artists found)
     if tracks:
         track_artists = []
+        seen_track_artist_ids = set()
         for track in tracks:
             for artist in track.get("artists", []) or []:
                 artist_id = artist.get("id")
-                if artist_id:
+                if artist_id and artist_id not in seen_track_artist_ids:
+                    seen_track_artist_ids.add(artist_id)
+                    sp_artist = {
+                        "id": artist_id,
+                        "name": artist.get("name") or "",
+                        "images": [],
+                        "followers": {"total": 0},
+                        "popularity": 0,
+                        "genres": [],
+                    }
                     track_artists.append({
-                        "spotify": artist,
+                        "spotify": sp_artist,
                         "lastfm": {},
                         "name": artist.get("name"),
                     })
+                    # Add track artists to main artists list
+                    if artist_id not in seen_spotify_ids and artist_id not in seen_norm_names_grid:
+                        artists_for_grid.append(sp_artist)
+                        seen_spotify_ids.add(artist_id)
+                        seen_norm_names_grid.add(_normalize_name(artist.get("name") or ""))
         if track_artists:
             await _materialize_spotify_entries(session, track_artists, schedule_limit=3)
+        # Also materialize tracks themselves (BIBLIA: save all tracks found)
+        await _materialize_spotify_tracks(session, tracks, schedule_limit=5)
     payload = {
         "query": q,
         "page": max(page, 0),
@@ -1563,6 +1673,54 @@ async def search_artist_profile(
                 tracks.append(_track_to_spotify_lite(track, artist, album))
     elif spotify_available:
         tracks = _format_tracks(await safe_spotify(spotify_client.search_tracks(q, limit=5), []))
+
+        # If we found tracks, use the primary artist from the first track as the main artist
+        # This handles cases where the query is a song name, not an artist name
+        if tracks and main:
+            first_track = tracks[0] if tracks else None
+            if first_track and first_track.get("artists"):
+                primary_artist = first_track["artists"][0] if first_track["artists"] else None
+                if primary_artist and primary_artist.get("id"):
+                    sp_artist = {
+                        "id": primary_artist["id"],
+                        "name": primary_artist.get("name") or "",
+                        "images": [],
+                        "followers": {"total": 0},
+                        "popularity": 0,
+                        "genres": [],
+                    }
+                    # Enrich with Spotify data
+                    enriched = await safe_spotify(
+                        spotify_client.search_artists(primary_artist.get("name") or "", limit=1),
+                        []
+                    )
+                    if enriched:
+                        best = enriched[0]
+                        if best.get("id") == primary_artist["id"]:
+                            sp_artist = {
+                                "id": best.get("id"),
+                                "name": best.get("name") or sp_artist["name"],
+                                "images": proxy_image_list(best.get("images", []), size=384),
+                                "followers": best.get("followers", {"total": 0}),
+                                "popularity": best.get("popularity", 0),
+                                "genres": best.get("genres", []),
+                            }
+                    main["spotify"] = sp_artist
+                    # Also try to get Last.fm data
+                    if settings.LASTFM_API_KEY:
+                        lastfm_data = await safe_spotify(
+                            lastfm_client.get_artist_info(primary_artist.get("name") or ""),
+                            {}
+                        )
+                        if lastfm_data:
+                            main["lastfm"] = {
+                                "summary": lastfm_data.get("summary", ""),
+                                "content": lastfm_data.get("content", ""),
+                                "stats": lastfm_data.get("stats", {}),
+                                "tags": lastfm_data.get("tags", []) or [],
+                                "images": lastfm_data.get("images", []),
+                            }
+
     payload = {
         "query": q,
         "mode": "artist",

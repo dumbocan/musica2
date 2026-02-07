@@ -44,8 +44,8 @@ def get_playlist(playlist_id: int = Path(..., description="Local playlist ID")) 
     return playlist
 
 
-@router.get("/id/{playlist_id}/tracks")
-def get_playlist_tracks(playlist_id: int = Path(..., description="Local playlist ID")) -> List[Track]:
+@router.get("/id/{playlist_id}/tracks", response_model=None)
+def get_playlist_tracks(playlist_id: int = Path(..., description="Local playlist ID")):
     """Get all tracks in a playlist with YouTube enrichment (same as tracks/overview)."""
     from ..models.base import YouTubeDownload, Artist, Album
 

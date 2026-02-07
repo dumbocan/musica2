@@ -272,6 +272,7 @@ export function AlbumDetailPage() {
     async (spotifyTrackId: string): Promise<number | null> => {
       const existing = trackLocalIds[spotifyTrackId];
       if (existing) return existing;
+      // Try to resolve from existing local tracks
       try {
         const res = await audio2Api.resolveTracks([spotifyTrackId]);
         const items = res.data?.items || [];
@@ -283,22 +284,19 @@ export function AlbumDetailPage() {
       } catch {
         // best effort
       }
-      if (!spotifyId) return null;
+      // Track doesn't exist locally - save it from Spotify
       try {
-        await audio2Api.saveAlbumToDb(spotifyId);
-        const res = await audio2Api.resolveTracks([spotifyTrackId]);
-        const items = res.data?.items || [];
-        const match = items.find((item: ResolvedTrack) => item.spotify_track_id === spotifyTrackId);
-        if (match?.track_id) {
-          setTrackLocalIds((prev) => ({ ...prev, [spotifyTrackId]: match.track_id }));
-          return match.track_id as number;
+        const saveRes = await audio2Api.saveTrackFromSpotify(spotifyTrackId);
+        if (saveRes.data?.track_id) {
+          setTrackLocalIds((prev) => ({ ...prev, [spotifyTrackId]: saveRes.data.track_id }));
+          return saveRes.data.track_id as number;
         }
       } catch {
         // ignore
       }
       return null;
     },
-    [spotifyId, trackLocalIds]
+    [trackLocalIds]
   );
 
   useEffect(() => {

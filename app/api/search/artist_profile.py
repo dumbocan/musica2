@@ -6,7 +6,7 @@ import logging
 from typing import Dict, Any, Optional
 
 from fastapi import APIRouter, Query, Depends, Request
-from sqlmodel import select, or_
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from ...core.config import settings
@@ -78,7 +78,7 @@ async def search_artist_profile(
     min_followers: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(SessionDep)
 ) -> Dict[str, Any]:
-    """Return profile + related artists + tracks for Search page."""
+    """Return profile + related artists + tracks for Search page. BD-first policy."""
     incoming_query = q if q is not None else artist_name
     if not incoming_query:
         return {"query": "", "mode": "artist", "main": None, "similar": [], "tracks": []}
@@ -86,13 +86,43 @@ async def search_artist_profile(
     if not query:
         return {"query": incoming_query, "mode": "artist", "main": None, "similar": [], "tracks": []}
 
-    # main artist from DB
+    # BD-FIRST: First, search for local tracks (in case query is a song title)
+    tracks_rows = (await session.exec(
+        select(Track, Artist, Album)
+        .join(Artist, Track.artist_id == Artist.id)
+        .join(Album, Track.album_id == Album.id, isouter=True)
+        .where(Track.name.ilike(f"%{query}%"))
+        .order_by(Track.popularity.desc(), Track.id.desc())
+        .limit(15)
+    )).all()
+
+    # Extract the main artist from tracks if tracks are found
+    main_artist_from_tracks: Optional[Artist] = None
+    if tracks_rows:
+        # Count tracks per artist (use most frequent artist as main)
+        artist_track_count: Dict[int, int] = {}
+        for track, artist, album in tracks_rows:
+            if artist.id not in artist_track_count:
+                artist_track_count[artist.id] = 0
+            artist_track_count[artist.id] += 1
+        if artist_track_count:
+            # Use artist with most tracks matching the query
+            main_artist_id = max(artist_track_count, key=artist_track_count.get)
+            main_artist_from_tracks = next(
+                (artist for track, artist, album in tracks_rows if artist.id == main_artist_id),
+                None
+            )
+
+    # main artist from DB (by name match)
     main_artist = (await session.exec(
         select(Artist)
         .where(Artist.name.ilike(f"%{query}%"))
         .order_by(Artist.followers.desc(), Artist.popularity.desc())
         .limit(1)
     )).first()
+
+    # Use artist from tracks if available, otherwise use name-matched artist
+    main_artist = main_artist_from_tracks or main_artist
 
     spotify_main: Optional[Dict[str, Any]] = _artist_to_spotify(main_artist) if main_artist else None
     lastfm_main: Dict[str, Any] = _local_lastfm_block(main_artist)
@@ -124,15 +154,7 @@ async def search_artist_profile(
         except Exception:
             pass
 
-    # tracks: DB-first
-    tracks_rows = (await session.exec(
-        select(Track, Artist, Album)
-        .join(Artist, Track.artist_id == Artist.id)
-        .join(Album, Track.album_id == Album.id, isouter=True)
-        .where(or_(Track.name.ilike(f"%{query}%"), Artist.name.ilike(f"%{query}%")))
-        .order_by(Track.popularity.desc(), Track.id.desc())
-        .limit(15)
-    )).all()
+    # Build tracks list from already-fetched local tracks
     tracks: list[dict[str, Any]] = []
     for track, artist, album in tracks_rows:
         tracks.append({

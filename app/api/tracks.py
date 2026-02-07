@@ -278,6 +278,77 @@ def resolve_tracks(payload: TrackResolveRequest) -> dict:
     return {"items": items}
 
 
+class SaveTrackRequest(BaseModel):
+    spotify_track_id: str
+
+
+@router.post("/save-from-spotify")
+async def save_track_from_spotify(
+    payload: SaveTrackRequest,
+    session: AsyncSession = Depends(SessionDep),
+) -> dict:
+    """
+    Save a track from Spotify to the local database.
+    Fetches artist and album data as needed.
+    Returns the local track ID.
+    """
+    spotify_id = payload.spotify_track_id.strip()
+    if not _SPOTIFY_ID_RE.match(spotify_id):
+        raise HTTPException(status_code=400, detail="Invalid Spotify track ID format")
+
+    # Check if already exists
+    existing = await session.exec(
+        select(Track.id).where(Track.spotify_id == spotify_id)
+    )
+    existing_id = existing.first()
+    if existing_id:
+        return {"track_id": existing_id, "created": False}
+
+    # Fetch track data from Spotify
+    try:
+        track_data = await spotify_client.get_track(spotify_id)
+    except Exception as exc:
+        logger.warning("[save_track_from_spotify] failed to fetch track %s: %s", spotify_id, exc)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch track from Spotify: {exc}")
+
+    if not track_data:
+        raise HTTPException(status_code=404, detail="Track not found in Spotify")
+
+    # Get or create artist
+    artist_id: int | None = None
+    if track_data.get("artists"):
+        primary_artist = track_data["artists"][0] if track_data["artists"] else None
+        if primary_artist:
+            artist_spotify_id = primary_artist.get("id")
+            if artist_spotify_id:
+                from ..crud import save_artist
+                artist = save_artist({
+                    "id": artist_spotify_id,
+                    "name": primary_artist.get("name", ""),
+                    "images": [],
+                    "followers": {"total": 0},
+                    "popularity": 0,
+                    "genres": [],
+                })
+                artist_id = artist.id if artist else None
+
+    # Get or create album
+    album_id: int | None = None
+    album_data = track_data.get("album")
+    if album_data:
+        album_spotify_id = album_data.get("id")
+        if album_spotify_id:
+            from ..crud import save_album
+            album = await save_album(album_data)
+            album_id = album.id if album else None
+
+    # Save track
+    from ..crud import save_track
+    track = save_track(track_data, album_id=album_id, artist_id=artist_id)
+
+    return {"track_id": track.id, "created": True}
+
+
 @router.post("/play/{track_id}")
 def record_track_play(
     request: Request,
