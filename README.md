@@ -1409,6 +1409,49 @@ app/api/artists/
 
 ---
 
+## Playlist Operations Policy (SAGRADO - Never Regress)
+
+**Estado:** Implementado en FASE 1 (Feb 2026)  
+**Ubicacion:** `frontend/src/hooks/usePlaylistTrackRemoval.ts`, `frontend/src/hooks/usePlaylistTrackAddition.ts`, `PlayerFooter.tsx`, `PlaylistsPage.tsx`
+
+### Funcionalidad Implementada
+
+**1. Eliminacion de tracks en playlists:**
+- Desde `PlaylistsPage`: elimina track de BD y sincroniza UI
+- Desde `AddToPlaylistModal`: elimina track de BD y sincroniza UI  
+- Desde `PlayerFooter` (Cola Actual): elimina track de BD y de la cola
+- **SIEMPRE** recarga la playlist desde servidor para confirmar
+- **SIEMPRE** sincroniza entre componentes via eventos
+
+**2. Insercion de tracks en playlists:**
+- Hook `usePlaylistTrackAddition` centralizado
+- Verifica duplicados antes de insertar
+- Recarga playlist tras insercion para confirmar
+- Soporta operaciones batch (multiple tracks)
+
+**3. CRUD de playlists desde Cola Actual:**
+- Crear nueva playlist: boton "+ Nueva" en "Listas en memoria"
+- Eliminar playlist: boton "×" junto a cada playlist
+- **Sincronizacion bidireccional**: cambios en Cola Actual se reflejan en PlaylistsPage y viceversa
+- Eventos: `playlist-deleted`, `playlist-created`
+
+### Reglas de No-Regresion
+
+- **NUNCA** eliminar solo del estado local (siempre llamar API primero)
+- **NUNCA** asumir que el track se elimino sin verificar respuesta del servidor
+- **SIEMPRE** recargar la playlist tras modificaciones para sincronizar
+- **SIEMPRE** emitir eventos para sincronizar entre componentes
+- **SIEMPRE** verificar que `localTrackId` existe antes de operar
+- **NUNCA** modificar estos hooks sin entender completamente el flujo de sincronizacion
+
+### Tests
+
+- Backend: `tests/test_playlist_endpoints.py` (6 tests, todos pasan)
+- Frontend: `frontend/src/hooks/usePlaylistOperations.test.ts` (12 tests)
+- Documentacion: `TESTS_PLAYLIST.md`
+
+---
+
 ## Code Stability Rules (SAGRADO - Never Regress)
 
 ### Golden Rules for Any Code Change

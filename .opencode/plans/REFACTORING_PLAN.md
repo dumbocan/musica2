@@ -1,53 +1,86 @@
 # Plan de Refactorización Audio2
 
-**Versión:** 1.0  
+**Versión:** 1.1  
 **Fecha:** 2024-02-08  
-**Estado:** En planificación - FASE 1 pendiente  
+**Estado:** FASE 1 ✅ COMPLETADA - En progreso: FASE 2  
 
 ---
 
 ## Resumen Ejecutivo
 
 Este documento detalla el plan completo para refactorizar Audio2, enfocándose en:
-1. Solucionar bug crítico de eliminación en playlists
-2. Unificar sistema de tracks con funcionalidades de lists
-3. Implementar búsqueda DB-First con expansión automática completa
-4. Sistema de limpieza de datos no utilizados (6 meses)
+1. ✅ **FASE 1 COMPLETADA:** Solucionar bug crítico de eliminación en playlists + sistema CRUD completo
+2. 🟡 **FASE 2 PENDIENTE:** Unificar sistema de tracks con funcionalidades de lists
+3. 🟢 **FASE 3 PENDIENTE:** Implementar búsqueda DB-First con expansión automática completa
+4. 🟢 **FASE 4 PENDIENTE:** Sistema de limpieza de datos no utilizados (6 meses)
 
 ---
 
-## FASE 1: Arreglar BUG de Eliminación en Playlists
+## FASE 1: Arreglar BUG de Eliminación en Playlists ✅ COMPLETADA
 
-### Estado: 🔴 PENDIENTE (Prioridad #1)
+### Estado: ✅ COMPLETADA (8 Feb 2024)
+**Commit:** `7389885`  
+**Rama:** `fix/playlist-deletion`
 
-### Descripción del Problema
-Al eliminar una canción de una playlist, el frontend solo actualiza el estado local (UI) pero no verifica que realmente se eliminó de la base de datos. Al recargar la página, la canción vuelve a aparecer.
+### Resumen de Cambios
 
-### Causa Raíz
-1. Backend: Posible problema con `session.commit()` en `remove_track_from_playlist`
-2. Frontend: No recarga la lista tras eliminar para verificar sincronización
+Esta fase se expandió significativamente desde el bug inicial hasta un sistema CRUD completo de playlists:
 
-### Archivos a Modificar
+#### ✅ Problemas Resueltos:
+1. **Bug de eliminación**: Al eliminar canciones, ahora se borran de BD correctamente
+2. **Sincronización UI-BD**: La UI siempre refleja el estado real de la base de datos
+3. **Cross-component sync**: Cambios en un componente se reflejan en todos los demás sin recargar
+
+#### ✅ Features Agregadas:
+1. **Hooks reutilizables:**
+   - `usePlaylistTrackRemoval` - Eliminación con verificación
+   - `usePlaylistTrackAddition` - Inserción con detección de duplicados
+   - Funciones standalone para uso fuera de hooks
+
+2. **CRUD completo desde PlayerFooter (Cola Actual):**
+   - Crear playlists: Botón "+ Nueva" en "Listas en memoria"
+   - Eliminar playlists: Botón "×" junto a cada playlist
+   - Cargar playlists en cola
+   - Todo sincronizado con PlaylistsPage
+
+3. **Sistema de eventos:**
+   - `playlist-deleted` - Sincroniza eliminación entre componentes
+   - `playlist-created` - Sincroniza creación entre componentes
+
+4. **Tests:**
+   - Backend: 6 tests pasando (`tests/test_playlist_endpoints.py`)
+   - Frontend: 12 tests creados
+
+### Archivos Modificados
 
 #### Backend
-- `app/crud.py` línea 853: `remove_track_from_playlist()`
-  - Agregar logging de éxito/error
-  - Verificar que `session.commit()` ejecuta correctamente
-  - Retornar información más detallada
+- ✅ `app/crud.py` - `remove_track_from_playlist()` mejorado con logging y verificación
+- ✅ `app/api/playlists.py` - Endpoint actualizado con respuesta detallada
 
-#### Frontend  
-- `frontend/src/pages/PlaylistsPage.tsx` línea 153-164: `handleRemoveTrack`
-  - Recargar playlist desde servidor tras eliminar
-  - Mejorar manejo de errores
-  - Feedback visual al usuario
+#### Frontend
+- ✅ `frontend/src/hooks/usePlaylistTrackRemoval.ts` - **NUEVO**
+- ✅ `frontend/src/hooks/usePlaylistTrackAddition.ts` - **NUEVO**
+- ✅ `frontend/src/hooks/usePlaylistOperations.test.ts` - **NUEVO**
+- ✅ `frontend/src/components/PlayerFooter.tsx` - CRUD de playlists + eventos
+- ✅ `frontend/src/components/AddToPlaylistModal.tsx` - Usa hooks reutilizables
+- ✅ `frontend/src/pages/PlaylistsPage.tsx` - Usa hooks + escucha eventos
+- ✅ `frontend/src/lib/api.ts` - Agregado `deletePlaylist`
+
+#### Tests
+- ✅ `tests/test_playlist_endpoints.py` - **NUEVO** (6 tests)
+- ✅ `tests/test_playlist_operations.py` - **NUEVO** (15 tests)
+- ✅ `TESTS_PLAYLIST.md` - **NUEVO** - Documentación de tests
 
 ### Criterios de Éxito
-- [ ] Al eliminar una canción, muestra mensaje de éxito
-- [ ] Al recargar la página (F5), la canción NO vuelve a aparecer
-- [ ] Si hay error en BD, el usuario ve mensaje de error claro
-- [ ] La UI se sincroniza con el estado real de la BD
+- ✅ Al eliminar una canción, muestra mensaje de éxito
+- ✅ Al recargar la página (F5), la canción NO vuelve a aparecer
+- ✅ Si hay error en BD, el usuario ve mensaje de error claro
+- ✅ La UI se sincroniza con el estado real de la BD
+- ✅ Se pueden crear/eliminar playlists desde PlayerFooter
+- ✅ Sincronización bidireccional entre componentes sin recargar
 
-### Tiempo Estimado: 1.5 horas
+### Tiempo Real: ~4 horas (vs 1.5h estimado)
+**Razón:** Se expandió el scope para incluir CRUD completo y sistema de sincronización
 
 ---
 
