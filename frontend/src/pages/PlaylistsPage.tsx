@@ -3,6 +3,7 @@ import { Loader2, Play, Plus, Radio, Trash2 } from 'lucide-react';
 import { API_BASE_URL, audio2Api } from '@/lib/api';
 import { normalizeImageUrl } from '@/lib/images';
 import { usePlayerStore } from '@/store/usePlayerStore';
+import { usePlaylistTrackRemoval } from '@/hooks/usePlaylistTrackRemoval';
 import type { CuratedTrackItem, ListsOverviewResponse, Playlist as PlaylistType, PlaylistSection } from '@/types/api';
 import type { PlayerQueueItem } from '@/store/usePlayerStore';
 
@@ -40,6 +41,12 @@ export function PlaylistsPage() {
   const setStatusMessage = usePlayerStore((state) => state.setStatusMessage);
   const playByVideoId = usePlayerStore((state) => state.playByVideoId);
   const removeFromQueue = usePlayerStore((state) => state.removeFromQueue);
+
+  // Hook para eliminar tracks de playlists
+  const { removeTrackFromPlaylist } = usePlaylistTrackRemoval({
+    onSuccess: (message) => setStatusMessage(message),
+    onError: (message) => setStatusMessage(message),
+  });
 
   const fetchLists = useCallback((artistName?: string) => {
     setLoadState('loading');
@@ -80,6 +87,42 @@ export function PlaylistsPage() {
     fetchUserPlaylists();
   }, [fetchUserPlaylists]);
 
+  // Escuchar cuando se elimina una playlist desde otros componentes (PlayerFooter)
+  useEffect(() => {
+    const handlePlaylistDeleted = (event: CustomEvent) => {
+      const { playlistId } = event.detail;
+      
+      // Eliminar de la lista de playlists
+      setUserPlaylists((prev) => prev.filter((p) => p.id !== playlistId));
+      
+      // Si estaba expandida, limpiar
+      if (expandedPlaylist === playlistId) {
+        setExpandedPlaylist(null);
+        setPlaylistTracks([]);
+      }
+    };
+
+    window.addEventListener('playlist-deleted', handlePlaylistDeleted as EventListener);
+    
+    // Escuchar cuando se crea una playlist desde otros componentes
+    const handlePlaylistCreated = (event: CustomEvent) => {
+      const { playlist } = event.detail;
+      if (playlist) {
+        setUserPlaylists((prev) => {
+          // Verificar si ya existe para no duplicar
+          if (prev.some((p) => p.id === playlist.id)) return prev;
+          return [playlist, ...prev];
+        });
+      }
+    };
+    window.addEventListener('playlist-created', handlePlaylistCreated as EventListener);
+    
+    return () => {
+      window.removeEventListener('playlist-deleted', handlePlaylistDeleted as EventListener);
+      window.removeEventListener('playlist-created', handlePlaylistCreated as EventListener);
+    };
+  }, [expandedPlaylist]);
+
   // Handle create playlist
   const handleCreatePlaylist = useCallback(async () => {
     const name = newPlaylistName.trim();
@@ -104,14 +147,27 @@ export function PlaylistsPage() {
     if (!confirm('¿Eliminar esta lista?')) return;
     setDeletingPlaylistId(playlistId);
     try {
-      // Assume delete endpoint exists - for now just remove from UI
+      // 1. Llamar a la API para eliminar la playlist de la BD
+      await audio2Api.deletePlaylist(playlistId);
+      
+      // 2. Actualizar UI - quitar de la lista local
       setUserPlaylists((prev) => prev.filter((p) => p.id !== playlistId));
+      
+      // 3. Si estaba expandida, limpiar
       if (expandedPlaylist === playlistId) {
         setExpandedPlaylist(null);
         setPlaylistTracks([]);
       }
-    } catch {
-      setStatusMessage('No se pudo eliminar la lista');
+      
+      // 4. Notificar a otros componentes (PlayerFooter) que la playlist fue eliminada
+      window.dispatchEvent(new CustomEvent('playlist-deleted', { 
+        detail: { playlistId } 
+      }));
+      
+      setStatusMessage('Lista eliminada correctamente');
+    } catch (error: any) {
+      console.error('Error eliminando playlist:', error);
+      setStatusMessage('No se pudo eliminar la lista: ' + (error.message || 'Error desconocido'));
     } finally {
       setDeletingPlaylistId(null);
     }
@@ -149,19 +205,25 @@ export function PlaylistsPage() {
     };
   }, [expandedPlaylist]);
 
-  // Remove track from playlist
+  // Remove track from playlist (usa hook reutilizable)
   const handleRemoveTrack = useCallback(async (trackId: number) => {
     if (!expandedPlaylist) return;
     setRemovingTrackId(trackId);
-    try {
-      await audio2Api.removeTrackFromPlaylist(expandedPlaylist, trackId);
-      setPlaylistTracks((prev) => prev.filter((t) => t.id !== trackId));
-    } catch {
-      setStatusMessage('No se pudo eliminar la canción');
-    } finally {
-      setRemovingTrackId(null);
+
+    const result = await removeTrackFromPlaylist(expandedPlaylist, trackId);
+
+    if (result.tracks) {
+      setPlaylistTracks(
+        result.tracks.map((item: any) => ({
+          id: item.id,
+          name: item.name,
+          artist: item.artist?.name,
+        }))
+      );
     }
-  }, [expandedPlaylist, setStatusMessage]);
+
+    setRemovingTrackId(null);
+  }, [expandedPlaylist, removeTrackFromPlaylist]);
 
   const handleApplyArtist = useCallback(() => {
     const value = artistQuery.trim();

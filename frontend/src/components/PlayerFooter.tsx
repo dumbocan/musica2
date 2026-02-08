@@ -3,6 +3,7 @@ import { ListMusic, Shuffle } from 'lucide-react';
 import { AddToPlaylistModal } from '@/components/AddToPlaylistModal';
 import { audio2Api } from '@/lib/api';
 import { usePlayerStore } from '@/store/usePlayerStore';
+import { removeTrackFromPlaylistAndReload } from '@/hooks/usePlaylistTrackRemoval';
 import type { PlayerQueueItem } from '@/store/usePlayerStore';
 
 export function PlayerFooter() {
@@ -36,6 +37,24 @@ export function PlayerFooter() {
   const resumeAudio = usePlayerStore((s) => s.resumeAudio);
   const pauseAudio = usePlayerStore((s) => s.pauseAudio);
   const removeFromQueue = usePlayerStore((s) => s.removeFromQueue);
+
+  // Wrapper to handle removing from queue and optionally from playlist
+  const handleRemoveFromQueue = async (index: number) => {
+    const item = queue[index];
+    
+    // Remove from local queue first
+    removeFromQueue(index);
+    
+    // If we have an active playlist and the item has a local track ID, also remove from playlist in DB
+    if (activeMemoryPlaylistId && item?.localTrackId) {
+      const result = await removeTrackFromPlaylistAndReload(activeMemoryPlaylistId, item.localTrackId);
+      if (result.success) {
+        setStatusMessage('Canción eliminada de la cola y de la lista');
+      } else {
+        setStatusMessage('Eliminada de la cola, pero no de la lista');
+      }
+    }
+  };
   const stopAudio = usePlayerStore((s) => s.stopAudio);
   const seekAudio = usePlayerStore((s) => s.seekAudio);
   const setQueue = usePlayerStore((s) => s.setQueue);
@@ -51,6 +70,32 @@ export function PlayerFooter() {
   const [activeMemoryPlaylistId, setActiveMemoryPlaylistId] = useState<number | null>(null);
   const [memoryMessage, setMemoryMessage] = useState('');
   const [addNowPlayingOpen, setAddNowPlayingOpen] = useState(false);
+  const [showCreatePlaylistForm, setShowCreatePlaylistForm] = useState(false);
+  const [newPlaylistName, setNewPlaylistName] = useState('');
+  const [creatingPlaylist, setCreatingPlaylist] = useState(false);
+
+  // Escuchar cuando se elimina una playlist para limpiarla de la cola
+  useEffect(() => {
+    const handlePlaylistDeleted = (event: CustomEvent) => {
+      const { playlistId } = event.detail;
+      
+      // Eliminar de la lista de playlists en memoria
+      setMemoryPlaylists((prev) => prev.filter((p) => p.id !== playlistId));
+      
+      // Si era la playlist activa, limpiar la cola
+      if (activeMemoryPlaylistId === playlistId) {
+        setActiveMemoryPlaylistId(null);
+        setQueue([]);
+        setCurrentIndex(-1);
+        setStatusMessage('La lista fue eliminada');
+      }
+    };
+
+    window.addEventListener('playlist-deleted', handlePlaylistDeleted as EventListener);
+    return () => {
+      window.removeEventListener('playlist-deleted', handlePlaylistDeleted as EventListener);
+    };
+  }, [activeMemoryPlaylistId, setQueue, setCurrentIndex, setStatusMessage]);
 
   const prevItem = currentIndex > 0 ? queue[currentIndex - 1] : null;
   const nextItem = currentIndex >= 0 && currentIndex < queue.length - 1 ? queue[currentIndex + 1] : null;
@@ -380,6 +425,70 @@ export function PlayerFooter() {
     }
   }, [playQueueItem, setCurrentIndex, setOnPlayTrack, setQueue]);
 
+  const handleDeletePlaylistFromMemory = useCallback(async (playlistId: number) => {
+    try {
+      // 1. Llamar a la API para eliminar la playlist de la BD
+      await audio2Api.deletePlaylist(playlistId);
+      
+      // 2. Eliminar de la lista en memoria
+      setMemoryPlaylists((prev) => prev.filter((p) => p.id !== playlistId));
+      
+      // 3. Si era la playlist activa, limpiar la cola
+      if (activeMemoryPlaylistId === playlistId) {
+        setActiveMemoryPlaylistId(null);
+        setQueue([]);
+        setCurrentIndex(-1);
+        setStatusMessage('Lista eliminada');
+      } else {
+        setStatusMessage('Lista eliminada correctamente');
+      }
+      
+      // 4. Emitir evento para que otros componentes se enteren
+      window.dispatchEvent(new CustomEvent('playlist-deleted', { 
+        detail: { playlistId } 
+      }));
+    } catch (error: any) {
+      console.error('Error eliminando playlist:', error);
+      setStatusMessage('No se pudo eliminar la lista');
+    }
+  }, [activeMemoryPlaylistId, setQueue, setCurrentIndex, setStatusMessage]);
+
+  const handleCreatePlaylist = useCallback(async () => {
+    const name = newPlaylistName.trim();
+    if (!name) {
+      setStatusMessage('El nombre de la lista no puede estar vacío');
+      return;
+    }
+    
+    setCreatingPlaylist(true);
+    try {
+      const res = await audio2Api.createPlaylist({ name, user_id: 1 });
+      const created = res.data as { id: number; name: string; description?: string };
+      
+      // Agregar a la lista en memoria
+      setMemoryPlaylists((prev) => [...prev, { 
+        id: created.id, 
+        name: created.name, 
+        description: created.description || '' 
+      }]);
+      
+      // Limpiar formulario
+      setNewPlaylistName('');
+      setShowCreatePlaylistForm(false);
+      setStatusMessage(`Lista "${created.name}" creada`);
+      
+      // Emitir evento para que PlaylistsPage se actualice
+      window.dispatchEvent(new CustomEvent('playlist-created', { 
+        detail: { playlist: created } 
+      }));
+    } catch (error: any) {
+      console.error('Error creando playlist:', error);
+      setStatusMessage('No se pudo crear la lista');
+    } finally {
+      setCreatingPlaylist(false);
+    }
+  }, [newPlaylistName, setStatusMessage]);
+
   useEffect(() => {
     if (!showQueuePanel) return;
     void loadMemoryPlaylists();
@@ -692,7 +801,7 @@ export function PlayerFooter() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => removeFromQueue(idx)}
+                    onClick={() => handleRemoveFromQueue(idx)}
                     style={{
                       width: 22,
                       height: 22,
@@ -720,35 +829,151 @@ export function PlayerFooter() {
           </div>
 
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8 }}>
-            <strong>Listas en memoria</strong>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <strong>Listas en memoria</strong>
+              <button
+                type="button"
+                onClick={() => setShowCreatePlaylistForm(true)}
+                style={{
+                  padding: '4px 12px',
+                  borderRadius: 6,
+                  border: '1px solid var(--border)',
+                  background: 'var(--primary)',
+                  color: 'var(--primary-foreground)',
+                  fontSize: 12,
+                  cursor: 'pointer',
+                }}
+              >
+                + Nueva
+              </button>
+            </div>
+            
+            {showCreatePlaylistForm && (
+              <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+                <input
+                  type="text"
+                  value={newPlaylistName}
+                  onChange={(e) => setNewPlaylistName(e.target.value)}
+                  placeholder="Nombre de la lista..."
+                  style={{
+                    flex: 1,
+                    padding: '6px 10px',
+                    borderRadius: 6,
+                    border: '1px solid var(--border)',
+                    background: 'var(--panel)',
+                    color: 'inherit',
+                    fontSize: 13,
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      void handleCreatePlaylist();
+                    } else if (e.key === 'Escape') {
+                      setShowCreatePlaylistForm(false);
+                      setNewPlaylistName('');
+                    }
+                  }}
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleCreatePlaylist()}
+                  disabled={creatingPlaylist || !newPlaylistName.trim()}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 6,
+                    border: 'none',
+                    background: creatingPlaylist || !newPlaylistName.trim() ? 'var(--muted)' : 'var(--primary)',
+                    color: 'var(--primary-foreground)',
+                    fontSize: 12,
+                    cursor: creatingPlaylist || !newPlaylistName.trim() ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {creatingPlaylist ? '...' : 'Crear'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCreatePlaylistForm(false);
+                    setNewPlaylistName('');
+                  }}
+                  style={{
+                    padding: '6px 10px',
+                    borderRadius: 6,
+                    border: '1px solid var(--border)',
+                    background: 'var(--panel)',
+                    color: 'inherit',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+            
             <div style={{ marginTop: 8, maxHeight: 170, overflow: 'auto', display: 'grid', gap: 4 }}>
               {memoryLoading ? (
                 <div style={{ color: 'var(--muted)', fontSize: 13 }}>Cargando listas...</div>
               ) : memoryPlaylists.length ? (
                 memoryPlaylists.map((playlist) => (
-                  <button
+                  <div
                     key={playlist.id}
-                    type="button"
-                    onClick={() => {
-                      setActiveMemoryPlaylistId(playlist.id);
-                      void applyMemoryPlaylist(playlist.id);
-                    }}
                     style={{
-                      textAlign: 'left',
-                      border: '1px solid var(--border)',
-                      background:
-                        activeMemoryPlaylistId === playlist.id ? 'rgba(5, 247, 165, 0.15)' : 'var(--panel)',
-                      borderRadius: 8,
-                      padding: '6px 8px',
-                      cursor: 'pointer',
-                      color: 'inherit',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
                     }}
                   >
-                    <span style={{ fontWeight: 600 }}>{playlist.name}</span>
-                    {playlist.description ? (
-                      <span style={{ color: 'var(--muted)' }}> · {playlist.description}</span>
-                    ) : null}
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveMemoryPlaylistId(playlist.id);
+                        void applyMemoryPlaylist(playlist.id);
+                      }}
+                      style={{
+                        flex: 1,
+                        textAlign: 'left',
+                        border: '1px solid var(--border)',
+                        background:
+                          activeMemoryPlaylistId === playlist.id ? 'rgba(5, 247, 165, 0.15)' : 'var(--panel)',
+                        borderRadius: 8,
+                        padding: '6px 8px',
+                        cursor: 'pointer',
+                        color: 'inherit',
+                      }}
+                    >
+                      <span style={{ fontWeight: 600 }}>{playlist.name}</span>
+                      {playlist.description ? (
+                        <span style={{ color: 'var(--muted)' }}> · {playlist.description}</span>
+                      ) : null}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (confirm(`¿Eliminar la lista "${playlist.name}"?`)) {
+                          void handleDeletePlaylistFromMemory(playlist.id);
+                        }
+                      }}
+                      style={{
+                        width: 28,
+                        height: 28,
+                        borderRadius: '50%',
+                        background: 'var(--destructive)',
+                        border: 'none',
+                        color: 'var(--destructive-foreground)',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: 16,
+                        fontWeight: 700,
+                        flexShrink: 0,
+                      }}
+                      title="Eliminar lista"
+                    >
+                      ×
+                    </button>
+                  </div>
                 ))
               ) : (
                 <div style={{ color: 'var(--muted)', fontSize: 13 }}>Sin listas guardadas.</div>

@@ -211,6 +211,8 @@ export const audio2Api = {
   getAllPlaylists: () => api.get('/playlists/'),
   createPlaylist: (params: { name: string; description?: string; user_id?: number }) =>
     api.post('/playlists/', null, { params }),
+  deletePlaylist: (playlistId: number) =>
+    api.delete(`/playlists/id/${playlistId}`),
   addTrackToPlaylist: (playlistId: number, trackId: number) =>
     api.post(`/playlists/id/${playlistId}/tracks/${trackId}`),
   removeTrackFromPlaylist: (playlistId: number, trackId: number) =>

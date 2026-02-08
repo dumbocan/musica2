@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { audio2Api } from '@/lib/api';
 import { useApiStore } from '@/store/useApiStore';
+import { usePlaylistTrackRemoval } from '@/hooks/usePlaylistTrackRemoval';
+import { usePlaylistTrackAddition } from '@/hooks/usePlaylistTrackAddition';
 import type { Playlist } from '@/types/api';
 
 type AddToPlaylistModalProps = {
@@ -34,6 +36,18 @@ export function AddToPlaylistModal({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [removingTrackId, setRemovingTrackId] = useState<number | null>(null);
   const [view, setView] = useState<View>('select');
+
+  // Hook para eliminar tracks de playlists
+  const { removeTrackFromPlaylist } = usePlaylistTrackRemoval({
+    onSuccess: (msg) => setMessage(msg),
+    onError: (msg) => setMessage(msg),
+  });
+
+  // Hook para añadir tracks a playlists
+  const { addMultipleTracksToPlaylist } = usePlaylistTrackAddition({
+    onSuccess: (msg) => setMessage(msg),
+    onError: (msg) => setMessage(msg),
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -160,23 +174,29 @@ export function AddToPlaylistModal({
         setMessage('No hay canciones disponibles para añadir');
         return;
       }
-      let added = 0;
-      let skipped = 0;
+
+      // Usar el hook para añadir a múltiples playlists
+      let totalAdded = 0;
+      let totalSkipped = 0;
+
       for (const playlistId of selected) {
-        for (const trackId of trackIds) {
-          try {
-            await audio2Api.addTrackToPlaylist(playlistId, trackId);
-            added += 1;
-          } catch (err: unknown) {
-            const status =
-              err && typeof err === 'object' && 'response' in err
-                ? (err as { response?: { status?: number } }).response?.status
-                : undefined;
-            if (status === 404) skipped += 1;
-          }
-        }
+        const result = await addMultipleTracksToPlaylist(playlistId, trackIds);
+        totalAdded += result.added;
+        totalSkipped += result.skipped;
       }
-      setMessage(`Añadidas ${added} pistas${skipped ? ` · ${skipped} ya estaban` : ''}`);
+
+      // Actualizar mensaje
+      if (totalAdded > 0 && totalSkipped > 0) {
+        setMessage(`Añadidas ${totalAdded} pistas · ${totalSkipped} ya estaban`);
+      } else if (totalAdded > 0) {
+        setMessage(`Añadidas ${totalAdded} pistas`);
+      } else if (totalSkipped > 0) {
+        setMessage(`${totalSkipped} pistas ya estaban en las listas`);
+      } else {
+        setMessage('No se pudo añadir ninguna pista');
+      }
+
+      // Recargar preview si hay playlist seleccionada
       if (previewPlaylistId) {
         const refreshed = await audio2Api.getPlaylistTracks(previewPlaylistId);
         const items = Array.isArray(refreshed.data) ? refreshed.data : [];
@@ -196,15 +216,20 @@ export function AddToPlaylistModal({
   const handleRemoveTrack = async (trackId: number) => {
     if (!previewPlaylistId) return;
     setRemovingTrackId(trackId);
-    try {
-      await audio2Api.removeTrackFromPlaylist(previewPlaylistId, trackId);
-      setPreviewTracks((prev) => prev.filter((t) => t.id !== trackId));
-      setMessage('Canción eliminada');
-    } catch {
-      setMessage('No se pudo eliminar la canción');
-    } finally {
-      setRemovingTrackId(null);
+
+    const result = await removeTrackFromPlaylist(previewPlaylistId, trackId);
+
+    if (result.tracks) {
+      setPreviewTracks(
+        result.tracks.map((item: any) => ({
+          id: item.id,
+          name: item.name,
+          artist: item.artist?.name,
+        }))
+      );
     }
+
+    setRemovingTrackId(null);
   };
 
   if (!open) return null;

@@ -850,21 +850,72 @@ def add_track_to_playlist(playlist_id: int, track_id: int) -> Optional["Playlist
         session.close()
 
 
-def remove_track_from_playlist(playlist_id: int, track_id: int) -> bool:
-    """Remove track from playlist."""
+def remove_track_from_playlist(playlist_id: int, track_id: int) -> dict:
+    """
+    Remove track from playlist.
+    Returns detailed result for better debugging and verification.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     session = get_session()
     try:
+        # Buscar la relación
+        logger.info(f"Attempting to remove track {track_id} from playlist {playlist_id}")
+        
         playlist_track = session.exec(
             select(PlaylistTrack).where(
                 PlaylistTrack.playlist_id == playlist_id,
                 PlaylistTrack.track_id == track_id
             )
         ).first()
-        if playlist_track:
-            session.delete(playlist_track)
-            session.commit()
-            return True
-        return False
+        
+        if not playlist_track:
+            logger.warning(f"Track {track_id} not found in playlist {playlist_id}")
+            return {
+                "success": False,
+                "error": "not_found",
+                "message": "Track not found in playlist"
+            }
+        
+        # Guardar ID antes de eliminar para verificación
+        deleted_id = playlist_track.id
+        
+        # Eliminar
+        session.delete(playlist_track)
+        session.commit()
+        
+        # Verificar que realmente se eliminó
+        verify = session.exec(
+            select(PlaylistTrack).where(
+                PlaylistTrack.playlist_id == playlist_id,
+                PlaylistTrack.track_id == track_id
+            )
+        ).first()
+        
+        if verify:
+            logger.error(f"Deletion verification failed: Track {track_id} still exists in playlist {playlist_id}")
+            return {
+                "success": False,
+                "error": "deletion_failed",
+                "message": "Track could not be deleted from database"
+            }
+        
+        logger.info(f"Successfully removed track {track_id} from playlist {playlist_id}")
+        return {
+            "success": True,
+            "message": "Track removed successfully",
+            "deleted_id": deleted_id
+        }
+        
+    except Exception as e:
+        logger.error(f"Exception removing track {track_id} from playlist {playlist_id}: {str(e)}")
+        session.rollback()
+        return {
+            "success": False,
+            "error": "exception",
+            "message": str(e)
+        }
     finally:
         session.close()
 
