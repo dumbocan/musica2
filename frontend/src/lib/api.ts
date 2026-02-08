@@ -219,6 +219,20 @@ export const audio2Api = {
     api.delete(`/playlists/id/${playlistId}/tracks/${trackId}`),
   getPlaylistTracks: (playlistId: number) =>
     api.get(`/playlists/id/${playlistId}/tracks`),
+  // Unified tracks endpoint - supports both traditional tracks and curated lists
+  getTracksOverview: (params?: {
+    verify_files?: boolean;
+    offset?: number;
+    limit?: number;
+    include_summary?: boolean;
+    after_id?: number;
+    filter?: string;
+    search?: string;
+    list_type?: string;
+    artist_id?: number;
+    sort?: string;
+  }) => api.get('/tracks/overview', { params }),
+  // Legacy endpoint - will be deprecated
   getListsOverview: (params?: { limit_per_list?: number; artist_spotify_id?: string; artist_name?: string }) =>
     api.get('/lists/overview', { params, timeout: 60000 }),
 

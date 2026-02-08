@@ -3,7 +3,7 @@ Track endpoints: list, etc.
 """
 
 import asyncio
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import List
 import re
 import json
@@ -463,8 +463,11 @@ def get_tracks_overview(
     limit: int = Query(200, ge=1, le=1000, description="Pagination limit"),
     include_summary: bool = Query(True, description="Include aggregate summary counts"),
     after_id: int | None = Query(None, ge=0, description="Return tracks after this ID"),
-    filter: str | None = Query(None, description="Filter: withLink, noLink, hasFile, missingFile"),
+    filter: str | None = Query(None, description="Filter: withLink, noLink, hasFile, missingFile, favorites, top-year, downloaded, favorites-with-link"),
     search: str | None = Query(None, description="Search by track, artist, or album"),
+    list_type: str | None = Query(None, description="List type: favorites-with-link, top-year, downloaded, favorites, genre-suggestions, library"),
+    artist_id: int | None = Query(None, description="Artist ID for discography filter"),
+    sort: str | None = Query(None, description="Sort: plays, rating, recency, added"),
 ) -> dict:
     """
     Return tracks with artist, album, cached YouTube link/status and local file info.
@@ -480,8 +483,10 @@ def get_tracks_overview(
     if filter == "all":
         filter = None
     filter = filter or None
-    if filter and filter not in {"withLink", "noLink", "hasFile", "missingFile", "favorites"}:
-        raise HTTPException(status_code=400, detail="Invalid filter value")
+    # Validar filtros tradicionales
+    valid_filters = {"withLink", "noLink", "hasFile", "missingFile", "favorites", "top-year", "downloaded", "favorites-with-link"}
+    if filter and filter not in valid_filters:
+        raise HTTPException(status_code=400, detail=f"Invalid filter value. Must be one of: {', '.join(valid_filters)}")
     search_term = normalize_search(search) if search else ""
     is_filtered_query = bool(filter or search_term)
     user_id = getattr(request.state, "user_id", None) if request else None
@@ -643,6 +648,196 @@ def get_tracks_overview(
             "has_more": has_more,
             "next_after": next_after if has_more else None,
             "filtered_total": int(favorite_total or 0),
+        }
+
+    # Handle new list type filters
+    if list_type or filter in {"top-year", "downloaded", "favorites-with-link"}:
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated for curated lists")
+        
+        # Map filter to list_type if not specified
+        effective_list_type = list_type or filter
+        
+        with get_session() as session:
+            if effective_list_type == "downloaded":
+                # Tracks with local file
+                base_query = (
+                    select(Track, Artist, Album)
+                    .join(Artist, Artist.id == Track.artist_id)
+                    .outerjoin(Album, Album.id == Track.album_id)
+                    .outerjoin(YouTubeDownload, YouTubeDownload.spotify_track_id == Track.spotify_id)
+                    .where(
+                        or_(
+                            YouTubeDownload.download_path.is_not(None),
+                            Track.download_path.is_not(None)
+                        )
+                    )
+                    .order_by(desc(Track.popularity))
+                )
+            elif effective_list_type == "favorites-with-link":
+                # Favorite tracks with YouTube link
+                base_query = (
+                    select(Track, Artist, Album)
+                    .join(UserFavorite, UserFavorite.track_id == Track.id)
+                    .join(Artist, Artist.id == Track.artist_id)
+                    .outerjoin(Album, Album.id == Track.album_id)
+                    .outerjoin(YouTubeDownload, YouTubeDownload.spotify_track_id == Track.spotify_id)
+                    .where(UserFavorite.user_id == user_id)
+                    .where(UserFavorite.target_type == FavoriteTargetType.TRACK)
+                    .where(YouTubeDownload.youtube_video_id.is_not(None))
+                    .order_by(desc(Track.popularity))
+                )
+            elif effective_list_type == "top-year":
+                # Top tracks from last year based on plays
+                one_year_ago = datetime.now() - timedelta(days=365)
+                base_query = (
+                    select(Track, Artist, Album, func.count(PlayHistory.id).label("play_count"))
+                    .join(Artist, Artist.id == Track.artist_id)
+                    .outerjoin(Album, Album.id == Track.album_id)
+                    .outerjoin(PlayHistory, PlayHistory.track_id == Track.id)
+                    .where(PlayHistory.played_at >= one_year_ago)
+                    .group_by(Track.id, Artist.id, Album.id)
+                    .order_by(desc("play_count"))
+                )
+            elif effective_list_type == "library":
+                # All library tracks
+                base_query = (
+                    select(Track, Artist, Album)
+                    .join(Artist, Artist.id == Track.artist_id)
+                    .outerjoin(Album, Album.id == Track.album_id)
+                    .order_by(desc(Track.popularity))
+                )
+            else:
+                # Default to favorites
+                base_query = (
+                    select(Track, Artist, Album)
+                    .join(UserFavorite, UserFavorite.track_id == Track.id)
+                    .join(Artist, Artist.id == Track.artist_id)
+                    .outerjoin(Album, Album.id == Track.album_id)
+                    .where(UserFavorite.user_id == user_id)
+                    .where(UserFavorite.target_type == FavoriteTargetType.TRACK)
+                    .order_by(desc(UserFavorite.created_at))
+                )
+            
+            if hidden_exists is not None:
+                base_query = base_query.where(~hidden_exists)
+            
+            # Handle artist_id filter (discography)
+            if artist_id:
+                base_query = base_query.where(Artist.id == artist_id)
+            
+            # Handle sorting
+            if sort == "plays":
+                base_query = base_query.order_by(desc(Track.play_count))
+            elif sort == "rating":
+                base_query = base_query.order_by(desc(Track.user_score))
+            elif sort == "recency":
+                base_query = base_query.order_by(desc(Track.last_accessed_at))
+            elif sort == "added":
+                base_query = base_query.order_by(desc(Track.created_at))
+            
+            if after_id is not None:
+                base_query = base_query.where(Track.id > after_id)
+            else:
+                base_query = base_query.offset(offset)
+            
+            rows = session.exec(base_query.limit(limit + 1)).all()
+            total_query = select(func.count(Track.id)).select_from(Track)
+            if list_type == "downloaded":
+                total_query = total_query.outerjoin(YouTubeDownload, YouTubeDownload.spotify_track_id == Track.spotify_id).where(
+                    or_(
+                        YouTubeDownload.download_path.is_not(None),
+                        Track.download_path.is_not(None)
+                    )
+                )
+            elif list_type == "favorites-with-link":
+                total_query = total_query.join(UserFavorite, UserFavorite.track_id == Track.id).where(
+                    UserFavorite.user_id == user_id,
+                    UserFavorite.target_type == FavoriteTargetType.TRACK
+                ).outerjoin(YouTubeDownload, YouTubeDownload.spotify_track_id == Track.spotify_id).where(
+                    YouTubeDownload.youtube_video_id.is_not(None)
+                )
+            elif list_type == "favorites" or not list_type:
+                total_query = total_query.join(UserFavorite, UserFavorite.track_id == Track.id).where(
+                    UserFavorite.user_id == user_id,
+                    UserFavorite.target_type == FavoriteTargetType.TRACK
+                )
+            
+            if hidden_exists is not None:
+                total_query = total_query.where(~hidden_exists)
+            
+            filtered_total = session.exec(total_query).one()
+        
+        raw_rows = rows
+        has_more = len(raw_rows) > limit
+        track_rows = raw_rows[:limit]
+        track_ids = [track.id for track, _, _ in track_rows]
+        spotify_ids = [track.spotify_id for track, _, _ in track_rows if track.spotify_id]
+        
+        downloads = []
+        if spotify_ids:
+            with get_session() as session:
+                downloads = session.exec(
+                    select(YouTubeDownload).where(YouTubeDownload.spotify_track_id.in_(spotify_ids))
+                ).all()
+        
+        download_map = _select_best_downloads(downloads)
+        
+        items = []
+        for row in track_rows:
+            if effective_list_type == "top-year":
+                track, artist, album = row[0], row[1], row[2]
+            else:
+                track, artist, album = row
+            
+            download = download_map.get(track.spotify_id) if track.spotify_id else None
+            youtube_video_id = (download.youtube_video_id or None) if download else None
+            youtube_status = download.download_status if download else None
+            youtube_url = f"https://www.youtube.com/watch?v={youtube_video_id}" if youtube_video_id else None
+            file_path = download.download_path if download else None
+            
+            if file_path:
+                file_exists = FsPath(file_path).exists() if verify_files else True
+            else:
+                file_exists = False
+            
+            if file_exists:
+                youtube_status = "completed"
+            elif youtube_video_id and not youtube_status:
+                youtube_status = "link_found"
+            
+            items.append({
+                "track_id": track.id,
+                "track_name": track.name,
+                "spotify_track_id": track.spotify_id,
+                "artist_name": artist.name if artist else None,
+                "artist_spotify_id": artist.spotify_id if artist else None,
+                "album_name": album.name if album else None,
+                "album_spotify_id": album.spotify_id if album else None,
+                "duration_ms": track.duration_ms,
+                "popularity": track.popularity,
+                "youtube_video_id": youtube_video_id,
+                "youtube_status": youtube_status,
+                "youtube_url": youtube_url,
+                "local_file_path": file_path,
+                "local_file_exists": file_exists,
+                "chart_source": None,
+                "chart_name": None,
+                "chart_best_position": None,
+                "chart_best_position_date": None,
+                "chart_weeks_at_one": 0,
+                "chart_weeks_top5": 0,
+                "chart_weeks_top10": 0,
+            })
+        
+        next_after = track_rows[-1][0].id if track_rows else after_id
+        return {
+            "items": items,
+            "offset": offset,
+            "limit": limit,
+            "has_more": has_more,
+            "next_after": next_after if has_more else None,
+            "filtered_total": int(filtered_total or 0),
         }
 
     with get_session() as session:
