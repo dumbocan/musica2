@@ -48,19 +48,85 @@ export function PlaylistsPage() {
     onError: (message) => setStatusMessage(message),
   });
 
-  const fetchLists = useCallback((artistName?: string) => {
+  // Fetch curated lists using unified tracks endpoint
+  const fetchLists = useCallback(async (artistName?: string) => {
     setLoadState('loading');
-    audio2Api
-      .getListsOverview({ limit_per_list: 12, artist_name: artistName || undefined })
-      .then((response) => {
-        setSections(response.data.lists ?? []);
-        setTopGenres(response.data.top_genres ?? []);
-        setAnchorArtist(response.data.anchor_artist ?? null);
-        setLoadState('idle');
-      })
-      .catch(() => {
-        setLoadState('error');
+    try {
+      // Fetch multiple curated lists in parallel using unified endpoint
+      const [
+        favoritesWithLinkRes,
+        downloadedRes,
+        favoritesRes,
+      ] = await Promise.all([
+        audio2Api.getTracksOverview({ list_type: 'favorites-with-link', limit: 12 }),
+        audio2Api.getTracksOverview({ list_type: 'downloaded', limit: 12 }),
+        audio2Api.getTracksOverview({ filter: 'favorites', limit: 12 }),
+      ]);
+
+      // Map tracks/overview format to CuratedTrackItem format
+      const mapTrackToCurated = (track: any): CuratedTrackItem => ({
+        id: track.track_id,
+        spotify_id: track.spotify_track_id,
+        name: track.track_name,
+        duration_ms: track.duration_ms,
+        popularity: track.popularity,
+        is_favorite: true, // These are all from favorite lists
+        download_status: track.youtube_status,
+        download_path: track.local_file_path,
+        videoId: track.youtube_video_id,
+        album: track.album_spotify_id ? {
+          id: track.track_id, // We don't have album_id, use track_id as fallback
+          spotify_id: track.album_spotify_id,
+          name: track.album_name,
+          release_date: '', // Not available in tracks/overview
+        } : null,
+        artists: track.artist_name ? [{
+          id: track.track_id, // We don't have artist_id, use track_id as fallback
+          name: track.artist_name,
+          spotify_id: track.artist_spotify_id,
+        }] : [],
       });
+
+      const lists = [];
+
+      if (favoritesWithLinkRes.data?.items?.length > 0) {
+        lists.push({
+          key: 'favorites-with-link',
+          title: 'Favoritos con enlace',
+          description: 'Tus canciones favoritas que ya tienen enlace de YouTube listo para reproducir.',
+          items: favoritesWithLinkRes.data.items.map(mapTrackToCurated),
+          meta: { count: favoritesWithLinkRes.data.items.length },
+        });
+      }
+
+      if (downloadedRes.data?.items?.length > 0) {
+        lists.push({
+          key: 'downloaded-local',
+          title: 'Música descargada',
+          description: 'Canciones con archivo local disponible en tu biblioteca.',
+          items: downloadedRes.data.items.map(mapTrackToCurated),
+          meta: { count: downloadedRes.data.items.length, note: 'Reproducción local' },
+        });
+      }
+
+      if (favoritesRes.data?.items?.length > 0) {
+        lists.push({
+          key: 'favorites',
+          title: 'Favoritos',
+          description: 'Tus canciones marcadas como favoritas en la biblioteca local.',
+          items: favoritesRes.data.items.map(mapTrackToCurated),
+          meta: { count: favoritesRes.data.items.length },
+        });
+      }
+
+      setSections(lists);
+      setTopGenres([]);
+      setAnchorArtist(null);
+      setLoadState('idle');
+    } catch (error) {
+      console.error('Error fetching lists:', error);
+      setLoadState('error');
+    }
   }, []);
 
   useEffect(() => {
