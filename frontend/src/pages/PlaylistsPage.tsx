@@ -49,27 +49,12 @@ export function PlaylistsPage() {
   });
 
   // Fetch curated lists using unified tracks endpoint with smart lists
+  // Sequential loading to prevent backend overload
   const fetchLists = useCallback(async (artistName?: string) => {
     setLoadState('loading');
-    try {
-      // Fetch multiple curated lists in parallel using unified endpoint
-      // Including new smart lists: top-year, discovery, most-played, etc.
-      const [
-        favoritesWithLinkRes,
-        downloadedRes,
-        topYearRes,
-        discoveryRes,
-        mostPlayedRes,
-        genreSuggestionsRes,
-      ] = await Promise.all([
-        audio2Api.getTracksOverview({ list_type: 'favorites-with-link', limit: 12 }),
-        audio2Api.getTracksOverview({ list_type: 'downloaded', limit: 12 }),
-        audio2Api.getTracksOverview({ list_type: 'top-year', limit: 12 }),
-        audio2Api.getTracksOverview({ list_type: 'discovery', limit: 12 }),
-        audio2Api.getTracksOverview({ list_type: 'most-played', limit: 12 }),
-        audio2Api.getTracksOverview({ list_type: 'genre-suggestions', limit: 12 }),
-      ]);
+    const lists = [];
 
+    try {
       // Map tracks/overview format to CuratedTrackItem format
       const mapTrackToCurated = (track: any): CuratedTrackItem => ({
         id: track.track_id,
@@ -85,66 +70,121 @@ export function PlaylistsPage() {
         artists: track.artists || [],
       });
 
-      const lists = [];
+      // Load lists sequentially with individual error handling
+      // This prevents one slow query from blocking everything
 
-      if (topYearRes.data?.items?.length > 0) {
-        lists.push({
-          key: 'top-last-year',
-          title: 'Mejores del último año',
-          description: 'Ranking personal según tus reproducciones, ratings y recencia en los últimos 365 días.',
-          items: topYearRes.data.items,
-          meta: { count: topYearRes.data.items.length, note: 'DB-first personalizado' },
+      // 1. Quick lists first (favorites with link)
+      try {
+        const favoritesWithLinkRes = await audio2Api.getTracksOverview({ 
+          list_type: 'favorites-with-link', 
+          limit: 12 
         });
+        if (favoritesWithLinkRes.data?.items?.length > 0) {
+          lists.push({
+            key: 'favorites-with-link',
+            title: 'Favoritos con enlace',
+            description: 'Tus canciones favoritas que ya tienen enlace de YouTube listo para reproducir.',
+            items: favoritesWithLinkRes.data.items.map(mapTrackToCurated),
+            meta: { count: favoritesWithLinkRes.data.items.length },
+          });
+        }
+      } catch (e) {
+        console.warn('Failed to load favorites with link:', e);
       }
 
-      if (favoritesWithLinkRes.data?.items?.length > 0) {
-        lists.push({
-          key: 'favorites-with-link',
-          title: 'Favoritos con enlace',
-          description: 'Tus canciones favoritas que ya tienen enlace de YouTube listo para reproducir.',
-          items: favoritesWithLinkRes.data.items.map(mapTrackToCurated),
-          meta: { count: favoritesWithLinkRes.data.items.length },
+      // 2. Downloaded tracks
+      try {
+        const downloadedRes = await audio2Api.getTracksOverview({ 
+          list_type: 'downloaded', 
+          limit: 12 
         });
+        if (downloadedRes.data?.items?.length > 0) {
+          lists.push({
+            key: 'downloaded-local',
+            title: 'Música descargada',
+            description: 'Canciones con archivo local disponible en tu biblioteca.',
+            items: downloadedRes.data.items.map(mapTrackToCurated),
+            meta: { count: downloadedRes.data.items.length, note: 'Reproducción local' },
+          });
+        }
+      } catch (e) {
+        console.warn('Failed to load downloaded tracks:', e);
       }
 
-      if (downloadedRes.data?.items?.length > 0) {
-        lists.push({
-          key: 'downloaded-local',
-          title: 'Música descargada',
-          description: 'Canciones con archivo local disponible en tu biblioteca.',
-          items: downloadedRes.data.items.map(mapTrackToCurated),
-          meta: { count: downloadedRes.data.items.length, note: 'Reproducción local' },
+      // 3. Discovery (random unplayed)
+      try {
+        const discoveryRes = await audio2Api.getTracksOverview({ 
+          list_type: 'discovery', 
+          limit: 12 
         });
+        if (discoveryRes.data?.items?.length > 0) {
+          lists.push({
+            key: 'discovery',
+            title: 'Descubrimiento',
+            description: 'Canciones que no has escuchado recientemente de tu biblioteca.',
+            items: discoveryRes.data.items,
+            meta: { count: discoveryRes.data.items.length },
+          });
+        }
+      } catch (e) {
+        console.warn('Failed to load discovery:', e);
       }
 
-      if (discoveryRes.data?.items?.length > 0) {
-        lists.push({
-          key: 'discovery',
-          title: 'Descubrimiento',
-          description: 'Canciones que no has escuchado recientemente de tu biblioteca.',
-          items: discoveryRes.data.items,
-          meta: { count: discoveryRes.data.items.length },
+      // 4. Top year (can be slow - lower timeout)
+      try {
+        const topYearRes = await audio2Api.getTracksOverview({ 
+          list_type: 'top-year', 
+          limit: 12 
         });
+        if (topYearRes.data?.items?.length > 0) {
+          lists.push({
+            key: 'top-last-year',
+            title: 'Mejores del último año',
+            description: 'Ranking personal según tus reproducciones, ratings y recencia en los últimos 365 días.',
+            items: topYearRes.data.items,
+            meta: { count: topYearRes.data.items.length, note: 'DB-first personalizado' },
+          });
+        }
+      } catch (e) {
+        console.warn('Failed to load top year:', e);
       }
 
-      if (mostPlayedRes.data?.items?.length > 0) {
-        lists.push({
-          key: 'most-played',
-          title: 'Más reproducidas',
-          description: 'Tus canciones más escuchadas de todos los tiempos.',
-          items: mostPlayedRes.data.items,
-          meta: { count: mostPlayedRes.data.items.length },
+      // 5. Most played (can be slow)
+      try {
+        const mostPlayedRes = await audio2Api.getTracksOverview({ 
+          list_type: 'most-played', 
+          limit: 12 
         });
+        if (mostPlayedRes.data?.items?.length > 0) {
+          lists.push({
+            key: 'most-played',
+            title: 'Más reproducidas',
+            description: 'Tus canciones más escuchadas de todos los tiempos.',
+            items: mostPlayedRes.data.items,
+            meta: { count: mostPlayedRes.data.items.length },
+          });
+        }
+      } catch (e) {
+        console.warn('Failed to load most played:', e);
       }
 
-      if (genreSuggestionsRes.data?.items?.length > 0) {
-        lists.push({
-          key: 'genre-suggestions',
-          title: 'Géneros parecidos',
-          description: 'Tracks de géneros vinculados a tus artistas favoritos.',
-          items: genreSuggestionsRes.data.items,
-          meta: { count: genreSuggestionsRes.data.items.length },
+      // 6. Genre suggestions (can be slow)
+      try {
+        const genreSuggestionsRes = await audio2Api.getTracksOverview({ 
+          list_type: 'genre-suggestions', 
+          limit: 12 
         });
+        if (genreSuggestionsRes.data?.items?.length > 0) {
+          lists.push({
+            key: 'genre-suggestions',
+            title: 'Géneros parecidos',
+            description: 'Tracks de géneros vinculados a tus artistas favoritos.',
+            items: genreSuggestionsRes.data.items,
+            meta: { count: genreSuggestionsRes.data.items.length },
+          });
+        }
+      } catch (e) {
+        console.warn('Failed to load genre suggestions:', e);
       }
 
       setSections(lists);

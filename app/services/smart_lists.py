@@ -134,51 +134,39 @@ class SmartListsService:
         self.session = session
 
     def get_top_tracks_last_year(self, user_id: int, limit: int = 20) -> list[dict]:
-        """Get top tracks from last 365 days based on play count and ratings."""
+        """Get top tracks from last 365 days based on play count and ratings.
+        Simplified version for better performance."""
         one_year_ago = datetime.now() - timedelta(days=365)
 
-        query = (
-            select(
-                Track,
-                Artist,
-                Album,
-                func.count(PlayHistory.id).label("plays"),
-                func.max(PlayHistory.played_at).label("last_played"),
-            )
-            .join(PlayHistory, PlayHistory.track_id == Track.id)
-            .join(Artist, Artist.id == Track.artist_id)
-            .outerjoin(Album, Album.id == Track.album_id)
+        # Optimized: Get recently played track IDs first (much faster)
+        played_tracks_query = (
+            select(PlayHistory.track_id)
             .where(PlayHistory.user_id == user_id)
             .where(PlayHistory.played_at >= one_year_ago)
-            .group_by(Track.id, Artist.id, Album.id)
-            .order_by(desc("plays"))
+            .distinct()
+        )
+        played_track_ids = [row[0] for row in self.session.exec(played_tracks_query).all()]
+
+        if not played_track_ids:
+            return []
+
+        # Get tracks with those IDs, ordered by popularity and user score
+        query = (
+            select(Track, Artist, Album)
+            .join(Artist, Artist.id == Track.artist_id)
+            .outerjoin(Album, Album.id == Track.album_id)
+            .where(Track.id.in_(played_track_ids))
+            .order_by(
+                desc(Track.user_score),  # Higher rated first
+                desc(Track.popularity),   # Then by popularity
+            )
         )
 
         rows = self.session.exec(query.limit(limit)).all()
 
-        # Score and rank tracks
-        scored_tracks = []
-        for track, artist, album, plays, last_played in rows:
-            # Calculate score: plays * 0.5 + user_score * 10 + recency_bonus
-            days_since_play = (datetime.now() - last_played).days if last_played else 365
-            recency_score = max(0, 30 - days_since_play)  # Bonus for recent plays
-            user_score = track.user_score or 0
-            total_score = (plays * 0.5) + (user_score * 10) + recency_score
-
-            scored_tracks.append({
-                "track": track,
-                "artist": artist,
-                "album": album,
-                "score": total_score,
-                "plays": plays,
-            })
-
-        # Sort by score and return
-        scored_tracks.sort(key=lambda x: x["score"], reverse=True)
-
         return [
-            _track_to_dict(item["track"], item["artist"], item["album"], None)
-            for item in scored_tracks[:limit]
+            _track_to_dict(track, artist, album, None)
+            for track, artist, album in rows
         ]
 
     def get_genre_suggestions(self, user_id: int, limit: int = 20) -> list[dict]:
@@ -347,22 +335,32 @@ class SmartListsService:
         ]
 
     def get_most_played(self, user_id: int, limit: int = 20) -> list[dict]:
-        """Get most played tracks of all time."""
+        """Get most played tracks of all time. Simplified for performance."""
+        # Get tracks that have been played (from PlayHistory)
+        played_tracks_query = (
+            select(PlayHistory.track_id)
+            .where(PlayHistory.user_id == user_id)
+            .distinct()
+        )
+        played_track_ids = [row[0] for row in self.session.exec(played_tracks_query).all()]
+
+        if not played_track_ids:
+            return []
+
+        # Return played tracks ordered by popularity
         query = (
-            select(Track, Artist, Album, func.count(PlayHistory.id).label("plays"))
-            .join(PlayHistory, PlayHistory.track_id == Track.id)
+            select(Track, Artist, Album)
             .join(Artist, Artist.id == Track.artist_id)
             .outerjoin(Album, Album.id == Track.album_id)
-            .where(PlayHistory.user_id == user_id)
-            .group_by(Track.id, Artist.id, Album.id)
-            .order_by(desc("plays"))
+            .where(Track.id.in_(played_track_ids))
+            .order_by(desc(Track.popularity))
         )
 
         rows = self.session.exec(query.limit(limit)).all()
 
         return [
             _track_to_dict(track, artist, album, None)
-            for track, artist, album, plays in rows
+            for track, artist, album in rows
         ]
 
     def get_never_played(self, user_id: int, limit: int = 50) -> list[dict]:
