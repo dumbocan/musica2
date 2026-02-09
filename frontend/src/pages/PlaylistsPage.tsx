@@ -800,7 +800,7 @@ export function PlaylistsPage() {
                 const primaryArtist = track.artists?.[0]?.name;
                 return (
                   <li
-                    key={`${section.key}-${track.id}-${track.videoId || 'no-video'}`}
+                    key={`${section.key}-${track.id ?? index}-${track.videoId ?? 'no-video'}`}
                     className="flex items-center justify-between gap-3 rounded-2xl border border-border/70 bg-background/70 px-3 py-2 text-sm text-foreground"
                   >
                     <div className="flex min-w-0 items-center gap-3">

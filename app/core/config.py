@@ -1,4 +1,4 @@
-from pydantic import field_validator, model_validator
+from pydantic import field_validator, model_validator, Field
 from pydantic_settings import BaseSettings
 from typing import Optional
 
@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     MUSIXMATCH_API_KEY: Optional[str] = None
     YOUTUBE_API_KEY: Optional[str] = None
     YOUTUBE_API_KEY_2: Optional[str] = None
+    k2_5_api_key: Optional[str] = Field(default=None, alias="k2.5_api_key")
     YTDLP_FALLBACK_ENABLED: bool = False
     YTDLP_DAILY_LIMIT: int = 120
     YTDLP_MIN_INTERVAL_SECONDS: float = 2.0
