@@ -136,20 +136,41 @@ def _apply_cors_headers(response: Response, request: Request) -> Response:
 
 @app.middleware("http")
 async def require_authenticated_user(request: Request, call_next):
+    path = request.url.path
+
+    # Check if path accepts token from query param
+    accepts_query_token = any(path.startswith(p) for p in TOKEN_QUERY_PATHS)
+
+    # Extract token if provided (even when AUTH_DISABLED)
+    token = None
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header.split(" ", 1)[1].strip()
+    if not token and accepts_query_token:
+        token = request.query_params.get("token")
+
     if settings.AUTH_DISABLED:
-        with get_session() as session:
-            user_id = session.exec(select(User.id)).first()
+        # When AUTH_DISABLED, try to use token first, fallback to first user
+        user_id = None
+        if token:
+            try:
+                user_id = get_current_user_id_from_token(token)
+            except ValueError:
+                pass  # Invalid token, will fallback to first user
+
+        if not user_id:
+            with get_session() as session:
+                user_id = session.exec(select(User.id)).first()
+
         if user_id:
             request.state.user_id = user_id
         return await call_next(request)
-    path = request.url.path
     if request.method == "OPTIONS":
         return await call_next(request)
     if path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
         return await call_next(request)
 
-    # Check if path accepts token from query param
-    accepts_query_token = any(path.startswith(p) for p in TOKEN_QUERY_PATHS)
+    # Token already extracted at the beginning of middleware
 
     # If no users exist, force registration first
     with get_session() as session:
@@ -157,17 +178,6 @@ async def require_authenticated_user(request: Request, call_next):
         if not user_exists:
             response = JSONResponse(status_code=401, content={"detail": "No users found. Register via /auth/register."})
             return _apply_cors_headers(response, request)
-
-        token = None
-
-        # Try Authorization header first
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.lower().startswith("bearer "):
-            token = auth_header.split(" ", 1)[1].strip()
-
-        # Fallback to query param for HTMLAudioElement
-        if not token and accepts_query_token:
-            token = request.query_params.get("token")
 
         if not token:
             response = JSONResponse(status_code=401, content={"detail": "Authorization bearer token required"})
