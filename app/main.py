@@ -20,7 +20,6 @@ from .api.auth import router as auth_router
 from .api.favorites import router as favorites_router
 from .api.images import router as images_router
 from .api.maintenance import maintenance_router
-from .api.lists import router as lists_router
 from .api.ai_router import router as ai_router
 from .core.config import settings
 from .core.db import get_session, create_db_and_tables
@@ -218,7 +217,6 @@ app.include_router(auth_router)
 app.include_router(favorites_router)
 app.include_router(images_router)
 app.include_router(maintenance_router)
-app.include_router(lists_router)
 app.include_router(ai_router)
 
 
