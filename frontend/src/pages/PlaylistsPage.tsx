@@ -48,46 +48,54 @@ export function PlaylistsPage() {
     onError: (message) => setStatusMessage(message),
   });
 
-  // Fetch curated lists using unified tracks endpoint
+  // Fetch curated lists using unified tracks endpoint with smart lists
   const fetchLists = useCallback(async (artistName?: string) => {
     setLoadState('loading');
     try {
       // Fetch multiple curated lists in parallel using unified endpoint
+      // Including new smart lists: top-year, discovery, most-played, etc.
       const [
         favoritesWithLinkRes,
         downloadedRes,
-        favoritesRes,
+        topYearRes,
+        discoveryRes,
+        mostPlayedRes,
+        genreSuggestionsRes,
       ] = await Promise.all([
         audio2Api.getTracksOverview({ list_type: 'favorites-with-link', limit: 12 }),
         audio2Api.getTracksOverview({ list_type: 'downloaded', limit: 12 }),
-        audio2Api.getTracksOverview({ filter: 'favorites', limit: 12 }),
+        audio2Api.getTracksOverview({ list_type: 'top-year', limit: 12 }),
+        audio2Api.getTracksOverview({ list_type: 'discovery', limit: 12 }),
+        audio2Api.getTracksOverview({ list_type: 'most-played', limit: 12 }),
+        audio2Api.getTracksOverview({ list_type: 'genre-suggestions', limit: 12 }),
       ]);
 
       // Map tracks/overview format to CuratedTrackItem format
       const mapTrackToCurated = (track: any): CuratedTrackItem => ({
         id: track.track_id,
-        spotify_id: track.spotify_track_id,
-        name: track.track_name,
+        spotify_id: track.spotify_id,
+        name: track.name,
         duration_ms: track.duration_ms,
         popularity: track.popularity,
-        is_favorite: true, // These are all from favorite lists
-        download_status: track.youtube_status,
-        download_path: track.local_file_path,
-        videoId: track.youtube_video_id,
-        album: track.album_spotify_id ? {
-          id: track.track_id, // We don't have album_id, use track_id as fallback
-          spotify_id: track.album_spotify_id,
-          name: track.album_name,
-          release_date: '', // Not available in tracks/overview
-        } : null,
-        artists: track.artist_name ? [{
-          id: track.track_id, // We don't have artist_id, use track_id as fallback
-          name: track.artist_name,
-          spotify_id: track.artist_spotify_id,
-        }] : [],
+        is_favorite: track.is_favorite || false,
+        download_status: track.download_status,
+        download_path: track.download_path,
+        videoId: track.videoId,
+        album: track.album || null,
+        artists: track.artists || [],
       });
 
       const lists = [];
+
+      if (topYearRes.data?.items?.length > 0) {
+        lists.push({
+          key: 'top-last-year',
+          title: 'Mejores del último año',
+          description: 'Ranking personal según tus reproducciones, ratings y recencia en los últimos 365 días.',
+          items: topYearRes.data.items,
+          meta: { count: topYearRes.data.items.length, note: 'DB-first personalizado' },
+        });
+      }
 
       if (favoritesWithLinkRes.data?.items?.length > 0) {
         lists.push({
@@ -109,13 +117,33 @@ export function PlaylistsPage() {
         });
       }
 
-      if (favoritesRes.data?.items?.length > 0) {
+      if (discoveryRes.data?.items?.length > 0) {
         lists.push({
-          key: 'favorites',
-          title: 'Favoritos',
-          description: 'Tus canciones marcadas como favoritas en la biblioteca local.',
-          items: favoritesRes.data.items.map(mapTrackToCurated),
-          meta: { count: favoritesRes.data.items.length },
+          key: 'discovery',
+          title: 'Descubrimiento',
+          description: 'Canciones que no has escuchado recientemente de tu biblioteca.',
+          items: discoveryRes.data.items,
+          meta: { count: discoveryRes.data.items.length },
+        });
+      }
+
+      if (mostPlayedRes.data?.items?.length > 0) {
+        lists.push({
+          key: 'most-played',
+          title: 'Más reproducidas',
+          description: 'Tus canciones más escuchadas de todos los tiempos.',
+          items: mostPlayedRes.data.items,
+          meta: { count: mostPlayedRes.data.items.length },
+        });
+      }
+
+      if (genreSuggestionsRes.data?.items?.length > 0) {
+        lists.push({
+          key: 'genre-suggestions',
+          title: 'Géneros parecidos',
+          description: 'Tracks de géneros vinculados a tus artistas favoritos.',
+          items: genreSuggestionsRes.data.items,
+          meta: { count: genreSuggestionsRes.data.items.length },
         });
       }
 

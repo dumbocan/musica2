@@ -428,4 +428,59 @@ Antes de empezar cada fase:
 
 ---
 
+## TODO List - Futuras Mejoras (Post-Refactor)
+
+### 🎵 Listas Inteligentes Avanzadas (Recuperar y Ampliar)
+
+**Prioridad: ALTA** - Recuperar funcionalidad perdida de `lists.py`
+
+#### Listas a Recuperar:
+- [ ] `top-last-year` - Mejores canciones del último año según reproducciones
+- [ ] `genre-suggestions` - Tracks de géneros similares a favoritos
+- [ ] `collaborations` - Pistas marcadas como colaboraciones/feats
+- [ ] `related-artists` - Artistas afines a tus favoritos
+- [ ] `top-artist` - Top canciones de artista específico
+- [ ] `discography` - Discografía completa de artista
+- [ ] `library-local` - Selección aleatoria de biblioteca
+
+#### Nuevas Listas Inteligentes:
+- [ ] `discovery-mix` - Canciones que no has escuchado de artistas que te gustan
+- [ ] `random-mix` - 50 canciones aleatorias de toda tu biblioteca
+- [ ] `genre-playlist-{genre}` - Playlists automáticas por género (rock, hip-hop, etc.)
+- [ ] `mood-playlist-{mood}` - Playlists por mood (energía, relajación, tristeza)
+- [ ] `recently-added` - Canciones añadidas recientemente
+- [ ] `most-played` - Tus canciones más reproducidas
+- [ ] `never-played` - Canciones que nunca has escuchado
+
+### 📥 Importación de Playlists
+
+**Prioridad: MEDIA** - Después de completar el refactor
+
+- [ ] Importar playlists de Spotify por URL
+- [ ] Importar playlists de Spotify por ID
+- [ ] Sincronización bidireccional (opcional)
+- [ ] Resolver tracks de Spotify a tu biblioteca local
+- [ ] Manejar tracks no encontrados (añadir a "wishlist")
+
+### 🤖 Features de IA
+
+**Prioridad: BAJA** - Futuro
+
+- [ ] Generar playlists por mood con IA (Ollama)
+- [ ] Recomendaciones personalizadas basadas en patrones de escucha
+- [ ] Auto-tagging de canciones por género/mood
+- [ ] Predicción de canciones que te gustarán
+
+### 📊 Estadísticas Avanzadas
+
+**Prioridad: BAJA**
+
+- [ ] Dashboard de estadísticas personales
+- [ ] Tiempo total de escucha
+- [ ] Artistas más escuchados por período
+- [ ] Evolución de gustos musicales
+- [ ] Comparativa año vs año
+
+---
+
 **Fin del documento**

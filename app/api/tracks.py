@@ -40,6 +40,7 @@ from ..services.billboard import (
     normalize_artist_name,
     normalize_track_title,
 )
+from ..services.smart_lists import SmartListsService
 from sqlmodel import select
 
 logger = logging.getLogger(__name__)
@@ -650,14 +651,58 @@ def get_tracks_overview(
             "filtered_total": int(favorite_total or 0),
         }
 
-    # Handle new list type filters
-    if list_type or filter in {"top-year", "downloaded", "favorites-with-link"}:
+    # Handle new list type filters (including smart curated lists)
+    smart_list_filters = {
+        "top-year", "downloaded", "favorites-with-link", "genre-suggestions",
+        "related-artists", "collaborations", "discovery", "most-played",
+        "never-played", "recently-added"
+    }
+    if list_type or (filter and filter in smart_list_filters):
         if not user_id:
             raise HTTPException(status_code=401, detail="User not authenticated for curated lists")
-        
+
         # Map filter to list_type if not specified
         effective_list_type = list_type or filter
-        
+
+        # Use SmartListsService for smart curated lists
+        smart_lists_types = {
+            "top-year", "genre-suggestions", "related-artists", "collaborations",
+            "discovery", "most-played", "never-played", "recently-added"
+        }
+
+        if effective_list_type in smart_lists_types:
+            with get_session() as session:
+                service = SmartListsService(session)
+
+                if effective_list_type == "top-year":
+                    items = service.get_top_tracks_last_year(user_id, limit)
+                elif effective_list_type == "genre-suggestions":
+                    items = service.get_genre_suggestions(user_id, limit)
+                elif effective_list_type == "related-artists":
+                    items = service.get_related_artists_tracks(user_id, limit)
+                elif effective_list_type == "collaborations":
+                    items = service.get_collaborations(user_id, limit)
+                elif effective_list_type == "discovery":
+                    items = service.get_random_discovery(user_id, limit)
+                elif effective_list_type == "most-played":
+                    items = service.get_most_played(user_id, limit)
+                elif effective_list_type == "never-played":
+                    items = service.get_never_played(user_id, limit)
+                elif effective_list_type == "recently-added":
+                    items = service.get_recently_added(limit)
+                else:
+                    items = []
+
+                return {
+                    "items": items,
+                    "offset": offset,
+                    "limit": limit,
+                    "has_more": False,
+                    "next_after": None,
+                    "filtered_total": len(items),
+                }
+
+        # Handle basic list types (legacy support)
         with get_session() as session:
             if effective_list_type == "downloaded":
                 # Tracks with local file
@@ -718,14 +763,14 @@ def get_tracks_overview(
                     .where(UserFavorite.target_type == FavoriteTargetType.TRACK)
                     .order_by(desc(UserFavorite.created_at))
                 )
-            
+
             if hidden_exists is not None:
                 base_query = base_query.where(~hidden_exists)
-            
+
             # Handle artist_id filter (discography)
             if artist_id:
                 base_query = base_query.where(Artist.id == artist_id)
-            
+
             # Handle sorting
             if sort == "plays":
                 base_query = base_query.order_by(desc(Track.play_count))
@@ -735,12 +780,12 @@ def get_tracks_overview(
                 base_query = base_query.order_by(desc(Track.last_accessed_at))
             elif sort == "added":
                 base_query = base_query.order_by(desc(Track.created_at))
-            
+
             if after_id is not None:
                 base_query = base_query.where(Track.id > after_id)
             else:
                 base_query = base_query.offset(offset)
-            
+
             rows = session.exec(base_query.limit(limit + 1)).all()
             total_query = select(func.count(Track.id)).select_from(Track)
             if list_type == "downloaded":
@@ -762,50 +807,50 @@ def get_tracks_overview(
                     UserFavorite.user_id == user_id,
                     UserFavorite.target_type == FavoriteTargetType.TRACK
                 )
-            
+
             if hidden_exists is not None:
                 total_query = total_query.where(~hidden_exists)
-            
+
             filtered_total = session.exec(total_query).one()
-        
+
         raw_rows = rows
         has_more = len(raw_rows) > limit
         track_rows = raw_rows[:limit]
         track_ids = [track.id for track, _, _ in track_rows]
         spotify_ids = [track.spotify_id for track, _, _ in track_rows if track.spotify_id]
-        
+
         downloads = []
         if spotify_ids:
             with get_session() as session:
                 downloads = session.exec(
                     select(YouTubeDownload).where(YouTubeDownload.spotify_track_id.in_(spotify_ids))
                 ).all()
-        
+
         download_map = _select_best_downloads(downloads)
-        
+
         items = []
         for row in track_rows:
             if effective_list_type == "top-year":
                 track, artist, album = row[0], row[1], row[2]
             else:
                 track, artist, album = row
-            
+
             download = download_map.get(track.spotify_id) if track.spotify_id else None
             youtube_video_id = (download.youtube_video_id or None) if download else None
             youtube_status = download.download_status if download else None
             youtube_url = f"https://www.youtube.com/watch?v={youtube_video_id}" if youtube_video_id else None
             file_path = download.download_path if download else None
-            
+
             if file_path:
                 file_exists = FsPath(file_path).exists() if verify_files else True
             else:
                 file_exists = False
-            
+
             if file_exists:
                 youtube_status = "completed"
             elif youtube_video_id and not youtube_status:
                 youtube_status = "link_found"
-            
+
             items.append({
                 "track_id": track.id,
                 "track_name": track.name,
@@ -829,7 +874,7 @@ def get_tracks_overview(
                 "chart_weeks_top5": 0,
                 "chart_weeks_top10": 0,
             })
-        
+
         next_after = track_rows[-1][0].id if track_rows else after_id
         return {
             "items": items,
