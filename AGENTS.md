@@ -289,6 +289,94 @@ Si el código queda en estado inservible, consultar commit `86d90cc` (chore: sna
    - Missing imports cause F821 errors that flake8 will catch
 
 6. **When in doubt, ask:**
-   - "Do you want me to modify X?"
-   - "Should I change this behavior?"
-   - "I'm not sure about changing this code - can you confirm?"
+    - "Do you want me to modify X?"
+    - "Should I change this behavior?"
+    - "I'm not sure about changing this code - can you confirm?"
+
+---
+
+## Curated Lists Cache System (SAGRADO - Feb 2026)
+
+### Implementation Summary
+Implemented a backend-cached system for curated/smart playlists to serve pre-computed lists instantly without waiting for database queries on every page load.
+
+**New Backend Components:**
+- `app/services/lists_cache.py` - In-memory cache service with TTL (5 minutes)
+- `app/api/lists.py` - FastAPI router with cached endpoints
+- `app/services/smart_lists.py` - Smart list generation logic
+
+**New API Endpoints:**
+```
+GET /lists/curated?user_id=1                    # Get all cached lists
+GET /lists/curated/{list_type}?user_id=1        # Get specific list
+POST /lists/curated/refresh                     # Force regeneration
+GET /lists/curated/status                       # Cache monitoring
+GET /lists/overview                             # Legacy compatibility
+```
+
+**Supported List Types (50 tracks each):**
+- `favorites-with-link` - Favorite tracks with valid YouTube video IDs (11 chars)
+- `downloaded` - Tracks with local files available
+- `discovery` - Random tracks not recently played
+- `top-year` - Top tracks from last 365 days based on play history
+- `most-played` - Most played tracks of all time
+- `genre-suggestions` - Tracks from genres matching user's favorite artists
+
+**Key Technical Details:**
+- Lists are generated once and cached for 5 minutes (TTL configurable)
+- Thread-safe implementation using locks
+- YouTube video IDs validated: must be exactly 11 characters `[A-Za-z0-9_-]{11}`
+- Flat format for basic lists (artist_name, album_name) vs nested format for smart lists (artists[], album{})
+- Frontend maps both formats consistently in `mapCachedTrackToCurated()`
+
+**Frontend Integration:**
+- PlaylistsPage uses `getCachedLists()` for instant loading
+- "Actualizar listas" button triggers regeneration
+- Shows last updated timestamp
+- 50 tracks per list (increased from 12)
+- Scrollable track lists with artist names and YouTube link status
+
+### Policy (SAGRADO - Never Change Without Explicit Permission)
+
+1. **Cached Lists Are Backend-Resident**
+   - Lists MUST be generated in backend and cached, not computed on frontend
+   - Maximum response time: < 200ms for cached hits
+   - User must not wait for database queries when navigating to Playlists page
+
+2. **YouTube ID Validation (Critical)**
+   - Only video IDs with exactly 11 characters are considered valid
+   - Invalid/empty IDs must NOT be shown as "reproducir" in UI
+   - Validation regex: `^[A-Za-z0-9_-]{11}$`
+   - This affects `favorites-with-link` list accuracy
+
+3. **Dual Format Support (Critical)**
+   - Frontend MUST handle both formats:
+     - Flat: `{artist_name, album_name, artist_spotify_id...}` from lists_cache
+     - Nested: `{artists: [{name...}], album: {name...}}` from smart_lists
+   - `mapCachedTrackToCurated()` function handles both consistently
+   - Never remove support for either format without migration
+
+4. **Cache Invalidation Rules**
+   - TTL: 5 minutes default
+   - Lists auto-refresh in background when expired
+   - Manual refresh available via "Actualizar listas" button
+   - Cache status endpoint for monitoring
+
+5. **Data Consistency**
+   - Track counts in meta: `count` (displayed) vs `total_available` (in cache)
+   - `is_cached` flag indicates if response came from cache or fresh generation
+   - All lists show real artist names, never "Artista desconocido" for valid data
+
+6. **No Regressions Allowed**
+   - Lists must load instantly (< 1 second) after first generation
+   - Artist names must display correctly in ALL list types
+   - YouTube "reproducir" links must only show for valid video IDs
+   - Navigation to Playlists page must never trigger loading spinners after initial load
+
+### Files Involved (Do Not Modify Without Permission)
+- `app/services/lists_cache.py` - Cache implementation
+- `app/api/lists.py` - API endpoints
+- `app/services/smart_lists.py` - Smart list generation
+- `frontend/src/pages/PlaylistsPage.tsx` - List display
+- `frontend/src/lib/api.ts` - API client methods
+- `app/main.py` - Router registration

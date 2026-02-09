@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Loader2, Play, Plus, Radio, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { Loader2, Play, Plus, Radio, Trash2, RefreshCw } from 'lucide-react';
 import { API_BASE_URL, audio2Api } from '@/lib/api';
 import { normalizeImageUrl } from '@/lib/images';
 import { usePlayerStore } from '@/store/usePlayerStore';
 import { usePlaylistTrackRemoval } from '@/hooks/usePlaylistTrackRemoval';
-import type { CuratedTrackItem, ListsOverviewResponse, Playlist as PlaylistType, PlaylistSection } from '@/types/api';
+import type { CuratedTrackItem, Playlist as PlaylistType, PlaylistSection } from '@/types/api';
 import type { PlayerQueueItem } from '@/store/usePlayerStore';
 
 type LoadState = 'idle' | 'loading' | 'error';
@@ -15,13 +15,82 @@ const CARD_THEMES = [
   'from-pink-200/25 via-fuchsia-200/10 to-violet-300/25',
 ];
 
+const LIST_TITLES: Record<string, string> = {
+  'favorites-with-link': 'Favoritos con enlace',
+  'downloaded': 'Música descargada',
+  'discovery': 'Descubrimiento',
+  'top-year': 'Mejores del último año',
+  'most-played': 'Más reproducidas',
+  'genre-suggestions': 'Géneros parecidos',
+};
+
+const LIST_DESCRIPTIONS: Record<string, string> = {
+  'favorites-with-link': 'Tus canciones favoritas que ya tienen enlace de YouTube listo para reproducir.',
+  'downloaded': 'Canciones con archivo local disponible en tu biblioteca.',
+  'discovery': 'Canciones que no has escuchado recientemente de tu biblioteca.',
+  'top-year': 'Ranking personal según tus reproducciones en los últimos 365 días.',
+  'most-played': 'Tus canciones más escuchadas de todos los tiempos.',
+  'genre-suggestions': 'Tracks de géneros vinculados a tus artistas favoritos.',
+};
+
+// Map cached list format to CuratedTrackItem
+// Handles both flat format (from lists_cache) and nested format (from smart_lists)
+const mapCachedTrackToCurated = (track: any): CuratedTrackItem => {
+  // Handle nested artists array format (from smart_lists)
+  if (track.artists && Array.isArray(track.artists) && track.artists.length > 0) {
+    return {
+      id: track.id,
+      spotify_id: track.spotify_id,
+      name: track.name,
+      duration_ms: track.duration_ms,
+      popularity: track.popularity,
+      is_favorite: track.is_favorite || false,
+      download_status: track.download_status,
+      download_path: track.download_path,
+      videoId: track.videoId,
+      image_url: track.image_url,
+      album: track.album || null,
+      artists: track.artists,
+    };
+  }
+  
+  // Handle flat format (from lists_cache)
+  return {
+    id: track.id,
+    spotify_id: track.spotify_id,
+    name: track.name,
+    duration_ms: track.duration_ms,
+    popularity: track.popularity,
+    is_favorite: track.is_favorite || false,
+    download_status: track.download_status,
+    download_path: track.download_path,
+    videoId: track.videoId,
+    image_url: track.image_url,
+    album: track.album_name ? {
+      id: track.id,
+      spotify_id: track.album_spotify_id,
+      name: track.album_name,
+      release_date: ''
+    } : null,
+    artists: track.artist_name ? [{
+      id: track.id,
+      name: track.artist_name,
+      spotify_id: track.artist_spotify_id
+    }] : [],
+  };
+};
+
 export function PlaylistsPage() {
   const [sections, setSections] = useState<PlaylistSection[]>([]);
   const [loadState, setLoadState] = useState<LoadState>('loading');
-  const [topGenres, setTopGenres] = useState<string[]>([]);
-  const [anchorArtist, setAnchorArtist] = useState<ListsOverviewResponse['anchor_artist']>(null);
-  const [artistQuery, setArtistQuery] = useState('');
-  const [appliedArtist, setAppliedArtist] = useState('');
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  
+  // Filters
+  const [selectedGenre, setSelectedGenre] = useState<string>('');
+  const [selectedArtist, setSelectedArtist] = useState<string>('');
+  const [availableGenres] = useState<string[]>([]);
+  const [availableArtists] = useState<Array<{id: number, name: string}>>([]);
 
   // User playlists state
   const [userPlaylists, setUserPlaylists] = useState<PlaylistType[]>([]);
@@ -40,162 +109,73 @@ export function PlaylistsPage() {
   const setCurrentIndex = usePlayerStore((state) => state.setCurrentIndex);
   const setStatusMessage = usePlayerStore((state) => state.setStatusMessage);
   const playByVideoId = usePlayerStore((state) => state.playByVideoId);
-  const removeFromQueue = usePlayerStore((state) => state.removeFromQueue);
 
-  // Hook para eliminar tracks de playlists
   const { removeTrackFromPlaylist } = usePlaylistTrackRemoval({
     onSuccess: (message) => setStatusMessage(message),
     onError: (message) => setStatusMessage(message),
   });
 
-  // Fetch curated lists using unified tracks endpoint with smart lists
-  // Sequential loading to prevent backend overload
-  const fetchLists = useCallback(async (artistName?: string) => {
+  // Fetch curated lists from cache
+  const fetchLists = useCallback(async (forceRefresh = false) => {
     setLoadState('loading');
-    const lists = [];
-
     try {
-      // Map tracks/overview format to CuratedTrackItem format
-      const mapTrackToCurated = (track: any): CuratedTrackItem => ({
-        id: track.track_id,
-        spotify_id: track.spotify_id,
-        name: track.name,
-        duration_ms: track.duration_ms,
-        popularity: track.popularity,
-        is_favorite: track.is_favorite || false,
-        download_status: track.download_status,
-        download_path: track.download_path,
-        videoId: track.videoId,
-        album: track.album || null,
-        artists: track.artists || [],
+      const response = await audio2Api.getCachedLists({ 
+        user_id: 1,
+        force_refresh: forceRefresh 
       });
-
-      // Load lists sequentially with individual error handling
-      // This prevents one slow query from blocking everything
-
-      // 1. Quick lists first (favorites with link)
-      try {
-        const favoritesWithLinkRes = await audio2Api.getTracksOverview({ 
-          list_type: 'favorites-with-link', 
-          limit: 12 
-        });
-        if (favoritesWithLinkRes.data?.items?.length > 0) {
+      
+      if (response.data?.lists) {
+        const lists: PlaylistSection[] = [];
+        let latestUpdate: Date | null = null;
+        
+        Object.entries(response.data.lists).forEach(([key, listData]: [string, any]) => {
+          const items = (listData.items || []).map(mapCachedTrackToCurated);
+          
           lists.push({
-            key: 'favorites-with-link',
-            title: 'Favoritos con enlace',
-            description: 'Tus canciones favoritas que ya tienen enlace de YouTube listo para reproducir.',
-            items: favoritesWithLinkRes.data.items.map(mapTrackToCurated),
-            meta: { count: favoritesWithLinkRes.data.items.length },
+            key,
+            title: LIST_TITLES[key] || listData.title,
+            description: LIST_DESCRIPTIONS[key] || listData.description,
+            items,
+            meta: { 
+              count: items.length,
+              total_available: listData.total,
+              is_cached: listData.is_cached 
+            },
           });
-        }
-      } catch (e) {
-        console.warn('Failed to load favorites with link:', e);
-      }
-
-      // 2. Downloaded tracks
-      try {
-        const downloadedRes = await audio2Api.getTracksOverview({ 
-          list_type: 'downloaded', 
-          limit: 12 
+          
+          // Track latest update time
+          if (listData.last_updated) {
+            const updateTime = new Date(listData.last_updated);
+            if (!latestUpdate || updateTime > latestUpdate) {
+              latestUpdate = updateTime;
+            }
+          }
         });
-        if (downloadedRes.data?.items?.length > 0) {
-          lists.push({
-            key: 'downloaded-local',
-            title: 'Música descargada',
-            description: 'Canciones con archivo local disponible en tu biblioteca.',
-            items: downloadedRes.data.items.map(mapTrackToCurated),
-            meta: { count: downloadedRes.data.items.length, note: 'Reproducción local' },
-          });
-        }
-      } catch (e) {
-        console.warn('Failed to load downloaded tracks:', e);
+        
+        setSections(lists);
+        setLastUpdated(latestUpdate);
       }
-
-      // 3. Discovery (random unplayed)
-      try {
-        const discoveryRes = await audio2Api.getTracksOverview({ 
-          list_type: 'discovery', 
-          limit: 12 
-        });
-        if (discoveryRes.data?.items?.length > 0) {
-          lists.push({
-            key: 'discovery',
-            title: 'Descubrimiento',
-            description: 'Canciones que no has escuchado recientemente de tu biblioteca.',
-            items: discoveryRes.data.items,
-            meta: { count: discoveryRes.data.items.length },
-          });
-        }
-      } catch (e) {
-        console.warn('Failed to load discovery:', e);
-      }
-
-      // 4. Top year (can be slow - lower timeout)
-      try {
-        const topYearRes = await audio2Api.getTracksOverview({ 
-          list_type: 'top-year', 
-          limit: 12 
-        });
-        if (topYearRes.data?.items?.length > 0) {
-          lists.push({
-            key: 'top-last-year',
-            title: 'Mejores del último año',
-            description: 'Ranking personal según tus reproducciones, ratings y recencia en los últimos 365 días.',
-            items: topYearRes.data.items,
-            meta: { count: topYearRes.data.items.length, note: 'DB-first personalizado' },
-          });
-        }
-      } catch (e) {
-        console.warn('Failed to load top year:', e);
-      }
-
-      // 5. Most played (can be slow)
-      try {
-        const mostPlayedRes = await audio2Api.getTracksOverview({ 
-          list_type: 'most-played', 
-          limit: 12 
-        });
-        if (mostPlayedRes.data?.items?.length > 0) {
-          lists.push({
-            key: 'most-played',
-            title: 'Más reproducidas',
-            description: 'Tus canciones más escuchadas de todos los tiempos.',
-            items: mostPlayedRes.data.items,
-            meta: { count: mostPlayedRes.data.items.length },
-          });
-        }
-      } catch (e) {
-        console.warn('Failed to load most played:', e);
-      }
-
-      // 6. Genre suggestions (can be slow)
-      try {
-        const genreSuggestionsRes = await audio2Api.getTracksOverview({ 
-          list_type: 'genre-suggestions', 
-          limit: 12 
-        });
-        if (genreSuggestionsRes.data?.items?.length > 0) {
-          lists.push({
-            key: 'genre-suggestions',
-            title: 'Géneros parecidos',
-            description: 'Tracks de géneros vinculados a tus artistas favoritos.',
-            items: genreSuggestionsRes.data.items,
-            meta: { count: genreSuggestionsRes.data.items.length },
-          });
-        }
-      } catch (e) {
-        console.warn('Failed to load genre suggestions:', e);
-      }
-
-      setSections(lists);
-      setTopGenres([]);
-      setAnchorArtist(null);
+      
       setLoadState('idle');
     } catch (error) {
-      console.error('Error fetching lists:', error);
+      console.error('Error fetching cached lists:', error);
       setLoadState('error');
     }
   }, []);
+
+  // Refresh lists
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      await audio2Api.refreshCachedLists();
+      await fetchLists(true);
+      setStatusMessage('Listas actualizadas');
+    } catch (error) {
+      setStatusMessage('Error al actualizar listas');
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [fetchLists, setStatusMessage]);
 
   useEffect(() => {
     fetchLists();
@@ -221,42 +201,6 @@ export function PlaylistsPage() {
     fetchUserPlaylists();
   }, [fetchUserPlaylists]);
 
-  // Escuchar cuando se elimina una playlist desde otros componentes (PlayerFooter)
-  useEffect(() => {
-    const handlePlaylistDeleted = (event: CustomEvent) => {
-      const { playlistId } = event.detail;
-      
-      // Eliminar de la lista de playlists
-      setUserPlaylists((prev) => prev.filter((p) => p.id !== playlistId));
-      
-      // Si estaba expandida, limpiar
-      if (expandedPlaylist === playlistId) {
-        setExpandedPlaylist(null);
-        setPlaylistTracks([]);
-      }
-    };
-
-    window.addEventListener('playlist-deleted', handlePlaylistDeleted as EventListener);
-    
-    // Escuchar cuando se crea una playlist desde otros componentes
-    const handlePlaylistCreated = (event: CustomEvent) => {
-      const { playlist } = event.detail;
-      if (playlist) {
-        setUserPlaylists((prev) => {
-          // Verificar si ya existe para no duplicar
-          if (prev.some((p) => p.id === playlist.id)) return prev;
-          return [playlist, ...prev];
-        });
-      }
-    };
-    window.addEventListener('playlist-created', handlePlaylistCreated as EventListener);
-    
-    return () => {
-      window.removeEventListener('playlist-deleted', handlePlaylistDeleted as EventListener);
-      window.removeEventListener('playlist-created', handlePlaylistCreated as EventListener);
-    };
-  }, [expandedPlaylist]);
-
   // Handle create playlist
   const handleCreatePlaylist = useCallback(async () => {
     const name = newPlaylistName.trim();
@@ -281,27 +225,18 @@ export function PlaylistsPage() {
     if (!confirm('¿Eliminar esta lista?')) return;
     setDeletingPlaylistId(playlistId);
     try {
-      // 1. Llamar a la API para eliminar la playlist de la BD
       await audio2Api.deletePlaylist(playlistId);
-      
-      // 2. Actualizar UI - quitar de la lista local
       setUserPlaylists((prev) => prev.filter((p) => p.id !== playlistId));
-      
-      // 3. Si estaba expandida, limpiar
       if (expandedPlaylist === playlistId) {
         setExpandedPlaylist(null);
         setPlaylistTracks([]);
       }
-      
-      // 4. Notificar a otros componentes (PlayerFooter) que la playlist fue eliminada
       window.dispatchEvent(new CustomEvent('playlist-deleted', { 
         detail: { playlistId } 
       }));
-      
       setStatusMessage('Lista eliminada correctamente');
     } catch (error: any) {
-      console.error('Error eliminando playlist:', error);
-      setStatusMessage('No se pudo eliminar la lista: ' + (error.message || 'Error desconocido'));
+      setStatusMessage('No se pudo eliminar la lista');
     } finally {
       setDeletingPlaylistId(null);
     }
@@ -339,13 +274,11 @@ export function PlaylistsPage() {
     };
   }, [expandedPlaylist]);
 
-  // Remove track from playlist (usa hook reutilizable)
+  // Remove track from playlist
   const handleRemoveTrack = useCallback(async (trackId: number) => {
     if (!expandedPlaylist) return;
     setRemovingTrackId(trackId);
-
     const result = await removeTrackFromPlaylist(expandedPlaylist, trackId);
-
     if (result.tracks) {
       setPlaylistTracks(
         result.tracks.map((item: any) => ({
@@ -355,36 +288,12 @@ export function PlaylistsPage() {
         }))
       );
     }
-
     setRemovingTrackId(null);
   }, [expandedPlaylist, removeTrackFromPlaylist]);
 
-  const handleApplyArtist = useCallback(() => {
-    const value = artistQuery.trim();
-    setAppliedArtist(value);
-    fetchLists(value);
-  }, [artistQuery, fetchLists]);
-
-  const handleClearArtist = useCallback(() => {
-    setArtistQuery('');
-    setAppliedArtist('');
-    fetchLists();
-  }, [fetchLists]);
-
-  const heroCopy = useMemo(() => {
-    if (anchorArtist?.name) {
-      return `Explora la discografía de ${anchorArtist.name} y listas relacionadas basadas en tus favoritos.`;
-    }
-    if (topGenres.length) {
-      return `Listas animadas por tus géneros preferidos: ${topGenres.join(', ')}.`;
-    }
-    return 'Playlists inteligentes generadas desde tu biblioteca local.';
-  }, [anchorArtist, topGenres]);
-
+  // Queue management
   const createQueueItem = useCallback((track: CuratedTrackItem): PlayerQueueItem | null => {
-    if (!track.videoId) {
-      return null;
-    }
+    if (!track.videoId) return null;
     const primaryArtist = track.artists?.[0];
     return {
       localTrackId: track.id,
@@ -397,121 +306,61 @@ export function PlaylistsPage() {
     };
   }, []);
 
-  const patchTrackVideoId = useCallback((sectionKey: string, trackId: number, videoId: string) => {
-    setSections((prev) =>
-      prev.map((section) =>
-        section.key !== sectionKey
-          ? section
-          : {
-              ...section,
-              items: section.items.map((item) => (item.id === trackId ? { ...item, videoId } : item)),
-            }
-      )
-    );
-  }, []);
-
-  const resolveYoutubeIfNeeded = useCallback(
-    async (sectionKey: string, track: CuratedTrackItem): Promise<CuratedTrackItem | null> => {
-      if (track.videoId) return track;
-      // DB-first policy: if we already have local file in DB, do not hit YouTube.
-      if (track.download_path) return null;
-      if (!track.spotify_id) return null;
-      try {
-        const response = await audio2Api.refreshYoutubeTrackLink(track.spotify_id, {
-          artist: track.artists?.[0]?.name,
-          track: track.name,
-          album: track.album?.name || undefined,
-        });
-        const videoId = response.data?.youtube_video_id;
-        if (!videoId) return null;
-        patchTrackVideoId(sectionKey, track.id, videoId);
-        return { ...track, videoId };
-      } catch {
-        return null;
-      }
-    },
-    [patchTrackVideoId]
-  );
-
-  const queueHandler = useCallback(
-    (item: PlayerQueueItem) => {
-      if (!item) {
-        setStatusMessage('Pista inválida');
-        return;
-      }
-      // DB-FIRST: Let playByVideoId handle missing videoId (it will search YouTube)
-      const currentQueue = usePlayerStore.getState().queue;
-      const idx = currentQueue.findIndex((entry) => entry.videoId === item.videoId);
-      if (idx >= 0) {
-        setCurrentIndex(idx);
-      }
-      setStatusMessage('');
-      void playByVideoId({
-        localTrackId: item.localTrackId,
-        spotifyTrackId: item.spotifyTrackId,
-        title: item.title,
-        artist: item.artist,
-        artistSpotifyId: item.artistSpotifyId,
-        videoId: item.videoId || '',
-        durationSec: item.durationMs ? Math.round(item.durationMs / 1000) : undefined,
-      });
-    },
-    [playByVideoId, setCurrentIndex, setStatusMessage]
-  );
-
   const applyQueue = useCallback(
-    async (sectionKey: string, tracks: CuratedTrackItem[]) => {
-      const resolved: CuratedTrackItem[] = [];
-      for (const track of tracks.slice(0, 12)) {
-        if (track.videoId) {
-          resolved.push(track);
-          continue;
-        }
-        const withLink = await resolveYoutubeIfNeeded(sectionKey, track);
-        if (withLink?.videoId) {
-          resolved.push(withLink);
-        }
-      }
-      const items = resolved.map(createQueueItem).filter((item): item is PlayerQueueItem => Boolean(item));
+    async (_sectionKey: string, tracks: CuratedTrackItem[]) => {
+      const items = tracks
+        .slice(0, 50)
+        .map(createQueueItem)
+        .filter((item): item is PlayerQueueItem => Boolean(item));
+      
       if (!items.length) {
-        setStatusMessage('Sin enlaces listos; solo se busco en YouTube para tracks sin archivo local');
+        setStatusMessage('Sin enlaces disponibles');
         return;
       }
+      
       setQueue(items, 0);
       setCurrentIndex(0);
-      setOnPlayTrack(queueHandler);
-      setStatusMessage('');
-      queueHandler(items[0]);
+      setOnPlayTrack((item: PlayerQueueItem) => {
+        if (!item) {
+          setStatusMessage('Pista inválida');
+          return;
+        }
+        setStatusMessage('');
+        void playByVideoId({
+          localTrackId: item.localTrackId,
+          spotifyTrackId: item.spotifyTrackId,
+          title: item.title,
+          artist: item.artist,
+          artistSpotifyId: item.artistSpotifyId,
+          videoId: item.videoId || '',
+          durationSec: item.durationMs ? Math.round(item.durationMs / 1000) : undefined,
+        });
+      });
+      
+      // Play first item
+      const first = items[0];
+      void playByVideoId({
+        localTrackId: first.localTrackId,
+        spotifyTrackId: first.spotifyTrackId,
+        title: first.title,
+        artist: first.artist,
+        artistSpotifyId: first.artistSpotifyId,
+        videoId: first.videoId || '',
+        durationSec: first.durationMs ? Math.round(first.durationMs / 1000) : undefined,
+      });
     },
-    [
-      createQueueItem,
-      queueHandler,
-      resolveYoutubeIfNeeded,
-      setCurrentIndex,
-      setOnPlayTrack,
-      setQueue,
-      setStatusMessage,
-    ]
+    [createQueueItem, playByVideoId, setCurrentIndex, setOnPlayTrack, setQueue, setStatusMessage]
   );
 
   const handleSingleTrackPlay = useCallback(
-    async (sectionKey: string, track: CuratedTrackItem) => {
-      if (track.videoId) {
-        await applyQueue(sectionKey, [track]);
+    async (track: CuratedTrackItem) => {
+      if (!track.videoId) {
+        setStatusMessage('Track sin enlace de YouTube');
         return;
       }
-      if (track.download_path) {
-        setStatusMessage('Archivo local en BD: no se consulta YouTube para esta cancion');
-        return;
-      }
-      const withLink = await resolveYoutubeIfNeeded(sectionKey, track);
-      if (!withLink?.videoId) {
-        setStatusMessage('No se encontro enlace en YouTube');
-        return;
-      }
-      await applyQueue(sectionKey, [withLink]);
+      await applyQueue('single', [track]);
     },
-    [applyQueue, resolveYoutubeIfNeeded, setStatusMessage]
+    [applyQueue, setStatusMessage]
   );
 
   const getTrackImage = useCallback((track?: CuratedTrackItem | null) => {
@@ -523,69 +372,71 @@ export function PlaylistsPage() {
     });
   }, []);
 
-  const renderStatus = () => {
-    if (loadState === 'loading') {
-      return (
-        <div className="flex items-center gap-3 text-sm text-muted-foreground">
-          <Loader2 className="h-5 w-5 animate-spin" />
-          Cargando listas curatoriales…
-        </div>
-      );
-    }
-    if (loadState === 'error') {
-      return (
-        <div className="rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
-          No pudimos obtener las listas. Intenta nuevamente más tarde.
-        </div>
-      );
-    }
-    if (loadState === 'idle' && !sections.length) {
-      return (
-        <div className="rounded-2xl border border-border/70 bg-panel-foreground/5 p-6 text-sm text-muted-foreground">
-          Aún no hay listas generadas para tu biblioteca. Marca favoritos o reproduce canciones para activar las sugerencias.
-        </div>
-      );
-    }
-    return null;
-  };
-
   return (
     <div className="space-y-8">
-      <header className="space-y-2">
-        <p className="text-sm font-semibold uppercase tracking-[0.3em] text-muted-foreground">Playlists</p>
-        <h1 className="text-3xl font-bold">Listas inteligentes</h1>
-        <p className="text-sm text-muted-foreground">{heroCopy}</p>
-        <div className="flex flex-wrap items-center gap-2 pt-2">
-          <input
-            type="text"
-            value={artistQuery}
-            onChange={(e) => setArtistQuery(e.target.value)}
-            placeholder="Artista para top personalizado (ej: Eminem)"
-            className="min-w-[280px] rounded-xl border border-border bg-background px-3 py-2 text-sm"
-          />
+      {/* Header with controls */}
+      <header className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.3em] text-muted-foreground">Playlists</p>
+            <h1 className="text-3xl font-bold">Listas inteligentes</h1>
+          </div>
           <button
             type="button"
-            onClick={handleApplyArtist}
-            className="rounded-xl border border-border bg-panel px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em]"
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+            className="inline-flex items-center gap-2 rounded-xl border border-border bg-panel px-4 py-2 text-sm font-semibold hover:bg-accent/10 disabled:opacity-50"
           >
-            Aplicar artista
+            <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+            {isRefreshing ? 'Actualizando...' : 'Actualizar listas'}
           </button>
-          <button
-            type="button"
-            onClick={handleClearArtist}
-            className="rounded-xl border border-border bg-background px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em]"
+        </div>
+        
+        <p className="text-sm text-muted-foreground">
+          {lastUpdated 
+            ? `Última actualización: ${lastUpdated.toLocaleString()}` 
+            : 'Listas generadas desde tu biblioteca local.'}
+        </p>
+
+        {/* Filters */}
+        <div className="flex flex-wrap items-center gap-3 pt-2">
+          <select
+            value={selectedGenre}
+            onChange={(e) => setSelectedGenre(e.target.value)}
+            className="min-w-[180px] rounded-xl border border-border bg-background px-3 py-2 text-sm"
           >
-            Limpiar
-          </button>
-          {appliedArtist && (
-            <span className="rounded-xl border border-border/70 bg-panel px-3 py-2 text-xs text-muted-foreground">
-              Top artista activo: {appliedArtist}
-            </span>
-          )}
+            <option value="">Todos los géneros</option>
+            {availableGenres.map((genre) => (
+              <option key={genre} value={genre}>{genre}</option>
+            ))}
+          </select>
+          
+          <select
+            value={selectedArtist}
+            onChange={(e) => setSelectedArtist(e.target.value)}
+            className="min-w-[180px] rounded-xl border border-border bg-background px-3 py-2 text-sm"
+          >
+            <option value="">Todos los artistas</option>
+            {availableArtists.map((artist) => (
+              <option key={artist.id} value={artist.id}>{artist.name}</option>
+            ))}
+          </select>
         </div>
       </header>
 
-      {renderStatus()}
+      {/* Loading/Error states */}
+      {loadState === 'loading' && (
+        <div className="flex items-center gap-3 text-sm text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin" />
+          Cargando listas curatoriales...
+        </div>
+      )}
+      
+      {loadState === 'error' && (
+        <div className="rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+          No pudimos obtener las listas. Intenta nuevamente más tarde.
+        </div>
+      )}
 
       {/* User Playlists Section */}
       <section>
@@ -604,7 +455,6 @@ export function PlaylistsPage() {
           </button>
         </div>
 
-        {/* Create Form */}
         {showCreateForm && (
           <div className="mb-4 rounded-xl border border-border bg-panel p-4">
             <div className="flex flex-wrap gap-3 items-end">
@@ -647,7 +497,6 @@ export function PlaylistsPage() {
           </div>
         )}
 
-        {/* Playlists Grid */}
         {userPlaylistsLoading ? (
           <div className="flex items-center gap-3 text-sm text-muted-foreground">
             <Loader2 className="h-5 w-5 animate-spin" />
@@ -693,7 +542,6 @@ export function PlaylistsPage() {
                   </button>
                 </div>
 
-                {/* Expanded Track List */}
                 {expandedPlaylist === playlist.id && (
                   <div className="border-t border-border bg-panel-foreground/30 p-4 max-h-64 overflow-auto">
                     {playlistTracksLoading ? (
@@ -741,11 +589,11 @@ export function PlaylistsPage() {
         )}
       </section>
 
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+      {/* Curated Lists Grid */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-3">
         {sections.map((section, sectionIndex) => (
           <section
             key={section.key}
-            id={section.key}
             className="overflow-hidden rounded-3xl border border-border/80 bg-panel shadow-sm"
           >
             <div
@@ -770,18 +618,12 @@ export function PlaylistsPage() {
                   {section.items.length} tracks
                 </div>
               </div>
-              {section.meta?.genres && (
-                <p className="text-xs uppercase tracking-[0.2em] text-foreground/70">
-                  {section.meta.genres.join(' · ')}
-                </p>
-              )}
-              {(() => {
-                const sectionImage = getTrackImage(section.items[0]);
-                return (
-                  <div className="mt-4 h-36 overflow-hidden rounded-2xl border border-white/30 bg-black/10">
-                    {sectionImage ? (
+              
+              {/* List image */}
+              <div className="mt-4 h-36 overflow-hidden rounded-2xl border border-white/30 bg-black/10">
+                {section.items[0]?.image_url ? (
                   <img
-                    src={sectionImage}
+                    src={getTrackImage(section.items[0])}
                     alt={section.title}
                     className="h-full w-full object-cover"
                     loading="lazy"
@@ -791,40 +633,44 @@ export function PlaylistsPage() {
                     <Radio className="h-6 w-6" />
                   </div>
                 )}
-                  </div>
-                );
-              })()}
+              </div>
             </div>
-            <ol className="space-y-2 p-4">
-              {section.items.map((track, index) => {
-                const primaryArtist = track.artists?.[0]?.name;
-                return (
-                  <li
-                    key={`${section.key}-${track.id ?? index}-${track.videoId ?? 'no-video'}`}
-                    className="flex items-center justify-between gap-3 rounded-2xl border border-border/70 bg-background/70 px-3 py-2 text-sm text-foreground"
-                  >
-                    <div className="flex min-w-0 items-center gap-3">
-                      <span className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                        {index + 1}
-                      </span>
-                      <div className="min-w-0">
-                        <button
-                          type="button"
-                          onClick={() => void handleSingleTrackPlay(section.key, track)}
-                          className="truncate text-left font-semibold text-accent underline-offset-2 hover:underline"
-                        >
-                          {track.name}
-                        </button>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {primaryArtist || 'Artista desconocido'}
-                        </p>
+            
+            {/* Track list - scrollable */}
+            <div className="max-h-[500px] overflow-y-auto">
+              <ol className="space-y-1 p-3">
+                {section.items.map((track, index) => {
+                  const primaryArtist = track.artists?.[0]?.name;
+                  return (
+                    <li
+                      key={`${section.key}-${track.id ?? index}-${track.videoId ?? 'no-video'}`}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-border/70 bg-background/70 px-3 py-2 text-sm text-foreground hover:bg-accent/5 transition"
+                    >
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground w-6">
+                          {index + 1}
+                        </span>
+                        <div className="min-w-0">
+                          <button
+                            type="button"
+                            onClick={() => void handleSingleTrackPlay(track)}
+                            className="truncate text-left font-semibold text-accent underline-offset-2 hover:underline"
+                          >
+                            {track.name}
+                          </button>
+                          <p className="truncate text-xs text-muted-foreground">
+                            {primaryArtist || 'Artista desconocido'}
+                          </p>
+                        </div>
                       </div>
-                    </div>
-                    <span className="text-xs text-muted-foreground">{track.videoId ? 'reproducir' : 'sin enlace'}</span>
-                  </li>
-                );
-              })}
-            </ol>
+                      <span className={`text-xs ${track.videoId ? 'text-green-600' : 'text-muted-foreground'}`}>
+                        {track.videoId ? 'reproducir' : 'sin enlace'}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ol>
+            </div>
           </section>
         ))}
       </div>

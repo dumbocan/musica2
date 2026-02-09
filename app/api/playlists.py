@@ -194,9 +194,9 @@ def remove_track_from_playlist_endpoint(
 ):
     """Remove track from playlist."""
     result = remove_track_from_playlist(playlist_id, track_id)
-    
+
     if not result["success"]:
         status_code = 404 if result.get("error") == "not_found" else 500
         raise HTTPException(status_code=status_code, detail=result.get("message", "Unknown error"))
-    
+
     return result

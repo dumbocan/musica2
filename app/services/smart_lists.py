@@ -86,8 +86,8 @@ def _track_to_dict(track: Track, artist: Artist | None, album: Album | None,
                    download: YouTubeDownload | None) -> dict:
     """Convert track to dictionary format for curated lists."""
     image_url = (
-        _extract_primary_image_url(album.images if album else None) or
-        _extract_primary_image_url(artist.images if artist else None)
+        _extract_primary_image_url(album.images if album else None)
+        or _extract_primary_image_url(artist.images if artist else None)
     )
 
     valid_video_id = None
@@ -145,7 +145,7 @@ class SmartListsService:
             .where(PlayHistory.played_at >= one_year_ago)
             .distinct()
         )
-        played_track_ids = [row[0] for row in self.session.exec(played_tracks_query).all()]
+        played_track_ids = self.session.exec(played_tracks_query).all()
 
         if not played_track_ids:
             return []
@@ -227,7 +227,7 @@ class SmartListsService:
             .where(UserFavorite.user_id == user_id)
             .where(UserFavorite.target_type == "ARTIST")
         )
-        favorite_artist_ids = [row[0] for row in self.session.exec(fav_query).all()]
+        favorite_artist_ids = self.session.exec(fav_query).all()
 
         if not favorite_artist_ids:
             return []
@@ -311,7 +311,7 @@ class SmartListsService:
             .where(PlayHistory.user_id == user_id)
             .where(PlayHistory.played_at >= datetime.now() - timedelta(days=30))
         )
-        recent_track_ids = [row[0] for row in self.session.exec(recent_query).all()]
+        recent_track_ids = self.session.exec(recent_query).all()
 
         # Get tracks excluding recent ones
         query = (
@@ -342,7 +342,7 @@ class SmartListsService:
             .where(PlayHistory.user_id == user_id)
             .distinct()
         )
-        played_track_ids = [row[0] for row in self.session.exec(played_tracks_query).all()]
+        played_track_ids = self.session.exec(played_tracks_query).all()
 
         if not played_track_ids:
             return []
@@ -366,7 +366,7 @@ class SmartListsService:
     def get_never_played(self, user_id: int, limit: int = 50) -> list[dict]:
         """Get tracks never played by user."""
         played_query = select(PlayHistory.track_id).where(PlayHistory.user_id == user_id)
-        played_ids = [row[0] for row in self.session.exec(played_query).all()]
+        played_ids = self.session.exec(played_query).all()
 
         query = (
             select(Track, Artist, Album)

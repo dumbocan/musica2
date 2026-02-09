@@ -231,12 +231,14 @@ export interface PlaylistSection {
   items: CuratedTrackItem[];
   meta?: {
     count?: number;
+    total_available?: number;
     genres?: string[];
     artist?: {
       name: string;
       spotify_id: string | null;
     };
     note?: string;
+    is_cached?: boolean;
   };
 }
 

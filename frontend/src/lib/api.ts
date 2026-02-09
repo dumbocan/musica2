@@ -137,17 +137,6 @@ export const audio2Api = {
 
   // Tracks
   getAllTracks: () => api.get('/tracks/'),
-  getTracksOverview: (params?: {
-    verify_files?: boolean;
-    offset?: number;
-    limit?: number;
-    include_summary?: boolean;
-    after_id?: number | null;
-    filter?: 'all' | 'favorites' | 'withLink' | 'noLink' | 'hasFile' | 'missingFile';
-    search?: string;
-    user_id?: number;
-  }) =>
-    api.get('/tracks/overview/', { params, timeout: 60000 }),
   resolveTracks: (spotifyTrackIds: string[]) =>
     api.post('/tracks/resolve', { spotify_track_ids: spotifyTrackIds }),
   saveTrackFromSpotify: (spotifyTrackId: string) =>
@@ -235,6 +224,11 @@ export const audio2Api = {
   // Legacy endpoint - will be deprecated
   getListsOverview: (params?: { limit_per_list?: number; artist_spotify_id?: string; artist_name?: string }) =>
     api.get('/lists/overview', { params, timeout: 60000 }),
+  // Cached curated lists - fast response
+  getCachedLists: (params?: { user_id?: number; list_type?: string; force_refresh?: boolean }) =>
+    api.get('/lists/curated', { params }),
+  refreshCachedLists: (params?: { list_type?: string; user_id?: number }) =>
+    api.post('/lists/curated/refresh', { params }),
 
   // Favorites
   addFavorite: (targetType: 'artist' | 'album' | 'track', targetId: number, userId: number) =>

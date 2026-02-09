@@ -147,7 +147,6 @@ export function TracksPage() {
           offset: 0,
           limit,
           include_summary: false,
-          user_id: effectiveTrackUserId ?? undefined,
           filter: isFiltered && filter !== 'all' ? filter : undefined,
           search: isFiltered ? activeSearch : undefined,
         });
@@ -184,7 +183,6 @@ export function TracksPage() {
           offset: 0,
           limit: 1,
           include_summary: true,
-          user_id: effectiveTrackUserId ?? undefined,
         });
         if (cancelled) return;
         setSummary(response.data.summary || null);
@@ -205,13 +203,12 @@ export function TracksPage() {
     let cancelled = false;
     const loadFavoriteTotal = async () => {
       try {
-        const response = await audio2Api.getTracksOverview({
-          verify_files: false,
-          limit: 1,
-          include_summary: false,
-          user_id: effectiveTrackUserId,
-          filter: 'favorites',
-        });
+          const response = await audio2Api.getTracksOverview({
+            verify_files: false,
+            limit: 1,
+            include_summary: false,
+            filter: 'favorites',
+          });
         if (cancelled) return;
         if (typeof response.data.filtered_total === 'number') {
           setFavoriteTotal(response.data.filtered_total);
@@ -257,7 +254,6 @@ export function TracksPage() {
         verify_files: false,
         limit,
         include_summary: false,
-        user_id: effectiveTrackUserId ?? undefined,
         after_id: afterId,
         filter: isFiltered && filter !== 'all' ? filter : undefined,
         search: isFiltered ? activeSearch : undefined,

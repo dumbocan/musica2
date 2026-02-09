@@ -9,6 +9,7 @@ interface UsePlaylistTrackRemovalOptions {
 interface RemoveTrackResult {
   success: boolean;
   message: string;
+  tracks?: any[];
 }
 
 /**

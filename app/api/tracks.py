@@ -48,10 +48,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tracks", tags=["tracks"])
 
 _SPOTIFY_ID_RE = re.compile(r"^[A-Za-z0-9]{22}$")
+_YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
 
 def _is_spotify_id(value: str) -> bool:
     return bool(_SPOTIFY_ID_RE.fullmatch(value))
+
+
+def _is_valid_youtube_id(value: str | None) -> bool:
+    """Validate YouTube video ID (must be 11 characters)."""
+    if not value:
+        return False
+    return bool(_YOUTUBE_ID_RE.fullmatch(value))
 
 
 def _hidden_artist_exists(user_id: int | None):
@@ -720,7 +728,7 @@ def get_tracks_overview(
                     .order_by(desc(Track.popularity))
                 )
             elif effective_list_type == "favorites-with-link":
-                # Favorite tracks with YouTube link
+                # Favorite tracks with valid YouTube link (11 characters)
                 base_query = (
                     select(Track, Artist, Album)
                     .join(UserFavorite, UserFavorite.track_id == Track.id)
@@ -730,6 +738,7 @@ def get_tracks_overview(
                     .where(UserFavorite.user_id == user_id)
                     .where(UserFavorite.target_type == FavoriteTargetType.TRACK)
                     .where(YouTubeDownload.youtube_video_id.is_not(None))
+                    .where(func.length(YouTubeDownload.youtube_video_id) == 11)
                     .order_by(desc(Track.popularity))
                 )
             elif effective_list_type == "top-year":
@@ -800,7 +809,8 @@ def get_tracks_overview(
                     UserFavorite.user_id == user_id,
                     UserFavorite.target_type == FavoriteTargetType.TRACK
                 ).outerjoin(YouTubeDownload, YouTubeDownload.spotify_track_id == Track.spotify_id).where(
-                    YouTubeDownload.youtube_video_id.is_not(None)
+                    YouTubeDownload.youtube_video_id.is_not(None),
+                    func.length(YouTubeDownload.youtube_video_id) == 11
                 )
             elif list_type == "favorites" or not list_type:
                 total_query = total_query.join(UserFavorite, UserFavorite.track_id == Track.id).where(
