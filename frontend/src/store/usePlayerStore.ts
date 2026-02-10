@@ -110,8 +110,8 @@ const getFormats = (audio: HTMLAudioElement | null) => {
   const canM4a = audio.canPlayType('audio/mp4');
   const canWebm = audio.canPlayType('audio/webm');
   return {
-    fileFormat: canMp3 ? 'mp3' : 'm4a',
-    streamFormat: canM4a ? 'm4a' : canWebm ? 'webm' : 'm4a',
+    fileFormat: canMp3 ? 'mp3' : (canM4a ? 'm4a' : 'webm'),
+    streamFormat: canM4a ? 'm4a' : (canWebm ? 'webm' : 'm4a'),
   };
 };
 
@@ -369,8 +369,8 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
         return { ok: false };
       }
 
-      // Check for local download first
-      const candidateFormats = Array.from(new Set([fileFormat, 'm4a', 'mp3', 'webm']));
+      // Check for local download first - prioritize MP3 for better compatibility
+      const candidateFormats = Array.from(new Set(['mp3', fileFormat, 'm4a', 'webm']));
       let localFormat: string | null = null;
       for (const fmt of candidateFormats) {
         const status = await audio2Api
