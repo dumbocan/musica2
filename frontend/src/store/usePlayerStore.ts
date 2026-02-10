@@ -438,9 +438,16 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
       };
       void recordBackendPlay();
       return { ok: true, mode: get().audioSourceMode };
-    } catch {
+    } catch (error: any) {
       audio.src = '';
-      set({ statusMessage: 'No se pudo reproducir el audio', audioDownloadStatus: 'error' });
+      // Check if it's a YouTube streaming error (502 = blocked by YouTube)
+      let errorMessage = 'No se pudo reproducir el audio';
+      if (error?.response?.status === 502 || error?.status === 502) {
+        errorMessage = 'YouTube bloqueó el streaming. Intenta descargar la canción primero o usa el modo offline.';
+      } else if (nextAudioMode === 'stream') {
+        errorMessage = 'Error de streaming. YouTube puede estar bloqueando la reproducción.';
+      }
+      set({ statusMessage: errorMessage, audioDownloadStatus: 'error' });
       return { ok: false };
     }
   },

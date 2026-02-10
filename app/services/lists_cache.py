@@ -110,7 +110,10 @@ def _generate_list(list_type: str, user_id: int = 1, limit: int = 50) -> list[di
             return results
 
         elif list_type == "downloaded":
-            # Get downloaded tracks
+            # Get tracks with ACTUAL files on disk (verified)
+            from pathlib import Path
+            from sqlalchemy import func
+
             query = (
                 select(Track, Artist, Album, YouTubeDownload)
                 .join(Artist, Artist.id == Track.artist_id)
@@ -120,10 +123,32 @@ def _generate_list(list_type: str, user_id: int = 1, limit: int = 50) -> list[di
                     (YouTubeDownload.download_path.is_not(None))
                     | (Track.download_path.is_not(None))
                 )
-                .order_by(Track.popularity.desc())
+                .order_by(func.random())  # Random order for variety
             )
-            rows = session.exec(query.limit(limit)).all()
-            return [_track_to_dict(track, artist, album, download) for track, artist, album, download in rows]
+            rows = session.exec(query.limit(limit * 3)).all()  # Get more to filter
+            results = []
+            for track, artist, album, download in rows:
+                if len(results) >= limit:
+                    break
+                # Verify file actually exists on disk
+                file_path = None
+                if track.download_path:
+                    file_path = track.download_path
+                elif download and download.download_path:
+                    file_path = download.download_path
+
+                if file_path:
+                    # Check if file exists (handle both absolute and relative paths)
+                    from app.core.config import settings
+                    possible_paths = [
+                        Path(file_path),
+                        Path(settings.DOWNLOADS_DIR or "downloads") / file_path,
+                        Path("downloads") / file_path,
+                    ]
+                    file_exists = any(p.exists() and p.is_file() for p in possible_paths)
+                    if file_exists:
+                        results.append(_track_to_dict(track, artist, album, download))
+            return results
 
         elif list_type == "discovery":
             # Random tracks not played recently
