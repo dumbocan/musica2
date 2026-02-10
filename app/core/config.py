@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     YOUTUBE_API_KEY_2: Optional[str] = None
     k2_5_api_key: Optional[str] = Field(default=None, alias="k2.5_api_key")
     YTDLP_FALLBACK_ENABLED: bool = False
+    
+    # Storage paths
+    DOWNLOADS_DIR: Optional[str] = "downloads"
+    STORAGE_ROOT: Optional[str] = "storage"
     YTDLP_DAILY_LIMIT: int = 120
     YTDLP_MIN_INTERVAL_SECONDS: float = 2.0
     YTDLP_COOKIES_FROM_BROWSER: Optional[str] = None
