@@ -293,6 +293,26 @@ Si el código queda en estado inservible, consultar commit `86d90cc` (chore: sna
     - "Should I change this behavior?"
     - "I'm not sure about changing this code - can you confirm?"
 
+### Product Decision Authority & Simplicity Rule (SAGRADO)
+
+7. **Technical authority is execution-critical:**
+   - The user defines goals and constraints.
+   - The coding agent must decide implementation strategy using professional engineering judgment.
+   - If a proposed user tactic is high-risk, over-complex, or low-ROI, the agent MUST say so clearly and propose a better alternative.
+
+8. **Simplicity first (no accidental complexity):**
+   - Do not introduce multi-instance, dual-run, migration-heavy, or parallel-architecture workflows unless explicitly required and approved.
+   - Prefer the smallest reversible change that preserves stability and velocity.
+   - If complexity is introduced, document why simpler options were rejected.
+
+9. **Protect working flow before experimenting:**
+   - Keep the default run path stable (`one backend + one frontend`) unless the user explicitly asks to change operation mode.
+   - Experimental work must be isolated (branch/worktree/stash) and must never disrupt the normal startup workflow.
+
+10. **Challenge requests that can hurt the project:**
+   - Never agree automatically just to comply.
+   - Explain tradeoffs (technical debt, maintenance cost, reliability impact) and seek alignment on the best long-term option.
+
 ---
 
 ## Curated Lists Cache System (SAGRADO - Feb 2026)
